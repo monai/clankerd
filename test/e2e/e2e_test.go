@@ -51,7 +51,7 @@ func TestSmolUpDownStatus(t *testing.T) {
 			t.Errorf("contrib profile passes %s; smolvm's default should apply", flag)
 		}
 	}
-	if strings.Contains(calls, "{uid}") || strings.Contains(calls, "{gid}") {
+	if strings.Contains(calls, "{{") {
 		t.Errorf("placeholders not expanded:\n%s", calls)
 	}
 	out := r.ok("smol", "status")
@@ -73,6 +73,12 @@ func TestSmolUpDownStatus(t *testing.T) {
 	waitFor(t, "daemon exit", func() bool { return !alive(pid) })
 	contains(t, r.ok("smol", "status"), "daemon: stopped", "vm: missing")
 	r.ok("smol", "down")
+}
+
+func TestSmolUpRejectsUnknownTemplateFields(t *testing.T) {
+	r := newRig(t)
+	os.WriteFile(filepath.Join(r.home, "config.toml"), []byte("[smol]\nenv = [\"X={{.Nope}}\"]\n"), 0o644)
+	contains(t, r.fail("smol", "up"), "smol.env", "Nope")
 }
 
 func TestSmolUpPassesOnlyWhatIsConfigured(t *testing.T) {

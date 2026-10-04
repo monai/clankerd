@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"text/template"
 	"time"
 
 	"github.com/monai/clankers/sandbox/clankerd/internal/backend"
@@ -99,6 +100,26 @@ func (c *ctl) startDaemon(t *target) error {
 
 func (c *ctl) smolUp(ctx context.Context, t *target, vm backend.Backend) error {
 	cfg := t.cfg
+	vals := templateData{UID: os.Getuid(), GID: os.Getgid()}
+	volumes, err := vals.render(cfg.Smol.Volumes)
+	if err != nil {
+		return fmt.Errorf("smol.volumes: %w", err)
+	}
+	env, err := vals.render(cfg.Smol.Env)
+	if err != nil {
+		return fmt.Errorf("smol.env: %w", err)
+	}
+	init, err := vals.render(cfg.Smol.Init)
+	if err != nil {
+		return fmt.Errorf("smol.init: %w", err)
+	}
+	spec := backend.CreateSpec{
+		Image: cfg.Smol.Image, CPUs: cfg.Smol.CPUs, Mem: cfg.Smol.Mem, Storage: cfg.Smol.Storage,
+		Net: cfg.Smol.Net, NetBackend: cfg.Smol.NetBackend, User: cfg.Smol.User,
+		Volumes: volumes, Env: env, Init: init,
+		PortFrom: cfg.AppPortBase, PortTo: cfg.AppPortBase + cfg.Slots - 1,
+		Socket: cfg.Dirs.Socket(), GuestSock: wire.GuestSocket,
+	}
 	if !c.daemonUp(t) {
 		if err := c.startDaemon(t); err != nil {
 			return err
@@ -107,21 +128,6 @@ func (c *ctl) smolUp(ctx context.Context, t *target, vm backend.Backend) error {
 	st, err := vm.Status(ctx)
 	if err != nil {
 		return err
-	}
-	expand := strings.NewReplacer("{uid}", strconv.Itoa(os.Getuid()), "{gid}", strconv.Itoa(os.Getgid()))
-	each := func(in []string) []string {
-		out := make([]string, len(in))
-		for i, v := range in {
-			out[i] = expand.Replace(v)
-		}
-		return out
-	}
-	spec := backend.CreateSpec{
-		Image: cfg.Smol.Image, CPUs: cfg.Smol.CPUs, Mem: cfg.Smol.Mem, Storage: cfg.Smol.Storage,
-		Net: cfg.Smol.Net, NetBackend: cfg.Smol.NetBackend, User: cfg.Smol.User,
-		Volumes: each(cfg.Smol.Volumes), Env: each(cfg.Smol.Env), Init: each(cfg.Smol.Init),
-		PortFrom: cfg.AppPortBase, PortTo: cfg.AppPortBase + cfg.Slots - 1,
-		Socket: cfg.Dirs.Socket(), GuestSock: wire.GuestSocket,
 	}
 	fpFile := filepath.Join(cfg.Dirs.State, "vm-spec")
 	if st == backend.Missing {
@@ -212,4 +218,22 @@ func (c *ctl) smolStatus(ctx context.Context, t *target, vm backend.Backend) err
 	}
 	fmt.Fprintln(c.stdout, "vm: "+st.String())
 	return nil
+}
+
+type templateData struct{ UID, GID int }
+
+func (d templateData) render(in []string) ([]string, error) {
+	out := make([]string, len(in))
+	for i, v := range in {
+		t, err := template.New("").Option("missingkey=error").Parse(v)
+		if err != nil {
+			return nil, err
+		}
+		var b strings.Builder
+		if err := t.Execute(&b, d); err != nil {
+			return nil, err
+		}
+		out[i] = b.String()
+	}
+	return out, nil
 }
