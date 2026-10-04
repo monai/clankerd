@@ -28,20 +28,26 @@ case $sub in
   create) touch "$FAKE_SMOLVM_DIR/exists";;
   start) [ -f "$FAKE_SMOLVM_DIR/exists" ] || exit 1; touch "$FAKE_SMOLVM_DIR/running";;
   stop) rm -f "$FAKE_SMOLVM_DIR/running";;
-  delete) rm -f "$FAKE_SMOLVM_DIR/exists" "$FAKE_SMOLVM_DIR/running";;
+  delete)
+    case " $* " in *" --force "*) ;; *) echo "needs confirmation but stdin is not a terminal; pass --force" >&2; exit 1;; esac
+    rm -f "$FAKE_SMOLVM_DIR/exists" "$FAKE_SMOLVM_DIR/running";;
   status)
     [ -f "$FAKE_SMOLVM_DIR/exists" ] || { echo "machine not found" >&2; exit 1; }
     if [ -f "$FAKE_SMOLVM_DIR/running" ]; then echo running; else echo stopped; fi;;
   exec)
     [ -f "$FAKE_SMOLVM_DIR/running" ] || { echo "machine not running" >&2; exit 1; }
     shift 3 # --name VM --
+    [ -z "$FAKE_SMOLVM_EXEC_DELAY" ] || sleep "$FAKE_SMOLVM_EXEC_DELAY"
     exec "$@";;
 esac
 `
 
 const fakeChrome = `#!/bin/sh
 echo "pid=$$ $*" >> "$FAKE_CHROME_LOG"
-exec sleep 600
+sleep 600 &
+child=$!
+trap 'kill $child; exit 0' TERM
+wait
 `
 
 func TestMain(m *testing.M) {
@@ -51,7 +57,11 @@ func TestMain(m *testing.M) {
 	}
 	binDir = dir
 	for _, p := range []string{"clankerd", "clankerctl"} {
-		out, err := exec.Command("go", "build", "-o", filepath.Join(dir, p), "../../cmd/"+p).CombinedOutput()
+		args := []string{"build"}
+		if os.Getenv("E2E_RACE") != "" {
+			args = append(args, "-race")
+		}
+		out, err := exec.Command("go", append(args, "-o", filepath.Join(dir, p), "../../cmd/"+p)...).CombinedOutput()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "build %s: %v\n%s", p, err, out)
 			os.Exit(1)

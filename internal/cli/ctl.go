@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 
@@ -104,7 +105,11 @@ type target struct {
 func (t *target) call(req wire.Request) (*wire.Response, error) {
 	resp, err := wire.Call(t.sock, req)
 	if err != nil && errors.Is(err, wire.ErrDaemonDown) && !t.vm {
-		return resp, fmt.Errorf("%w; start it with `clankerctl smol up`", err)
+		hint := "start it with `clankerctl smol up`"
+		if runtime.GOOS == "linux" {
+			hint += fmt.Sprintf("; inside the VM the control socket %s must be mounted (recreate the VM with `smol down`, `smol up`)", guestSocket())
+		}
+		return resp, fmt.Errorf("%w; %s", err, hint)
 	}
 	return resp, err
 }

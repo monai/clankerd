@@ -5,9 +5,11 @@ import (
 	"net"
 	"os"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/monai/clankers/sandbox/clankerd/internal/chrome"
+	"github.com/monai/clankers/sandbox/clankerd/internal/state"
 	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
 )
 
@@ -35,8 +37,6 @@ func (d *Daemon) handle(c net.Conn) {
 }
 
 func (d *Daemon) dispatch(req *wire.Request) (*wire.Response, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
 	switch req.Op {
 	case wire.OpLeaseAcquire:
 		return d.acquire(req)
@@ -44,7 +44,7 @@ func (d *Daemon) dispatch(req *wire.Request) (*wire.Response, error) {
 		return d.release(req)
 	case wire.OpLeaseList:
 		resp := &wire.Response{Leases: []wire.Lease{}}
-		for _, l := range d.sorted() {
+		for _, l := range d.readyLeases() {
 			resp.Leases = append(resp.Leases, d.view(l))
 		}
 		return resp, nil
@@ -65,15 +65,90 @@ func (d *Daemon) dispatch(req *wire.Request) (*wire.Response, error) {
 	return nil, fmt.Errorf("unknown operation %q", req.Op)
 }
 
+func errUnknown(name string) error {
+	return fmt.Errorf("unknown lease %q; run `clankerctl lease acquire %s` first", name, name)
+}
+
+// find returns an acquired lease without waiting for any operation on it.
 func (d *Daemon) find(name string) (*lease, error) {
 	if err := wire.ValidateName(name); err != nil {
 		return nil, err
 	}
-	l, ok := d.leases[name]
-	if !ok {
-		return nil, fmt.Errorf("unknown lease %q; run `clankerctl lease acquire %s` first", name, name)
+	d.mu.Lock()
+	l := d.leases[name]
+	d.mu.Unlock()
+	if l == nil {
+		return nil, errUnknown(name)
+	}
+	if _, ready := l.snapshot(); !ready {
+		return nil, errUnknown(name)
 	}
 	return l, nil
+}
+
+// lock returns the lease with its op lock held, or an error if it was released meanwhile.
+func (d *Daemon) lock(name string) (*lease, error) {
+	l, err := d.find(name)
+	if err != nil {
+		return nil, err
+	}
+	l.op.Lock()
+	if l.dead {
+		l.op.Unlock()
+		return nil, errUnknown(name)
+	}
+	return l, nil
+}
+
+// reserve finds the lease or creates one in a free slot, and claims the hostnames for it.
+// A new lease is returned with its op lock held, so nobody sees it before it is wired.
+func (d *Daemon) reserve(name string, hosts []string) (l *lease, created bool, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, h := range hosts {
+		if owner, ok := d.claims[h]; ok && owner != name {
+			return nil, false, fmt.Errorf("hostname %q is already used by lease %q", h, owner)
+		}
+	}
+	l, ok := d.leases[name]
+	if !ok {
+		used := map[int]bool{}
+		for _, o := range d.leases {
+			used[o.slot()] = true
+		}
+		slot := -1
+		for s := 0; s < d.cfg.Slots; s++ {
+			if !used[s] {
+				slot = s
+				break
+			}
+		}
+		if slot < 0 {
+			return nil, false, fmt.Errorf("no free lease: all %d leases are in use (raise ports.slots / CLANKERD_SLOTS to allow more)", d.cfg.Slots)
+		}
+		l = &lease{state: state.Lease{Name: name, Slot: slot}}
+		l.op.Lock()
+		d.leases[name] = l
+		created = true
+	}
+	for _, h := range hosts {
+		d.claims[h] = name
+	}
+	return l, created, nil
+}
+
+// setClaims makes hosts the only hostnames claimed by the lease.
+func (d *Daemon) setClaims(name string, hosts []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for h, owner := range d.claims {
+		if owner == name {
+			delete(d.claims, h)
+		}
+	}
+	for _, h := range hosts {
+		d.claims[h] = name
+	}
 }
 
 func (d *Daemon) acquire(req *wire.Request) (*wire.Response, error) {
@@ -89,60 +164,61 @@ func (d *Daemon) acquire(req *wire.Request) (*wire.Response, error) {
 			hosts = append(hosts, h)
 		}
 	}
-	for _, h := range hosts {
-		for _, o := range d.leases {
-			if o.Name != req.Name && slices.Contains(o.Hosts, h) {
-				return nil, fmt.Errorf("hostname %q is already used by lease %q", h, o.Name)
-			}
-		}
-	}
 	if err := d.vmRunning(); err != nil {
 		return nil, err
 	}
 
-	l, existed := d.leases[req.Name]
-	if !existed {
-		slot := -1
-		for s := 0; s < d.cfg.Slots; s++ {
-			if !d.slotUsed(s) {
-				slot = s
-				break
-			}
+	var l *lease
+	for {
+		var created bool
+		var err error
+		l, created, err = d.reserve(req.Name, hosts)
+		if err != nil {
+			return nil, err
 		}
-		if slot < 0 {
-			return nil, fmt.Errorf("no free lease: all %d leases are in use (raise ports.slots / CLANKERD_SLOTS to allow more)", d.cfg.Slots)
+		if created {
+			break
 		}
-		l = &lease{}
-		l.Name, l.Slot = req.Name, slot
+		l.op.Lock()
+		if !l.dead {
+			break
+		}
+		l.op.Unlock() // released while we waited; start over
 	}
-	prev := l.Hosts
-	l.Hosts = hosts
-	warns, err := d.wire(l)
+	defer l.op.Unlock()
+
+	prev, wasReady := l.snapshot()
+	warns, err := d.ensureLease(l)
 	if err != nil {
-		if existed {
-			l.Hosts = prev
-		} else if l.cancel != nil {
-			l.cancel()
+		if wasReady {
+			d.setClaims(l.name(), prev.Hosts)
+		} else {
+			d.drop(l)
 		}
 		return nil, err
 	}
-	d.leases[l.Name] = l
+	l.update(func(s *state.Lease) { s.Hosts = hosts })
+	l.mu.Lock()
+	l.ready = true
+	l.mu.Unlock()
+	d.setClaims(l.name(), hosts)
 	d.refreshNames()
 	if err := d.save(); err != nil {
 		return nil, err
 	}
-	d.log.Info("lease acquired", "name", l.Name, "slot", l.Slot, "hosts", l.Hosts)
+	d.log.Info("lease acquired", "name", l.name(), "slot", l.slot(), "hosts", hosts)
 	v := d.view(l)
 	return &wire.Response{Lease: &v, Warnings: warns}, nil
 }
 
-func (d *Daemon) slotUsed(slot int) bool {
-	for _, l := range d.leases {
-		if l.Slot == slot {
-			return true
-		}
-	}
-	return false
+// drop removes a lease from the daemon. The caller holds l.op.
+func (d *Daemon) drop(l *lease) {
+	l.stopLocal()
+	l.dead = true
+	d.mu.Lock()
+	delete(d.leases, l.name())
+	d.mu.Unlock()
+	d.setClaims(l.name(), nil)
 }
 
 func (d *Daemon) release(req *wire.Request) (*wire.Response, error) {
@@ -150,24 +226,32 @@ func (d *Daemon) release(req *wire.Request) (*wire.Response, error) {
 		return nil, err
 	}
 	resp := &wire.Response{}
-	l, ok := d.leases[req.Name]
-	if !ok {
+	d.mu.Lock()
+	l := d.leases[req.Name]
+	d.mu.Unlock()
+	if l != nil {
+		l.op.Lock()
+		if l.dead {
+			l = nil
+		}
+	}
+	if l == nil {
 		resp.Warnings = append(resp.Warnings, fmt.Sprintf("lease %q does not exist", req.Name))
 	} else {
-		chrome.Stop(l.ChromePID)
-		if l.cancel != nil {
-			l.cancel()
-		}
+		s, _ := l.snapshot()
+		chrome.Stop(s.ChromePID, d.profile(l.name()))
+		l.stopLocal()
 		d.stopVMRelay(l)
-		delete(d.leases, l.Name)
+		d.drop(l)
+		l.op.Unlock()
 		d.refreshNames()
 		if err := d.save(); err != nil {
 			return nil, err
 		}
-		d.log.Info("lease released", "name", l.Name, "slot", l.Slot)
+		d.log.Info("lease released", "name", req.Name, "slot", l.slot())
 	}
 	if req.Purge {
-		if err := os.RemoveAll(d.cfg.Dirs.Profile(req.Name)); err != nil {
+		if err := os.RemoveAll(d.profile(req.Name)); err != nil {
 			return nil, fmt.Errorf("purging profile: %w", err)
 		}
 	}
@@ -175,24 +259,26 @@ func (d *Daemon) release(req *wire.Request) (*wire.Response, error) {
 }
 
 func (d *Daemon) browserStart(req *wire.Request) (*wire.Response, error) {
-	l, err := d.find(req.Name)
+	l, err := d.lock(req.Name)
 	if err != nil {
 		return nil, err
 	}
-	if !chrome.Alive(l.ChromePID) {
+	defer l.op.Unlock()
+	s, _ := l.snapshot()
+	if !chrome.Running(s.ChromePID, d.profile(l.name())) {
 		bin, err := chrome.Find(d.cfg.ChromeBin)
 		if err != nil {
 			return nil, err
 		}
-		pid, err := chrome.Start(bin, d.cfg.Dirs.Profile(l.Name), d.chromePort(l.Slot))
+		pid, err := chrome.Start(bin, d.profile(l.name()), d.chromePort(l.slot()))
 		if err != nil {
 			return nil, fmt.Errorf("starting chrome: %w", err)
 		}
-		l.ChromePID = pid
+		l.update(func(s *state.Lease) { s.ChromePID = pid })
 		if err := d.save(); err != nil {
 			return nil, err
 		}
-		d.log.Info("chrome started", "name", l.Name, "pid", pid)
+		d.log.Info("chrome started", "name", l.name(), "pid", pid)
 	}
 	v := d.view(l)
 	return &wire.Response{Lease: &v}, nil
@@ -202,12 +288,14 @@ func (d *Daemon) browserStop(req *wire.Request) (*wire.Response, error) {
 	if err := wire.ValidateName(req.Name); err != nil {
 		return nil, err
 	}
-	l, ok := d.leases[req.Name]
-	if !ok {
+	l, err := d.lock(req.Name)
+	if err != nil {
 		return &wire.Response{Warnings: []string{fmt.Sprintf("lease %q does not exist", req.Name)}}, nil
 	}
-	chrome.Stop(l.ChromePID)
-	l.ChromePID = 0
+	defer l.op.Unlock()
+	s, _ := l.snapshot()
+	chrome.Stop(s.ChromePID, d.profile(l.name()))
+	l.update(func(s *state.Lease) { s.ChromePID = 0 })
 	if err := d.save(); err != nil {
 		return nil, err
 	}
@@ -215,14 +303,31 @@ func (d *Daemon) browserStop(req *wire.Request) (*wire.Response, error) {
 	return &wire.Response{Lease: &v}, nil
 }
 
+// resync recreates the VM-side relays and forwarders of every lease, for when the VM was restarted.
 func (d *Daemon) resync() (*wire.Response, error) {
-	resp := &wire.Response{}
-	for _, l := range d.sorted() {
-		warns, err := d.wire(l)
-		resp.Warnings = append(resp.Warnings, warns...)
-		if err != nil {
-			resp.Warnings = append(resp.Warnings, fmt.Sprintf("lease %q: %v", l.Name, err))
-		}
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		resp = &wire.Response{}
+	)
+	for _, l := range d.readyLeases() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			l.op.Lock()
+			defer l.op.Unlock()
+			if l.dead {
+				return
+			}
+			warns, err := d.ensureLease(l)
+			mu.Lock()
+			defer mu.Unlock()
+			resp.Warnings = append(resp.Warnings, warns...)
+			if err != nil {
+				resp.Warnings = append(resp.Warnings, fmt.Sprintf("lease %q: %v", l.name(), err))
+			}
+		}()
 	}
+	wg.Wait()
 	return resp, nil
 }

@@ -108,24 +108,32 @@ func (c *ctl) smolUp(ctx context.Context, t *target, vm backend.Backend) error {
 	if err != nil {
 		return err
 	}
-	if st == backend.Missing {
-		expand := strings.NewReplacer("{uid}", strconv.Itoa(os.Getuid()), "{gid}", strconv.Itoa(os.Getgid()))
-		each := func(in []string) []string {
-			out := make([]string, len(in))
-			for i, v := range in {
-				out[i] = expand.Replace(v)
-			}
-			return out
+	expand := strings.NewReplacer("{uid}", strconv.Itoa(os.Getuid()), "{gid}", strconv.Itoa(os.Getgid()))
+	each := func(in []string) []string {
+		out := make([]string, len(in))
+		for i, v := range in {
+			out[i] = expand.Replace(v)
 		}
-		if err := vm.Create(ctx, backend.CreateSpec{
-			Image: cfg.Smol.Image, CPUs: cfg.Smol.CPUs, Mem: cfg.Smol.Mem, Storage: cfg.Smol.Storage,
-			Net: cfg.Smol.Net, NetBackend: cfg.Smol.NetBackend, User: cfg.Smol.User,
-			Volumes: each(cfg.Smol.Volumes), Env: each(cfg.Smol.Env), Init: each(cfg.Smol.Init),
-			PortFrom: cfg.AppPortBase, PortTo: cfg.AppPortBase + cfg.Slots - 1,
-			Socket: cfg.Dirs.Socket(), GuestSock: wire.GuestSocket,
-		}); err != nil {
+		return out
+	}
+	spec := backend.CreateSpec{
+		Image: cfg.Smol.Image, CPUs: cfg.Smol.CPUs, Mem: cfg.Smol.Mem, Storage: cfg.Smol.Storage,
+		Net: cfg.Smol.Net, NetBackend: cfg.Smol.NetBackend, User: cfg.Smol.User,
+		Volumes: each(cfg.Smol.Volumes), Env: each(cfg.Smol.Env), Init: each(cfg.Smol.Init),
+		PortFrom: cfg.AppPortBase, PortTo: cfg.AppPortBase + cfg.Slots - 1,
+		Socket: cfg.Dirs.Socket(), GuestSock: wire.GuestSocket,
+	}
+	fpFile := filepath.Join(cfg.Dirs.State, "vm-spec")
+	if st == backend.Missing {
+		if err := vm.Create(ctx, spec); err != nil {
 			return err
 		}
+		if err := os.WriteFile(fpFile, []byte(spec.Fingerprint()), 0o600); err != nil {
+			return err
+		}
+	} else if b, err := os.ReadFile(fpFile); err != nil || string(b) != spec.Fingerprint() {
+		return fmt.Errorf("vm %q exists but was not created from the current configuration "+
+			"(config changed, or the VM came from elsewhere); recreate it with `clankerctl smol down` then `smol up`", cfg.VM)
 	}
 	if st != backend.Running {
 		if err := vm.Start(ctx); err != nil {
@@ -164,6 +172,7 @@ func (c *ctl) smolDown(ctx context.Context, t *target, vm backend.Backend) error
 			return err
 		}
 	}
+	os.Remove(filepath.Join(t.cfg.Dirs.State, "vm-spec"))
 	fmt.Fprintln(c.stdout, "down: vm="+t.cfg.VM)
 	return nil
 }

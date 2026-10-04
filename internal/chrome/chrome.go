@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -62,9 +64,20 @@ func Alive(pid int) bool {
 	return pid > 0 && syscall.Kill(pid, 0) == nil
 }
 
-// Stop asks Chrome to exit and kills it if it has not within a few seconds.
-func Stop(pid int) {
+// Running reports whether pid is a live process started with this profile. A bare pid is not enough:
+// after a reboot or a long daemon outage the number may belong to an unrelated process.
+func Running(pid int, profile string) bool {
 	if !Alive(pid) {
+		return false
+	}
+	out, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
+	return err == nil && strings.Contains(string(out), "--user-data-dir="+profile)
+}
+
+// Stop asks the lease's Chrome to exit and kills it if it has not within a few seconds.
+// It does nothing unless pid is that Chrome.
+func Stop(pid int, profile string) {
+	if !Running(pid, profile) {
 		return
 	}
 	syscall.Kill(pid, syscall.SIGTERM)

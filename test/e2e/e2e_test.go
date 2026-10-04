@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -546,3 +547,129 @@ func TestVersion(t *testing.T) {
 	r := newRig(t)
 	contains(t, r.ok("version"), "clankerctl")
 }
+
+func TestSmolUpRefusesAVMFromAnotherConfiguration(t *testing.T) {
+	r := newRig(t)
+	r.up()
+	os.WriteFile(filepath.Join(r.home, "config.toml"), []byte("[smol]\ncpus = 2\n"), 0o644)
+	contains(t, r.fail("smol", "up"), "not created from the current configuration")
+	r.ok("smol", "down")
+	r.up()
+	contains(t, strings.Join(r.smolCalls(), "\n"), "--cpus 2")
+
+	// a VM that smol up never created
+	r.ok("smol", "down")
+	os.WriteFile(filepath.Join(r.smolDir, "exists"), nil, 0o644)
+	contains(t, r.fail("smol", "up"), "not created from the current configuration")
+}
+
+func TestVMSideErrorWhenSocketIsMissing(t *testing.T) {
+	r := newRig(t)
+	r.env["CLANKERD_GUEST_SOCKET"] = filepath.Join(r.work, "absent.sock")
+	msg := r.fail("lease", "acquire", "shop")
+	contains(t, msg, "not running", "must be mounted")
+}
+
+func TestStalePIDOfAnotherProcessIsNotKilled(t *testing.T) {
+	r := newRig(t)
+	r.up()
+	r.acquire("shop")
+	r.ok("browser", "start", "shop")
+	waitFor(t, "chrome", func() bool { return len(r.chromeStarts()) == 1 })
+	var chromePID int
+	fmt.Sscanf(r.chromeStarts()[0], "pid=%d", &chromePID)
+
+	bystander := exec.Command("sleep", "600")
+	if err := bystander.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer bystander.Process.Kill()
+	go bystander.Wait()
+
+	daemon := r.daemonPID()
+	syscall.Kill(daemon, syscall.SIGTERM)
+	waitFor(t, "daemon exit", func() bool { return !alive(daemon) })
+	syscall.Kill(chromePID, syscall.SIGTERM)
+	waitFor(t, "chrome exit", func() bool { return !alive(chromePID) })
+
+	stateFile := filepath.Join(r.home, "state", "sandbox", "state.json")
+	b, _ := os.ReadFile(stateFile)
+	b = []byte(strings.Replace(string(b), fmt.Sprintf(`"chrome_pid": %d`, chromePID), fmt.Sprintf(`"chrome_pid": %d`, bystander.Process.Pid), 1))
+	os.WriteFile(stateFile, b, 0o600)
+
+	r.up()
+	if r.acquireShow("shop").ChromeRunning {
+		t.Fatal("an unrelated process was adopted as Chrome")
+	}
+	r.ok("lease", "release", "shop")
+	if !alive(bystander.Process.Pid) {
+		t.Fatal("release killed an unrelated process")
+	}
+}
+
+func TestOperationsRunConcurrently(t *testing.T) {
+	r := newRig(t)
+	r.env["FAKE_SMOLVM_EXEC_DELAY"] = "3"
+	r.up()
+
+	type out struct {
+		l   lease
+		err string
+	}
+	acquire := func(name string, ch chan<- out) {
+		res := r.run("lease", "acquire", "--json", name)
+		var l lease
+		json.Unmarshal([]byte(res.out), &l)
+		ch <- out{l, res.err}
+	}
+
+	start := time.Now()
+	ch := make(chan out, 4)
+	go acquire("a", ch)
+	go acquire("b", ch)
+	go acquire("c", ch)
+	time.Sleep(500 * time.Millisecond)
+
+	// reads do not wait for the slow acquires
+	listStart := time.Now()
+	r.ok("lease", "list")
+	if d := time.Since(listStart); d > 2*time.Second {
+		t.Fatalf("lease list took %v while acquires were running", d)
+	}
+
+	slotsSeen := map[int]bool{}
+	for i := 0; i < 3; i++ {
+		o := <-ch
+		if o.err != "" {
+			t.Fatalf("acquire failed: %s", o.err)
+		}
+		slotsSeen[o.l.Slot] = true
+	}
+	if len(slotsSeen) != 3 {
+		t.Fatalf("concurrent acquires shared slots: %v", slotsSeen)
+	}
+	if d := time.Since(start); d > 6*time.Second {
+		t.Fatalf("three acquires of 3s each took %v; they ran one after another", d)
+	}
+
+	// the same name twice at once yields one lease
+	go acquire("a", ch)
+	go acquire("a", ch)
+	first, second := <-ch, <-ch
+	if first.err != "" || second.err != "" || first.l.Slot != second.l.Slot || first.l.Name != "a" {
+		t.Fatalf("same-name acquires: %+v %+v", first, second)
+	}
+
+	// release racing a re-acquire ends in a consistent state
+	rel := make(chan result, 1)
+	go func() { rel <- r.run("lease", "release", "b") }()
+	go acquire("b", ch)
+	if res := <-rel; res.code != 0 {
+		t.Fatalf("release: %+v", res)
+	}
+	if o := <-ch; o.err != "" {
+		t.Fatalf("re-acquire: %s", o.err)
+	}
+	r.acquireShow("b")
+}
+

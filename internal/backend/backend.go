@@ -4,6 +4,8 @@ package backend
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -35,6 +37,12 @@ type CreateSpec struct {
 	PortTo     int
 	Socket     string
 	GuestSock  string
+}
+
+// Fingerprint identifies the configuration a VM was created from.
+func (c CreateSpec) Fingerprint() string {
+	b, _ := json.Marshal(c)
+	return fmt.Sprintf("%x", sha256.Sum256(b))
 }
 
 type Backend interface {
@@ -116,7 +124,7 @@ func (s *Smolvm) Stop(ctx context.Context) error {
 }
 
 func (s *Smolvm) Delete(ctx context.Context) error {
-	_, err := s.run(ctx, "machine", "delete", "--name", s.Name)
+	_, err := s.run(ctx, "machine", "delete", "--name", s.Name, "--force")
 	return err
 }
 
