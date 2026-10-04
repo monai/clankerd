@@ -10,13 +10,13 @@ type Kind int
 
 const (
 	Host Kind = iota
-	VM
+	Smolmachine
 	Docker
 )
 
-func (k Kind) String() string { return [...]string{"host", "vm", "docker"}[k] }
+func (k Kind) String() string { return [...]string{"host", "smolmachine", "docker"}[k] }
 
-// Sandboxed reports whether the process runs inside a VM or container rather than on the host.
+// Sandboxed reports whether the process runs inside a smolmachine or container rather than on the host.
 func (k Kind) Sandboxed() bool { return k != Host }
 
 // Probes are the files Detect reads. Tests point them elsewhere through CLANKERD_CMDLINE_PATH and
@@ -38,13 +38,13 @@ func DefaultProbes() Probes {
 }
 
 // Detect reads the platform's own markers. A smolvm guest's kernel command line carries
-// SMOLVM_MACHINE_NAME; a Docker container has /.dockerenv. The VM check comes first because
-// a container running inside a VM shares the VM's kernel command line.
+// SMOLVM_MACHINE_NAME; a Docker container has /.dockerenv. The smolmachine check comes first because
+// a container running inside one shares its kernel command line.
 func Detect() Kind { return DefaultProbes().Detect() }
 
 func (p Probes) Detect() Kind {
 	if b, err := os.ReadFile(p.Cmdline); err == nil && strings.Contains(string(b), "SMOLVM_MACHINE_NAME=") {
-		return VM
+		return Smolmachine
 	}
 	if _, err := os.Stat(p.DockerEnv); err == nil {
 		return Docker

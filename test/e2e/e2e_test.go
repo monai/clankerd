@@ -566,8 +566,8 @@ func TestSandboxDetection(t *testing.T) {
 	r := newRig(t)
 	r.env["CLANKERD_CMDLINE_PATH"] = r.fakeSmolvmCmdline()
 	r.env["CLANKERD_GUEST_SOCKET"] = filepath.Join(r.work, "absent.sock")
-	contains(t, r.fail("lease", "acquire", "shop"), "running in a vm", "control socket", "is missing")
-	contains(t, r.fail("smol", "up"), "running in a vm", "is missing")
+	contains(t, r.fail("lease", "acquire", "shop"), "running in a smolmachine", "control socket", "is missing")
+	contains(t, r.fail("smol", "up"), "running in a smolmachine", "is missing")
 
 	r.env["CLANKERD_CMDLINE_PATH"] = filepath.Join(r.work, "no-cmdline")
 	dockerenv := filepath.Join(r.work, "dockerenv")
@@ -583,7 +583,7 @@ func TestSandboxDetection(t *testing.T) {
 func TestSmolRefusesInsideTheVM(t *testing.T) {
 	r := newRig(t)
 	r.up()
-	contains(t, r.vm("smol", "status").err, "run on the host, not in a vm")
+	contains(t, r.vm("smol", "status").err, "run on the host, not in a smolmachine")
 }
 
 func TestStalePIDOfAnotherProcessIsNotKilled(t *testing.T) {
