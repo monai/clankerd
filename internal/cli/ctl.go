@@ -27,7 +27,7 @@ const ctlUsage = `usage: clankerctl <command>
   browser start|stop NAME         start or stop the host Chrome wired to the lease
   version
 
-Every command also accepts --home, --config and one flag per setting (see CLANKERD_* in the README).
+Every command also accepts --home, --config and one flag per setting (--vm, --slots, --mdns-subnets ...); each has a CLANKERD_* environment variable.
 `
 
 type ctl struct {
