@@ -44,7 +44,6 @@ type Config struct {
 	ChromeBin      string
 	HostAddr       string // how the VM reaches the host; empty = default gateway
 	GuestDir       string // the VM's temporary directory for relay pidfiles
-	GuestBin       string // development build of clankerctl as mounted in the VM; empty = none
 	LogLevel       string
 	Smol           Smol
 	Dirs           Dirs
@@ -65,7 +64,6 @@ var keys = []key{
 	{"chrome.bin", "CLANKERD_CHROME_BIN", "chrome-bin"},
 	{"guest.host_addr", "CLANKERD_HOST_ADDR", "host-addr"},
 	{"guest.dir", "CLANKERD_GUEST_DIR", "guest-dir"},
-	{"guest.bin", "CLANKERD_GUEST_BIN", "guest-bin"},
 	{"log.level", "CLANKERD_LOG_LEVEL", "log-level"},
 }
 
@@ -83,7 +81,6 @@ func defaults() map[string]any {
 		"chrome.bin":        "",
 		"guest.host_addr":   "",
 		"guest.dir":         "/tmp/clankerd",
-		"guest.bin":         "/mnt/workspace/sandbox/clankerd/build/linux-arm64/clankerctl",
 		"log.level":         "info",
 
 		"smol.image":       "ghcr.io/monai/clankers:slim",
@@ -258,7 +255,6 @@ func build(k *koanf.Koanf, lay layout, cwd string) (*Config, error) {
 		ChromeBin:      str(k, "chrome.bin"),
 		HostAddr:       str(k, "guest.host_addr"),
 		GuestDir:       str(k, "guest.dir"),
-		GuestBin:       str(k, "guest.bin"),
 		LogLevel:       str(k, "log.level"),
 		Smol: Smol{
 			Image:      str(k, "smol.image"),

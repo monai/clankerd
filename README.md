@@ -22,8 +22,8 @@ mise install && mise exec -- make build   # build/{darwin,linux}-arm64/{clankerd
 mise exec -- make test
 ```
 
-`smol up` links `build/linux-arm64/clankerctl` (mounted at `/mnt/workspace`) into the VM user's `~/.local/bin`,
-shadowing any copy baked into the image (`guest.bin` to change or disable).
+`scripts/dev-install` builds `linux-arm64/clankerctl` and installs it as `/usr/local/bin/clankerctl` in the running VM
+(the same place the image bakes it). Rerun it after each rebuild; it ends by printing the VM's `clankerctl version`.
 
 ## Configuration
 
@@ -43,7 +43,6 @@ from the current directory), user, system, defaults. `--home DIR` / `CLANKERD_HO
 | `CLANKERD_CHROME_BIN` | `chrome.bin` | auto-detect |
 | `CLANKERD_HOST_ADDR` | `guest.host_addr` | the VM's default gateways, IPv4 and IPv6 (RFC 8305 Happy Eyeballs) |
 | `CLANKERD_GUEST_DIR` | `guest.dir` | `/tmp/clankerd` (relay pidfiles in the VM) |
-| `CLANKERD_GUEST_BIN` | `guest.bin` | mounted dev build; empty = none |
 | `CLANKERD_LOG_LEVEL` | `log.level` | `info` |
 
 `[smol]` (TOML only): `image cpus mem storage net net_backend user volumes env init`.

@@ -133,7 +133,6 @@ func newRig(t *testing.T) *rig {
 		"CLANKERD_MDNS_GROUP4":      fmt.Sprintf("127.0.0.1:%d", r.udp),
 		"CLANKERD_MDNS_GROUP6":      fmt.Sprintf("[::1]:%d", r.udp),
 		"CLANKERD_CHROME_BIN":       filepath.Join(binDir, "fake-chrome"),
-		"CLANKERD_GUEST_BIN":        "",
 		"CLANKERD_GUEST_DIR":        filepath.Join(r.smolDir, "guest"),
 		"FAKE_SMOLVM_DIR":           r.smolDir,
 		"FAKE_CHROME_LOG":           r.chromeLog,

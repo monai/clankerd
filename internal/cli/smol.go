@@ -130,16 +130,6 @@ func (c *ctl) smolUp(ctx context.Context, t *target, vm backend.Backend) error {
 			return err
 		}
 	}
-	if cfg.GuestBin != "" {
-		const script = `src=$1; user=$2
-[ -x "$src" ] || exit 0
-dir=/home/$user/.local/bin
-mkdir -p "$dir" && ln -sf "$src" "$dir/clankerctl" && chown -h "$user" "$dir" "$dir/clankerctl" 2>/dev/null
-exit 0`
-		if _, err := vm.Exec(ctx, "sh", "-c", script, "sh", cfg.GuestBin, cfg.Smol.User); err != nil {
-			fmt.Fprintln(c.stderr, "warning: linking the development clankerctl into the VM failed:", err)
-		}
-	}
 	resp, err := wire.Call(t.sock, wire.Request{Op: wire.OpResync})
 	if err != nil {
 		return err
