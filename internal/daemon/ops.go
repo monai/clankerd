@@ -69,7 +69,6 @@ func errUnknown(name string) error {
 	return fmt.Errorf("unknown lease %q; run `clankerctl lease acquire %s` first", name, name)
 }
 
-// find returns an acquired lease without waiting for any operation on it.
 func (d *Daemon) find(name string) (*lease, error) {
 	if err := wire.ValidateName(name); err != nil {
 		return nil, err
@@ -86,7 +85,6 @@ func (d *Daemon) find(name string) (*lease, error) {
 	return l, nil
 }
 
-// lock returns the lease with its op lock held, or an error if it was released meanwhile.
 func (d *Daemon) lock(name string) (*lease, error) {
 	l, err := d.find(name)
 	if err != nil {
@@ -100,8 +98,6 @@ func (d *Daemon) lock(name string) (*lease, error) {
 	return l, nil
 }
 
-// reserve finds the lease or creates one in a free slot, and claims the hostnames for it.
-// A new lease is returned with its op lock held, so nobody sees it before it is wired.
 func (d *Daemon) reserve(name string, hosts []string) (l *lease, created bool, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -137,7 +133,6 @@ func (d *Daemon) reserve(name string, hosts []string) (l *lease, created bool, e
 	return l, created, nil
 }
 
-// setClaims makes hosts the only hostnames claimed by the lease.
 func (d *Daemon) setClaims(name string, hosts []string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -183,7 +178,7 @@ func (d *Daemon) acquire(req *wire.Request) (*wire.Response, error) {
 		if !l.dead {
 			break
 		}
-		l.op.Unlock() // released while we waited; start over
+		l.op.Unlock()
 	}
 	defer l.op.Unlock()
 
@@ -211,7 +206,6 @@ func (d *Daemon) acquire(req *wire.Request) (*wire.Response, error) {
 	return &wire.Response{Lease: &v, Warnings: warns}, nil
 }
 
-// drop removes a lease from the daemon. The caller holds l.op.
 func (d *Daemon) drop(l *lease) {
 	l.stopLocal()
 	l.dead = true
@@ -303,7 +297,6 @@ func (d *Daemon) browserStop(req *wire.Request) (*wire.Response, error) {
 	return &wire.Response{Lease: &v}, nil
 }
 
-// resync recreates the VM-side relays and forwarders of every lease, for when the VM was restarted.
 func (d *Daemon) resync() (*wire.Response, error) {
 	var (
 		wg   sync.WaitGroup

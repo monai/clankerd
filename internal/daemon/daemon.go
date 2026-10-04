@@ -26,9 +26,6 @@ import (
 
 const execTimeout = 30 * time.Second
 
-// lease has two locks. op serialises operations on the lease and is held across slow I/O (VM exec,
-// Chrome shutdown). mu guards the few fields readers need and is only ever held briefly, so listing
-// leases never waits on a slow operation.
 type lease struct {
 	op         sync.Mutex
 	ctx        context.Context
@@ -37,11 +34,10 @@ type lease struct {
 	dead       bool
 
 	mu    sync.Mutex
-	state state.Lease // Name and Slot never change; Hosts and ChromePID are guarded by mu
-	ready bool        // acquired successfully; a lease still being acquired is invisible to readers
+	state state.Lease
+	ready bool
 }
 
-// stopLocal closes the lease's relay and forwarders in this process. The caller holds l.op.
 func (l *lease) stopLocal() {
 	if l.cancel == nil {
 		return
@@ -69,7 +65,6 @@ func (l *lease) update(f func(*state.Lease)) {
 	f(&l.state)
 }
 
-// Daemon's locks, outermost first: lease.op, saveMu, mu, lease.mu. mu is never held across I/O.
 type Daemon struct {
 	cfg *config.Config
 	vm  backend.Backend
@@ -78,7 +73,7 @@ type Daemon struct {
 
 	mu     sync.Mutex
 	leases map[string]*lease
-	claims map[string]string // hostname -> lease name
+	claims map[string]string
 
 	saveMu  sync.Mutex
 	namesMu sync.RWMutex
@@ -258,8 +253,6 @@ func (d *Daemon) save() error {
 	return state.Save(d.cfg.Dirs.StateFile(), &st)
 }
 
-// ensureLease (re)creates the pieces of a lease that live in this process or in the VM, and returns
-// warnings. The caller holds l.op. It is safe to call repeatedly.
 func (d *Daemon) ensureLease(l *lease) ([]string, error) {
 	var warns []string
 	if l.cancel == nil {
@@ -276,7 +269,7 @@ func (d *Daemon) ensureLease(l *lease) ([]string, error) {
 			go relay.Serve(ctx, cdp, relay.Target(net.JoinHostPort("localhost", strconv.Itoa(d.chromePort(l.slot())))))
 		}
 		l.ctx, l.forwarders = ctx, map[netip.Addr]context.CancelFunc{}
-		l.cancel = func() { // close synchronously so the ports are free when this returns
+		l.cancel = func() {
 			cancel()
 			for _, cdp := range cdps {
 				cdp.Close()

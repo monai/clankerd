@@ -64,8 +64,7 @@ func Alive(pid int) bool {
 	return pid > 0 && syscall.Kill(pid, 0) == nil
 }
 
-// Running reports whether pid is a live process started with this profile. A bare pid is not enough:
-// after a reboot or a long daemon outage the number may belong to an unrelated process.
+// Running reports whether pid is a live process started with this profile.
 func Running(pid int, profile string) bool {
 	if !Alive(pid) {
 		return false

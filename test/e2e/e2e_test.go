@@ -557,7 +557,6 @@ func TestSmolUpRefusesAVMFromAnotherConfiguration(t *testing.T) {
 	r.up()
 	contains(t, strings.Join(r.smolCalls(), "\n"), "--cpus 2")
 
-	// a VM that smol up never created
 	r.ok("smol", "down")
 	os.WriteFile(filepath.Join(r.smolDir, "exists"), nil, 0o644)
 	contains(t, r.fail("smol", "up"), "not created from the current configuration")
@@ -630,7 +629,6 @@ func TestOperationsRunConcurrently(t *testing.T) {
 	go acquire("c", ch)
 	time.Sleep(500 * time.Millisecond)
 
-	// reads do not wait for the slow acquires
 	listStart := time.Now()
 	r.ok("lease", "list")
 	if d := time.Since(listStart); d > 2*time.Second {
@@ -652,7 +650,6 @@ func TestOperationsRunConcurrently(t *testing.T) {
 		t.Fatalf("three acquires of 3s each took %v; they ran one after another", d)
 	}
 
-	// the same name twice at once yields one lease
 	go acquire("a", ch)
 	go acquire("a", ch)
 	first, second := <-ch, <-ch
@@ -660,7 +657,6 @@ func TestOperationsRunConcurrently(t *testing.T) {
 		t.Fatalf("same-name acquires: %+v %+v", first, second)
 	}
 
-	// release racing a re-acquire ends in a consistent state
 	rel := make(chan result, 1)
 	go func() { rel <- r.run("lease", "release", "b") }()
 	go acquire("b", ch)
@@ -672,4 +668,3 @@ func TestOperationsRunConcurrently(t *testing.T) {
 	}
 	r.acquireShow("b")
 }
-

@@ -1,4 +1,3 @@
-# Wires the ghcr.io/monai/clankers image. Use with --config or CLANKERD_CONFIG.
 [smol]
 image = "ghcr.io/monai/clankers:slim"
 user = "agent"
