@@ -16,6 +16,7 @@ import (
 
 	"github.com/monai/clankers/sandbox/clankerd/internal/backend"
 	"github.com/monai/clankers/sandbox/clankerd/internal/config"
+	"github.com/monai/clankers/sandbox/clankerd/internal/lock"
 	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
 )
 
@@ -42,6 +43,16 @@ func (c *ctl) smol(args []string) error {
 	}
 	vm := backend.NewSmolvm(t.cfg.VM)
 	ctx := context.Background()
+	if sub == "up" || sub == "down" {
+		if err := os.MkdirAll(t.cfg.Dirs.Runtime, 0o700); err != nil {
+			return err
+		}
+		l, err := lock.Acquire(t.cfg.Dirs.LockFile())
+		if err != nil {
+			return err
+		}
+		defer l.Release()
+	}
 	switch sub {
 	case "up":
 		return c.smolUp(ctx, t, vm)

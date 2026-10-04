@@ -691,3 +691,38 @@ func TestOperationsRunConcurrently(t *testing.T) {
 	}
 	r.acquireShow("b")
 }
+
+func TestConcurrentSmolUpAndDown(t *testing.T) {
+	r := newRig(t)
+	results := make(chan result, 8)
+	for i := 0; i < 8; i++ {
+		go func() { results <- r.run("smol", "up") }()
+	}
+	for i := 0; i < 8; i++ {
+		if res := <-results; res.code != 0 {
+			t.Fatalf("smol up failed: %+v", res)
+		}
+	}
+	creates := 0
+	for _, c := range r.smolCalls() {
+		if strings.HasPrefix(c, "machine create") {
+			creates++
+		}
+	}
+	if creates != 1 {
+		t.Fatalf("machine create ran %d times", creates)
+	}
+	if !alive(r.daemonPID()) {
+		t.Fatal("no daemon")
+	}
+
+	for i := 0; i < 4; i++ {
+		go func() { results <- r.run("smol", "down") }()
+	}
+	for i := 0; i < 4; i++ {
+		if res := <-results; res.code != 0 {
+			t.Fatalf("smol down failed: %+v", res)
+		}
+	}
+	contains(t, r.ok("smol", "status"), "daemon: stopped", "vm: missing")
+}

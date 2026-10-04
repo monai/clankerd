@@ -18,6 +18,7 @@ import (
 	"github.com/monai/clankers/sandbox/clankerd/internal/backend"
 	"github.com/monai/clankers/sandbox/clankerd/internal/chrome"
 	"github.com/monai/clankers/sandbox/clankerd/internal/config"
+	"github.com/monai/clankers/sandbox/clankerd/internal/lock"
 	"github.com/monai/clankers/sandbox/clankerd/internal/mdns"
 	"github.com/monai/clankers/sandbox/clankerd/internal/relay"
 	"github.com/monai/clankers/sandbox/clankerd/internal/state"
@@ -61,9 +62,11 @@ func (d *Daemon) Serve(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := d.takePIDFile(); err != nil {
+	pid, err := d.takePIDFile()
+	if err != nil {
 		return err
 	}
+	defer pid.Release()
 	defer os.Remove(dirs.PIDFile())
 
 	ln, err := d.listen()
@@ -110,14 +113,19 @@ func (d *Daemon) Serve(ctx context.Context) error {
 	return nil
 }
 
-func (d *Daemon) takePIDFile() error {
-	pf := d.cfg.Dirs.PIDFile()
-	if b, err := os.ReadFile(pf); err == nil {
-		if pid, _ := strconv.Atoi(strings.TrimSpace(string(b))); pid != os.Getpid() && chrome.Alive(pid) {
-			return fmt.Errorf("clankerd already running for vm %q (pid %d)", d.cfg.VM, pid)
-		}
+func (d *Daemon) takePIDFile() (*lock.File, error) {
+	l, ok, err := lock.TryAcquire(d.cfg.Dirs.PIDFile())
+	if err != nil {
+		return nil, err
 	}
-	return os.WriteFile(pf, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
+	if !ok {
+		return nil, fmt.Errorf("clankerd already running for vm %q", d.cfg.VM)
+	}
+	if err := l.WritePID(strconv.Itoa(os.Getpid())); err != nil {
+		l.Release()
+		return nil, err
+	}
+	return l, nil
 }
 
 func (d *Daemon) listen() (net.Listener, error) {

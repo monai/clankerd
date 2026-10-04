@@ -20,6 +20,7 @@ type Dirs struct {
 }
 
 func (d Dirs) Socket() string    { return filepath.Join(d.Runtime, d.VM+".sock") }
+func (d Dirs) LockFile() string  { return filepath.Join(d.Runtime, d.VM+".lock") }
 func (d Dirs) PIDFile() string   { return filepath.Join(d.Runtime, d.VM+".pid") }
 func (d Dirs) StateFile() string { return filepath.Join(d.State, "state.json") }
 func (d Dirs) LogFile() string   { return filepath.Join(d.State, "clankerd.log") }
