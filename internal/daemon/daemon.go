@@ -26,45 +26,6 @@ import (
 
 const execTimeout = 30 * time.Second
 
-type lease struct {
-	op         sync.Mutex
-	ctx        context.Context
-	cancel     context.CancelFunc
-	forwarders map[netip.Addr]context.CancelFunc
-	dead       bool
-
-	mu    sync.Mutex
-	state state.Lease
-	ready bool
-}
-
-func (l *lease) stopLocal() {
-	if l.cancel == nil {
-		return
-	}
-	l.cancel()
-	for _, stop := range l.forwarders {
-		stop()
-	}
-}
-
-func (l *lease) name() string { return l.state.Name }
-func (l *lease) slot() int    { return l.state.Slot }
-
-func (l *lease) snapshot() (state.Lease, bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	s := l.state
-	s.Hosts = append([]string(nil), s.Hosts...)
-	return s, l.ready
-}
-
-func (l *lease) update(f func(*state.Lease)) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	f(&l.state)
-}
-
 type Daemon struct {
 	cfg *config.Config
 	vm  backend.Backend
@@ -73,7 +34,7 @@ type Daemon struct {
 
 	mu     sync.Mutex
 	leases map[string]*lease
-	claims map[string]string
+	claims *claims
 
 	saveMu  sync.Mutex
 	namesMu sync.RWMutex
@@ -81,7 +42,7 @@ type Daemon struct {
 }
 
 func New(ctx context.Context, cfg *config.Config, vm backend.Backend, log *slog.Logger) *Daemon {
-	return &Daemon{ctx: ctx, cfg: cfg, vm: vm, log: log, leases: map[string]*lease{}, claims: map[string]string{}, names: map[string]bool{}}
+	return &Daemon{ctx: ctx, cfg: cfg, vm: vm, log: log, leases: map[string]*lease{}, claims: newClaims(), names: map[string]bool{}}
 }
 
 func (d *Daemon) appPort(slot int) int    { return d.cfg.AppPortBase + slot }
@@ -141,13 +102,11 @@ func (d *Daemon) Serve(ctx context.Context) error {
 		}()
 	}
 	wg.Wait()
-	d.mu.Lock()
-	for _, l := range d.leases {
-		if l.cancel != nil {
-			l.cancel()
-		}
+	for _, l := range d.readyLeases() {
+		h := l.lock()
+		h.run.close()
+		h.unlock()
 	}
-	d.mu.Unlock()
 	return nil
 }
 
@@ -194,19 +153,19 @@ func (d *Daemon) restore() error {
 		if !chrome.Running(sl.ChromePID, d.profile(sl.Name)) {
 			sl.ChromePID = 0
 		}
-		l := &lease{state: sl, ready: true}
-		d.leases[l.name()] = l
-		for _, h := range sl.Hosts {
-			d.claims[h] = sl.Name
-		}
-		warns, err := d.ensureLease(l)
+		l := &lease{name: sl.Name, slot: sl.Slot, hosts: sl.Hosts, chromePID: sl.ChromePID, phase: active}
+		d.leases[l.name] = l
+		d.claims.set(l.name, sl.Hosts)
+		h := l.lock()
+		warns, err := d.ensureLease(h)
+		h.unlock()
 		for _, w := range warns {
-			d.log.Warn(w, "name", l.name())
+			d.log.Warn(w, "name", l.name)
 		}
 		if err != nil {
-			d.log.Warn("restoring lease failed", "name", l.name(), "err", err)
+			d.log.Warn("restoring lease failed", "name", l.name, "err", err)
 		}
-		d.log.Info("restored lease", "name", l.name(), "slot", l.slot(), "chrome_pid", sl.ChromePID)
+		d.log.Info("restored lease", "name", l.name, "slot", l.slot, "chrome_pid", sl.ChromePID)
 	}
 	d.refreshNames()
 	return nil
@@ -221,11 +180,11 @@ func (d *Daemon) readyLeases() []*lease {
 	d.mu.Unlock()
 	out := all[:0]
 	for _, l := range all {
-		if _, ready := l.snapshot(); ready {
+		if _, p := l.snapshot(); p == active {
 			out = append(out, l)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].slot() < out[j].slot() })
+	sort.Slice(out, func(i, j int) bool { return out[i].slot < out[j].slot })
 	return out
 }
 
@@ -253,37 +212,33 @@ func (d *Daemon) save() error {
 	return state.Save(d.cfg.Dirs.StateFile(), &st)
 }
 
-func (d *Daemon) ensureLease(l *lease) ([]string, error) {
+func (d *Daemon) ensureLease(h *held) ([]string, error) {
 	var warns []string
-	if l.cancel == nil {
+	l := h.lease
+	if h.run.ctx == nil {
 		ctx, cancel := context.WithCancel(d.ctx)
-		cdps, errs, err := relay.ListenAll(d.cfg.RelayBind, strconv.Itoa(d.cdpPort(l.slot())))
+		cdps, errs, err := relay.ListenAll(d.cfg.RelayBind, strconv.Itoa(d.cdpPort(l.slot)))
 		if err != nil {
 			cancel()
 			return nil, fmt.Errorf("cdp relay: %w", err)
 		}
 		for _, e := range errs {
-			d.log.Warn("cdp relay: address skipped", "name", l.name(), "err", e)
+			d.log.Warn("cdp relay: address skipped", "name", l.name, "err", e)
 		}
 		for _, cdp := range cdps {
-			go relay.Serve(ctx, cdp, relay.Target(net.JoinHostPort("localhost", strconv.Itoa(d.chromePort(l.slot())))))
+			go relay.Serve(ctx, cdp, relay.Target(net.JoinHostPort("localhost", strconv.Itoa(d.chromePort(l.slot)))))
 		}
-		l.ctx, l.forwarders = ctx, map[netip.Addr]context.CancelFunc{}
-		l.cancel = func() {
-			cancel()
-			for _, cdp := range cdps {
-				cdp.Close()
-			}
-		}
+		h.run = running{ctx: ctx, cancel: cancel, listeners: cdps, forwarders: map[netip.Addr]forwarder{}}
 	}
-	warns = append(warns, d.syncForwarders(l)...)
+	warns = append(warns, d.syncForwarders(h)...)
 	if err := d.ensureVMRelay(l); err != nil {
 		return warns, err
 	}
 	return warns, nil
 }
 
-func (d *Daemon) syncForwarders(l *lease) []string {
+func (d *Daemon) syncForwarders(h *held) []string {
+	l := h.lease
 	var warns []string
 	if len(d.cfg.MDNSSubnets) == 0 {
 		warns = append(warns, "no mDNS subnets configured (CLANKERD_MDNS_SUBNETS); nothing announced")
@@ -298,15 +253,16 @@ func (d *Daemon) syncForwarders(l *lease) []string {
 	if len(d.cfg.MDNSSubnets) > 0 && len(announced) == 0 {
 		warns = append(warns, "no local address inside the mDNS subnets; nothing announced")
 	}
-	for a, stop := range l.forwarders {
+	for a, f := range h.run.forwarders {
 		if !want[a] {
-			stop()
-			delete(l.forwarders, a)
+			f.cancel()
+			f.ln.Close()
+			delete(h.run.forwarders, a)
 		}
 	}
-	port := strconv.Itoa(d.appPort(l.slot()))
+	port := strconv.Itoa(d.appPort(l.slot))
 	for a := range want {
-		if _, ok := l.forwarders[a]; ok {
+		if _, ok := h.run.forwarders[a]; ok {
 			continue
 		}
 		ln, err := net.Listen("tcp", net.JoinHostPort(a.String(), port))
@@ -314,8 +270,8 @@ func (d *Daemon) syncForwarders(l *lease) []string {
 			warns = append(warns, fmt.Sprintf("cannot forward %s: %v", net.JoinHostPort(a.String(), port), err))
 			continue
 		}
-		ctx, cancel := context.WithCancel(l.ctx)
-		l.forwarders[a] = func() { cancel(); ln.Close() }
+		ctx, cancel := context.WithCancel(h.run.ctx)
+		h.run.forwarders[a] = forwarder{cancel: cancel, ln: ln}
 		go relay.Serve(ctx, ln, relay.Target(net.JoinHostPort("localhost", port)))
 	}
 	return warns
@@ -353,11 +309,11 @@ func (d *Daemon) ensureVMRelay(l *lease) error {
 	if host == "" {
 		host = "gateway"
 	}
-	port := strconv.Itoa(d.cdpPort(l.slot()))
+	port := strconv.Itoa(d.cdpPort(l.slot))
 	ctx, cancel := context.WithTimeout(d.ctx, execTimeout)
 	defer cancel()
 	if out, err := d.vm.Exec(ctx, "sh", "-c", startRelayScript, "sh",
-		d.pidFile(l.name()), net.JoinHostPort("127.0.0.1", port), net.JoinHostPort("::1", port), net.JoinHostPort(host, port)); err != nil {
+		d.pidFile(l.name), net.JoinHostPort("127.0.0.1", port), net.JoinHostPort("::1", port), net.JoinHostPort(host, port)); err != nil {
 		return fmt.Errorf("starting the relay in the VM: %w", err)
 	} else if strings.TrimSpace(out) != "" {
 		d.log.Debug("relay start output", "out", out)
@@ -371,8 +327,8 @@ func (d *Daemon) stopVMRelay(l *lease) {
 	}
 	ctx, cancel := context.WithTimeout(d.ctx, execTimeout)
 	defer cancel()
-	if _, err := d.vm.Exec(ctx, "sh", "-c", stopRelayScript, "sh", d.pidFile(l.name())); err != nil {
-		d.log.Warn("stopping the relay in the VM failed", "name", l.name(), "err", err)
+	if _, err := d.vm.Exec(ctx, "sh", "-c", stopRelayScript, "sh", d.pidFile(l.name)); err != nil {
+		d.log.Warn("stopping the relay in the VM failed", "name", l.name, "err", err)
 	}
 }
 
