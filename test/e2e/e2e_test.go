@@ -61,9 +61,9 @@ func TestLeaseAcquireOutput(t *testing.T) {
 	r.up()
 	out := r.ok("lease", "acquire", "shop", "console.shop.local")
 	contains(t, out,
-		fmt.Sprintf("export APP_PORT=%d\n", r.appBase),
-		fmt.Sprintf("export CDP_URL=http://localhost:%d\n", r.cdpBase),
-		"export APP_HOSTS='shop.local console.shop.local'")
+		fmt.Sprintf("export CLANKER_LEASE_APP_PORT=%d\n", r.appBase),
+		fmt.Sprintf("export CLANKER_LEASE_CDP_URL=http://localhost:%d\n", r.cdpBase),
+		"export CLANKER_LEASE_HOSTS='shop.local console.shop.local'")
 
 	l := r.acquire("shop", "console.shop.local")
 	if l.Slot != 0 || l.AppPort != r.appBase || l.CDPPort != r.cdpBase || l.ChromePort != r.chromeBas || l.ChromeRunning {
@@ -89,7 +89,7 @@ func TestLeaseAcquireOutput(t *testing.T) {
 	}
 	contains(t, r.ok("lease", "list"), "shop", "blog")
 	show := r.ok("lease", "show", "blog")
-	contains(t, show, fmt.Sprintf("export APP_PORT=%d", r.appBase+1))
+	contains(t, show, fmt.Sprintf("export CLANKER_LEASE_APP_PORT=%d", r.appBase+1))
 	var shown lease
 	if err := json.Unmarshal([]byte(r.ok("lease", "show", "--json", "blog")), &shown); err != nil || shown.Slot != 1 {
 		t.Fatalf("show --json: %v %+v", err, shown)
@@ -169,7 +169,7 @@ func TestAcquireFromVMAndHostStartRelay(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("vm acquire: %+v", res)
 	}
-	contains(t, res.out, fmt.Sprintf("export APP_PORT=%d", r.appBase+1))
+	contains(t, res.out, fmt.Sprintf("export CLANKER_LEASE_APP_PORT=%d", r.appBase+1))
 	if len(execs()) != 2 {
 		t.Fatalf("relay exec calls: %v", r.smolCalls())
 	}

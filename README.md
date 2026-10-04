@@ -10,8 +10,8 @@ names), *relay* (a TCP forwarder; the VM-side one is `clankerctl relay`), *host*
 
 ```sh
 clankerctl smol up|down|status
-eval "$(clankerctl lease acquire shop console.shop.local)"   # APP_PORT CDP_URL APP_HOSTS
-clankerctl browser start shop                                 # host Chrome, CDP at $CDP_URL
+eval "$(clankerctl lease acquire shop console.shop.local)"   # CLANKER_LEASE_APP_PORT CLANKER_LEASE_CDP_URL CLANKER_LEASE_HOSTS
+clankerctl browser start shop                                 # host Chrome, CDP at $CLANKER_LEASE_CDP_URL
 clankerctl lease release shop [--purge]
 ```
 

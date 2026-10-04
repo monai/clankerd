@@ -145,7 +145,7 @@ func (c *ctl) warn(resp *wire.Response) {
 }
 
 func exports(l wire.Lease) string {
-	return fmt.Sprintf("export APP_PORT=%d\nexport CDP_URL=%s\nexport APP_HOSTS='%s'\n",
+	return fmt.Sprintf("export CLANKER_LEASE_APP_PORT=%d\nexport CLANKER_LEASE_CDP_URL=%s\nexport CLANKER_LEASE_HOSTS='%s'\n",
 		l.AppPort, l.CDPURL, strings.Join(l.Hosts, " "))
 }
 
