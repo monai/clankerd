@@ -15,7 +15,6 @@ import (
 	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
 )
 
-// Version is set at build time.
 var Version = "dev"
 
 const ctlUsage = `usage: clankerctl <command>
@@ -79,7 +78,6 @@ func (c *ctl) run(args []string) error {
 	return usageError{"unknown command " + cmd}
 }
 
-// parseArgs parses flags that may appear before, between or after positional arguments.
 func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
 	fs.SetOutput(io.Discard)
 	var pos []string
@@ -96,11 +94,10 @@ func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
 	}
 }
 
-// target says where to send requests.
 type target struct {
 	sock string
 	vm   bool
-	cfg  *config.Config // nil in the VM, which has no configuration of its own
+	cfg  *config.Config
 	cf   *config.Flags
 }
 
@@ -119,7 +116,6 @@ func guestSocket() string {
 	return wire.GuestSocket
 }
 
-// connect decides whether we are in the VM (the control socket is mounted) or on the host.
 func connect(cf *config.Flags) (*target, error) {
 	if fi, err := os.Stat(guestSocket()); err == nil && fi.Mode()&os.ModeSocket != 0 {
 		return &target{sock: guestSocket(), vm: true, cf: cf}, nil

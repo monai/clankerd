@@ -9,11 +9,10 @@ import (
 )
 
 type Lease struct {
-	Name  string   `json:"name"`
-	Slot  int      `json:"slot"`
-	Hosts []string `json:"hosts"`
-	// ChromePID is the recorded Chrome process, 0 when none.
-	ChromePID int `json:"chrome_pid,omitempty"`
+	Name      string   `json:"name"`
+	Slot      int      `json:"slot"`
+	Hosts     []string `json:"hosts"`
+	ChromePID int      `json:"chrome_pid,omitempty"`
 }
 
 type State struct {

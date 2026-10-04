@@ -300,7 +300,7 @@ func build(k *koanf.Koanf, lay layout, cwd string) (*Config, error) {
 		return nil, err
 	}
 	c.Dirs = d
-	for i, v := range c.Smol.Volumes { // relative host paths are relative to where `smol up` runs
+	for i, v := range c.Smol.Volumes {
 		if host, rest, ok := strings.Cut(v, ":"); ok && !filepath.IsAbs(host) {
 			c.Smol.Volumes[i] = filepath.Join(cwd, host) + ":" + rest
 		}

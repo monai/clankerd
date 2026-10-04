@@ -11,8 +11,6 @@ import (
 	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
 )
 
-// handle answers one request. Operations are whitelisted and every argument is validated; nothing a
-// client sends is ever run as a command.
 func (d *Daemon) handle(c net.Conn) {
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(90 * time.Second))
@@ -217,7 +215,6 @@ func (d *Daemon) browserStop(req *wire.Request) (*wire.Response, error) {
 	return &wire.Response{Lease: &v}, nil
 }
 
-// resync recreates the VM-side relays and forwarders of every lease, for when the VM was restarted.
 func (d *Daemon) resync() (*wire.Response, error) {
 	resp := &wire.Response{}
 	for _, l := range d.sorted() {

@@ -53,7 +53,7 @@ func Start(bin, profile string, debugPort int) (int, error) {
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}
-	go cmd.Wait() // reap it when it exits
+	go cmd.Wait()
 	return cmd.Process.Pid, nil
 }
 

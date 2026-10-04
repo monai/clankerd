@@ -25,8 +25,8 @@ const (
 )
 
 type Options struct {
-	Group4 string // "224.0.0.251:5353"; a non-multicast address is bound as a plain unicast socket (tests)
-	Group6 string // "[ff02::fb]:5353"
+	Group4 string
+	Group6 string
 	// Known reports whether name (lowercase, no trailing dot) is registered.
 	Known func(name string) bool
 	// Addrs returns the addresses to answer with, right now.
@@ -67,7 +67,7 @@ type socket struct {
 	v6     bool
 	mcast  bool
 	ifaces []net.Interface
-	mu     sync.Mutex // serialises multicast-interface selection and writes
+	mu     sync.Mutex
 	p4     *ipv4.PacketConn
 	p6     *ipv6.PacketConn
 }
@@ -82,7 +82,7 @@ func reusable(ctx context.Context, network, addr string) (net.PacketConn, error)
 			if serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); serr != nil {
 				return
 			}
-			if network == "udp6" { // keep the IPv4 socket's traffic out of the IPv6 one
+			if network == "udp6" {
 				serr = unix.SetsockoptInt(int(fd), unix.IPPROTO_IPV6, unix.IPV6_V6ONLY, 1)
 			}
 		})
@@ -226,7 +226,6 @@ func (s *socket) answer(q *dns.Msg, src net.Addr) {
 		return rrs
 	}
 
-	// Unicast to the asker. A legacy (non-5353) asker gets its question echoed and no cache-flush bit.
 	legacy := true
 	if ua, ok := src.(*net.UDPAddr); ok {
 		legacy = ua.Port != mdnsPort
@@ -254,7 +253,6 @@ func (s *socket) answer(q *dns.Msg, src net.Addr) {
 		}
 	}
 
-	// Multicast to the group, on every joined interface.
 	mc := &dns.Msg{}
 	mc.Response, mc.Authoritative = true, true
 	mc.Answer = build(dns.ClassINET | cacheFlush)

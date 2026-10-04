@@ -18,8 +18,6 @@ type listFlag []string
 func (l *listFlag) String() string     { return fmt.Sprint([]string(*l)) }
 func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
 
-// runRelay is the hidden VM-side forwarder: one process per lease, started detached by clankerd.
-// It binds first, then records its pid, so a second start that loses the race exits quietly.
 func runRelay(args []string) error {
 	fs := flag.NewFlagSet("relay", flag.ContinueOnError)
 	var listens listFlag

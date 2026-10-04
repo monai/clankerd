@@ -13,10 +13,9 @@ import (
 // maxSocketPath keeps unix socket paths under the macOS limit of about 104 bytes.
 const maxSocketPath = 100
 
-// Dirs are the per-VM places the daemon and its clients use.
 type Dirs struct {
-	State   string // state.json, log, Chrome profiles
-	Runtime string // socket and pidfile
+	State   string
+	Runtime string
 	VM      string
 }
 
@@ -28,12 +27,10 @@ func (d Dirs) Profile(name string) string {
 	return filepath.Join(d.State, "profiles", name)
 }
 
-// layout says where per-VM files go: a home directory (explicit or project) or the user level.
 type layout struct {
-	root string // when set, everything lives under it
+	root string
 }
 
-// locate returns the file layout base and the config files from lowest to highest precedence.
 func locate(home, cwd string) (layout, []string) {
 	if home != "" {
 		return layout{root: home}, []string{filepath.Join(home, "config.toml")}

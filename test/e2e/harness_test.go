@@ -21,7 +21,6 @@ import (
 var binDir string
 
 const fakeSmolvm = `#!/bin/sh
-# fake smolvm: records command lines, keeps VM state files in $FAKE_SMOLVM_DIR
 printf '%s\n' "$(echo "$*" | tr '\n' ' ')" >> "$FAKE_SMOLVM_DIR/calls.log"
 [ "$1" = machine ] || exit 2
 sub=$2; shift 2
@@ -202,13 +201,12 @@ func (r *rig) fail(args ...string) string {
 	return res.err
 }
 
-// vm runs clankerctl the way it runs inside the VM: through the mounted control socket.
 func (r *rig) vm(args ...string) result {
 	r.t.Helper()
 	saved := r.env["CLANKERD_GUEST_SOCKET"]
 	r.env["CLANKERD_GUEST_SOCKET"] = r.sock()
 	defer func() { r.env["CLANKERD_GUEST_SOCKET"] = saved }()
-	for _, k := range []string{"CLANKERD_HOME", "CLANKERD_SLOTS"} { // the VM has no host configuration
+	for _, k := range []string{"CLANKERD_HOME", "CLANKERD_SLOTS"} {
 		defer func(k, v string) { r.env[k] = v }(k, r.env[k])
 		delete(r.env, k)
 	}
@@ -287,7 +285,6 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-// echoServer stands in for whatever listens behind a forwarder.
 func echoServer(t *testing.T, addr string) {
 	t.Helper()
 	l, err := net.Listen("tcp", addr)

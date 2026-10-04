@@ -1,5 +1,3 @@
-# Pure Go (no cgo); build everything from inside the dev container.
-# Go is pinned in ../mise.toml: `mise install` once, then `mise exec -- make`.
 export CGO_ENABLED := 0
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/monai/clankers/sandbox/clankerd/internal/cli.Version=$(VERSION)

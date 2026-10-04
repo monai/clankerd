@@ -33,8 +33,8 @@ type CreateSpec struct {
 	Init       []string
 	PortFrom   int
 	PortTo     int
-	Socket     string // host unix socket to mount into the VM...
-	GuestSock  string // ...at this path
+	Socket     string
+	GuestSock  string
 }
 
 type Backend interface {

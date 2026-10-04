@@ -16,7 +16,6 @@ import (
 	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
 )
 
-// Daemon runs clankerd and returns its exit code.
 func Daemon(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || (args[0] != "run" && args[0] != "version") {
 		fmt.Fprintln(stderr, "usage: clankerd run [flags]   run the daemon in the foreground\n       clankerd version")

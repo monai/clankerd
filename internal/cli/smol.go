@@ -68,7 +68,6 @@ func daemonBinary() (string, error) {
 
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 
-// startDaemon runs `clankerd run` detached and waits until it answers.
 func (c *ctl) startDaemon(t *target) error {
 	bin, err := daemonBinary()
 	if err != nil {
@@ -132,7 +131,6 @@ func (c *ctl) smolUp(ctx context.Context, t *target, vm backend.Backend) error {
 		}
 	}
 	if cfg.GuestBin != "" {
-		// Development: shadow any baked copy with the mounted build.
 		const script = `src=$1; user=$2
 [ -x "$src" ] || exit 0
 dir=/home/$user/.local/bin
@@ -142,7 +140,6 @@ exit 0`
 			fmt.Fprintln(c.stderr, "warning: linking the development clankerctl into the VM failed:", err)
 		}
 	}
-	// A restarted VM lost its temporary files, and with them the relays.
 	resp, err := wire.Call(t.sock, wire.Request{Op: wire.OpResync})
 	if err != nil {
 		return err

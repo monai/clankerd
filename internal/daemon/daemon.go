@@ -28,8 +28,8 @@ const execTimeout = 30 * time.Second
 
 type lease struct {
 	state.Lease
-	ctx        context.Context    // ends when the lease is released or the daemon stops
-	cancel     context.CancelFunc // stops the lease's daemon-side relays and forwarders
+	ctx        context.Context
+	cancel     context.CancelFunc
 	forwarders map[netip.Addr]context.CancelFunc
 }
 
@@ -39,7 +39,7 @@ type Daemon struct {
 	log *slog.Logger
 
 	ctx    context.Context
-	mu     sync.Mutex // guards leases and all work on them
+	mu     sync.Mutex
 	leases map[string]*lease
 
 	namesMu sync.RWMutex
@@ -202,8 +202,6 @@ func (d *Daemon) sorted() []*lease {
 	return out
 }
 
-// wire (re)creates the pieces of a lease that live in this process or in the VM, and returns warnings.
-// It is safe to call repeatedly.
 func (d *Daemon) wire(l *lease) ([]string, error) {
 	var warns []string
 	if l.cancel == nil {
@@ -228,8 +226,6 @@ func (d *Daemon) wire(l *lease) ([]string, error) {
 	return warns, nil
 }
 
-// syncForwarders makes the app port reachable on every announced non-loopback address.
-// smolvm publishes the port on loopback only.
 func (d *Daemon) syncForwarders(l *lease) []string {
 	var warns []string
 	if len(d.cfg.MDNSSubnets) == 0 {
@@ -292,7 +288,6 @@ func (d *Daemon) vmRunning() error {
 }
 
 // ensureVMRelay starts the VM-side relay unless its pidfile names a live process.
-// The relay command is started detached: smolvm kills everything still attached to an exec.
 func (d *Daemon) ensureVMRelay(l *lease) error {
 	if err := d.vmRunning(); err != nil {
 		return err

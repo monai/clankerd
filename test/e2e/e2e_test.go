@@ -41,7 +41,7 @@ func TestSmolUpDownStatus(t *testing.T) {
 		t.Fatal("daemon not alive")
 	}
 
-	r.up() // idempotent
+	r.up()
 	if n := strings.Count(strings.Join(r.smolCalls(), "\n"), "machine create"); n != 1 {
 		t.Fatalf("create ran %d times", n)
 	}
@@ -53,7 +53,7 @@ func TestSmolUpDownStatus(t *testing.T) {
 	contains(t, calls, "machine stop", "machine delete")
 	waitFor(t, "daemon exit", func() bool { return !alive(pid) })
 	contains(t, r.ok("smol", "status"), "daemon: stopped", "vm: missing")
-	r.ok("smol", "down") // idempotent
+	r.ok("smol", "down")
 }
 
 func TestLeaseAcquireOutput(t *testing.T) {
@@ -73,7 +73,6 @@ func TestLeaseAcquireOutput(t *testing.T) {
 		t.Fatalf("lease = %+v", l)
 	}
 
-	// repeating is safe and the hostname list is replaced
 	l = r.acquire("shop", "api.shop.local")
 	if l.Slot != 0 || strings.Join(l.Hosts, " ") != "shop.local api.shop.local" {
 		t.Fatalf("lease = %+v", l)
@@ -146,7 +145,6 @@ func TestAcquireFromVMAndHostStartRelay(t *testing.T) {
 		return out
 	}
 
-	// acquired on the host
 	r.acquire("hostside")
 	if len(execs()) != 1 {
 		t.Fatalf("relay exec calls: %v", r.smolCalls())
@@ -155,16 +153,13 @@ func TestAcquireFromVMAndHostStartRelay(t *testing.T) {
 	eventually(t, "VM relay (host acquire)", func() error {
 		return throughput(t, fmt.Sprintf("127.0.0.1:%d", r.cdpBase))
 	})
-	// the VM relay serves IPv6 localhost too
 	eventually(t, "VM relay over IPv6", func() error {
 		return throughput(t, fmt.Sprintf("[::1]:%d", r.cdpBase))
 	})
-	// the daemon relay is the hop in the middle
 	if err := throughput(t, fmt.Sprintf("127.0.0.2:%d", r.cdpBase)); err != nil {
 		t.Fatalf("daemon relay: %v", err)
 	}
 
-	// acquired in the VM
 	res := r.vm("lease", "acquire", "vmside")
 	if res.code != 0 {
 		t.Fatalf("vm acquire: %+v", res)
@@ -177,7 +172,6 @@ func TestAcquireFromVMAndHostStartRelay(t *testing.T) {
 		return throughput(t, fmt.Sprintf("127.0.0.1:%d", r.cdpBase+1))
 	})
 
-	// repeating the command repairs a dead relay
 	pidFile := filepath.Join(r.smolDir, "guest", "relay-hostside.pid")
 	b, err := os.ReadFile(pidFile)
 	if err != nil {
@@ -192,7 +186,6 @@ func TestAcquireFromVMAndHostStartRelay(t *testing.T) {
 		return throughput(t, fmt.Sprintf("127.0.0.1:%d", r.cdpBase))
 	})
 
-	// release stops the relays
 	r.ok("lease", "release", "hostside")
 	eventually(t, "relay closed", func() error {
 		if throughput(t, fmt.Sprintf("127.0.0.1:%d", r.cdpBase)) == nil {
@@ -221,7 +214,7 @@ func TestAppForwarderOnAnnouncedAddress(t *testing.T) {
 	ip := lanIP(t)
 	r.env["CLANKERD_MDNS_SUBNETS"] = ip + "/32"
 	r.up()
-	echoServer(t, fmt.Sprintf("127.0.0.1:%d", r.appBase)) // what smolvm publishes
+	echoServer(t, fmt.Sprintf("127.0.0.1:%d", r.appBase))
 	r.acquire("shop")
 	eventually(t, "forwarder", func() error { return throughput(t, fmt.Sprintf("%s:%d", ip, r.appBase)) })
 	r.ok("lease", "release", "shop")
@@ -314,7 +307,7 @@ func TestNoSubnetsAnnouncesNothingAndWarns(t *testing.T) {
 	}
 	r.env["CLANKERD_MDNS_SUBNETS"] = "bogus"
 	contains(t, r.fail("smol", "up"), "invalid subnet")
-	r.env["CLANKERD_MDNS_SUBNETS"] = "" // so the cleanup's `smol down` can load the configuration
+	r.env["CLANKERD_MDNS_SUBNETS"] = ""
 }
 
 func TestBrowser(t *testing.T) {
@@ -342,7 +335,7 @@ func TestBrowser(t *testing.T) {
 		t.Fatal("lease show does not report chrome")
 	}
 
-	r.ok("browser", "start", "shop") // no-op
+	r.ok("browser", "start", "shop")
 	time.Sleep(200 * time.Millisecond)
 	if n := len(r.chromeStarts()); n != 1 {
 		t.Fatalf("chrome started %d times", n)
@@ -350,7 +343,7 @@ func TestBrowser(t *testing.T) {
 
 	r.ok("browser", "stop", "shop")
 	waitFor(t, "chrome exit", func() bool { return !alive(pid) })
-	r.ok("browser", "stop", "shop") // not running: fine
+	r.ok("browser", "stop", "shop")
 
 	os.MkdirAll(profile, 0o755)
 	os.WriteFile(filepath.Join(profile, "Cookies"), []byte("x"), 0o644)
@@ -427,7 +420,6 @@ func TestSmolUpRecreatesRelaysAfterVMRestart(t *testing.T) {
 	echoServer(t, fmt.Sprintf("127.0.0.1:%d", r.chromeBas))
 	r.acquire("shop")
 	eventually(t, "relay", func() error { return throughput(t, fmt.Sprintf("127.0.0.1:%d", r.cdpBase)) })
-	// the VM's temporary files vanish when it restarts
 	b, _ := os.ReadFile(filepath.Join(r.smolDir, "guest", "relay-shop.pid"))
 	var pid int
 	fmt.Sscan(string(b), &pid)
@@ -477,14 +469,14 @@ func TestConfigLayering(t *testing.T) {
 	contains(t, r.fail("lease", "acquire", "b"), "no free lease")
 	r.ok("smol", "down")
 
-	r.env["CLANKERD_SLOTS"] = "2" // environment beats the file
+	r.env["CLANKERD_SLOTS"] = "2"
 	r.up()
 	r.acquire("a")
 	r.acquire("b")
 	contains(t, r.fail("lease", "acquire", "c"), "no free lease")
 	r.ok("smol", "down")
 
-	r.up2("--slots", "3") // flags beat the environment
+	r.up2("--slots", "3")
 	r.acquire("a")
 	r.acquire("b")
 	r.acquire("c")

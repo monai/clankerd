@@ -76,7 +76,7 @@ func HappyEyeballs(addrs []netip.Addr, port string) DialFunc {
 			case r := <-results:
 				finished++
 				if r.err == nil {
-					go func() { // drain the losers
+					go func() {
 						for ; finished < started; finished++ {
 							if l := <-results; l.c != nil {
 								l.c.Close()
@@ -86,7 +86,7 @@ func HappyEyeballs(addrs []netip.Addr, port string) DialFunc {
 					return r.c, nil
 				}
 				errs = append(errs, r.err)
-				if started < len(ordered) { // a failure starts the next attempt at once
+				if started < len(ordered) {
 					start(ordered[started])
 					started++
 					timer.Reset(connectionAttemptDelay)

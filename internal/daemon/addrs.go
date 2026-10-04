@@ -5,8 +5,6 @@ import (
 	"net/netip"
 )
 
-// announceAddrs returns every local address inside the subnets. IPv6 link-local addresses are
-// skipped: a plain AAAA record cannot carry a zone id.
 func announceAddrs(subnets []netip.Prefix) []netip.Addr {
 	if len(subnets) == 0 {
 		return nil
