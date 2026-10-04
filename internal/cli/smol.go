@@ -109,16 +109,18 @@ func (c *ctl) smolUp(ctx context.Context, t *target, vm backend.Backend) error {
 		return err
 	}
 	if st == backend.Missing {
-		env := append([]string{}, cfg.Smol.Env...)
-		for k, v := range map[string]string{"HOST_UID": strconv.Itoa(os.Getuid()), "HOST_GID": strconv.Itoa(os.Getgid())} {
-			if !hasEnv(env, k) {
-				env = append(env, k+"="+v)
+		expand := strings.NewReplacer("{uid}", strconv.Itoa(os.Getuid()), "{gid}", strconv.Itoa(os.Getgid()))
+		each := func(in []string) []string {
+			out := make([]string, len(in))
+			for i, v := range in {
+				out[i] = expand.Replace(v)
 			}
+			return out
 		}
 		if err := vm.Create(ctx, backend.CreateSpec{
 			Image: cfg.Smol.Image, CPUs: cfg.Smol.CPUs, Mem: cfg.Smol.Mem, Storage: cfg.Smol.Storage,
 			Net: cfg.Smol.Net, NetBackend: cfg.Smol.NetBackend, User: cfg.Smol.User,
-			Volumes: cfg.Smol.Volumes, Env: env, Init: cfg.Smol.Init,
+			Volumes: each(cfg.Smol.Volumes), Env: each(cfg.Smol.Env), Init: each(cfg.Smol.Init),
 			PortFrom: cfg.AppPortBase, PortTo: cfg.AppPortBase + cfg.Slots - 1,
 			Socket: cfg.Dirs.Socket(), GuestSock: wire.GuestSocket,
 		}); err != nil {
@@ -137,15 +139,6 @@ func (c *ctl) smolUp(ctx context.Context, t *target, vm backend.Backend) error {
 	c.warn(resp)
 	fmt.Fprintf(c.stdout, "up: vm=%s apps=%d-%d ctl=%s\n", cfg.VM, cfg.AppPortBase, cfg.AppPortBase+cfg.Slots-1, t.sock)
 	return nil
-}
-
-func hasEnv(env []string, k string) bool {
-	for _, e := range env {
-		if strings.HasPrefix(e, k+"=") {
-			return true
-		}
-	}
-	return false
 }
 
 func (c *ctl) smolDown(ctx context.Context, t *target, vm backend.Backend) error {

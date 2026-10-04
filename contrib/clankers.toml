@@ -1,0 +1,10 @@
+# Wires the ghcr.io/monai/clankers image. Use with --config or CLANKERD_CONFIG.
+[smol]
+image = "ghcr.io/monai/clankers:slim"
+user = "agent"
+volumes = [".:/mnt/workspace"]
+env = ["HOME=/home/agent", "HOST_UID={uid}", "HOST_GID={gid}"]
+init = [
+  "sh -c 'groupmod -o -g $HOST_GID agent && usermod -o -u $HOST_UID agent && { mountpoint -q /home/agent || chown -R $HOST_UID:$HOST_GID /home/agent; } && chown $HOST_UID:$HOST_GID /workspace'",
+  "mkdir -p /storage/docker",
+]

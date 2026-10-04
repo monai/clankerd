@@ -23,8 +23,17 @@ func contains(t *testing.T, s string, subs ...string) {
 	}
 }
 
+func contrib(t *testing.T) string {
+	p, err := filepath.Abs("../../contrib/clankers.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func TestSmolUpDownStatus(t *testing.T) {
 	r := newRig(t)
+	r.env["CLANKERD_CONFIG"] = contrib(t)
 	if out := r.ok("smol", "status"); !strings.Contains(out, "daemon: stopped") || !strings.Contains(out, "vm: missing") {
 		t.Fatalf("status before up: %s", out)
 	}
@@ -34,7 +43,16 @@ func TestSmolUpDownStatus(t *testing.T) {
 		"machine create", "--name sandbox",
 		fmt.Sprintf("-p %d-%d:%d-%d", r.appBase, r.appBase+slots-1, r.appBase, r.appBase+slots-1),
 		"--mount-socket "+r.sock()+":/run/clankerd/ctl.sock",
-		"--user agent", "--net-backend virtio-net", "--env HOST_UID=", "--init", "machine start")
+		"--image ghcr.io/monai/clankers:slim", "--user agent", "--env HOST_UID=", "--env HOME=/home/agent",
+		"--init", "machine start")
+	for _, flag := range []string{"--cpus", "--mem", "--storage", "--net"} {
+		if strings.Contains(calls, flag) {
+			t.Errorf("contrib profile passes %s; smolvm's default should apply", flag)
+		}
+	}
+	if strings.Contains(calls, "{uid}") || strings.Contains(calls, "{gid}") {
+		t.Errorf("placeholders not expanded:\n%s", calls)
+	}
 	out := r.ok("smol", "status")
 	contains(t, out, "daemon: running", "vm: running")
 	if !alive(r.daemonPID()) {
@@ -54,6 +72,30 @@ func TestSmolUpDownStatus(t *testing.T) {
 	waitFor(t, "daemon exit", func() bool { return !alive(pid) })
 	contains(t, r.ok("smol", "status"), "daemon: stopped", "vm: missing")
 	r.ok("smol", "down")
+}
+
+func TestSmolUpPassesOnlyWhatIsConfigured(t *testing.T) {
+	r := newRig(t)
+	r.up()
+	create := ""
+	for _, c := range r.smolCalls() {
+		if strings.HasPrefix(c, "machine create") {
+			create = c
+		}
+	}
+	contains(t, create, "--name sandbox", "-p ", "--mount-socket ")
+	for _, flag := range []string{"--image", "--cpus", "--mem", "--storage", "--net", "--user", "--volume", "--env", "--init"} {
+		if strings.Contains(create, flag) {
+			t.Errorf("unconfigured create passes %s: %s", flag, create)
+		}
+	}
+	r.ok("smol", "down")
+
+	os.WriteFile(filepath.Join(r.home, "config.toml"),
+		[]byte("[smol]\ncpus = 2\nmem = 1024\nstorage = 8\nnet = true\nnet_backend = \"gvproxy\"\n"), 0o644)
+	r.up()
+	calls := strings.Join(r.smolCalls(), "\n")
+	contains(t, calls, "--cpus 2", "--mem 1024", "--storage 8", "--net ", "--net-backend gvproxy")
 }
 
 func TestLeaseAcquireOutput(t *testing.T) {

@@ -64,17 +64,26 @@ func (s *Smolvm) run(ctx context.Context, args ...string) (string, error) {
 }
 
 func (s *Smolvm) Create(ctx context.Context, c CreateSpec) error {
-	args := []string{"machine", "create", "--name", s.Name, "--image", c.Image,
-		"--cpus", fmt.Sprint(c.CPUs), "--mem", fmt.Sprint(c.Mem), "--storage", fmt.Sprint(c.Storage)}
+	args := []string{"machine", "create", "--name", s.Name}
+	opt := func(flag, v string) {
+		if v != "" {
+			args = append(args, flag, v)
+		}
+	}
+	optInt := func(flag string, n int) {
+		if n > 0 {
+			opt(flag, fmt.Sprint(n))
+		}
+	}
+	opt("--image", c.Image)
+	optInt("--cpus", c.CPUs)
+	optInt("--mem", c.Mem)
+	optInt("--storage", c.Storage)
 	if c.Net {
 		args = append(args, "--net")
 	}
-	if c.NetBackend != "" {
-		args = append(args, "--net-backend", c.NetBackend)
-	}
-	if c.User != "" {
-		args = append(args, "--user", c.User)
-	}
+	opt("--net-backend", c.NetBackend)
+	opt("--user", c.User)
 	for _, v := range c.Volumes {
 		args = append(args, "--volume", v)
 	}

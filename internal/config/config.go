@@ -82,20 +82,6 @@ func defaults() map[string]any {
 		"guest.host_addr":   "",
 		"guest.dir":         "/tmp/clankerd",
 		"log.level":         "info",
-
-		"smol.image":       "ghcr.io/monai/clankers:slim",
-		"smol.cpus":        4,
-		"smol.mem":         8192,
-		"smol.storage":     4,
-		"smol.net":         true,
-		"smol.net_backend": "virtio-net",
-		"smol.user":        "agent",
-		"smol.volumes":     []string{".:/mnt/workspace"},
-		"smol.env":         []string{},
-		"smol.init": []string{
-			`sh -c 'groupmod -o -g $HOST_GID agent && usermod -o -u $HOST_UID agent && { mountpoint -q /home/agent || chown -R $HOST_UID:$HOST_GID /home/agent; } && chown $HOST_UID:$HOST_GID /workspace'`,
-			"mkdir -p /storage/docker",
-		},
 	}
 }
 
@@ -243,6 +229,12 @@ func build(k *koanf.Koanf, lay layout, cwd string) (*Config, error) {
 		}
 		return n
 	}
+	optNum := func(key string) int {
+		if !k.Exists(key) {
+			return 0
+		}
+		return num(key)
+	}
 	c := &Config{
 		VM:             str(k, "vm.name"),
 		Slots:          num("ports.slots"),
@@ -258,9 +250,9 @@ func build(k *koanf.Koanf, lay layout, cwd string) (*Config, error) {
 		LogLevel:       str(k, "log.level"),
 		Smol: Smol{
 			Image:      str(k, "smol.image"),
-			CPUs:       num("smol.cpus"),
-			Mem:        num("smol.mem"),
-			Storage:    num("smol.storage"),
+			CPUs:       optNum("smol.cpus"),
+			Mem:        optNum("smol.mem"),
+			Storage:    optNum("smol.storage"),
 			Net:        str(k, "smol.net") == "true",
 			NetBackend: str(k, "smol.net_backend"),
 			User:       str(k, "smol.user"),
