@@ -11,8 +11,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/monai/clankers/sandbox/clanker/internal/config"
-	"github.com/monai/clankers/sandbox/clanker/internal/wire"
+	"github.com/monai/clankers/sandbox/clankerd/internal/config"
+	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
 )
 
 // Version is set at build time.

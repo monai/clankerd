@@ -155,6 +155,10 @@ func TestAcquireFromVMAndHostStartRelay(t *testing.T) {
 	eventually(t, "VM relay (host acquire)", func() error {
 		return throughput(t, fmt.Sprintf("127.0.0.1:%d", r.cdpBase))
 	})
+	// the VM relay serves IPv6 localhost too
+	eventually(t, "VM relay over IPv6", func() error {
+		return throughput(t, fmt.Sprintf("[::1]:%d", r.cdpBase))
+	})
 	// the daemon relay is the hop in the middle
 	if err := throughput(t, fmt.Sprintf("127.0.0.2:%d", r.cdpBase)); err != nil {
 		t.Fatalf("daemon relay: %v", err)

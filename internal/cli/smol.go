@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/monai/clankers/sandbox/clanker/internal/backend"
-	"github.com/monai/clankers/sandbox/clanker/internal/config"
-	"github.com/monai/clankers/sandbox/clanker/internal/wire"
+	"github.com/monai/clankers/sandbox/clankerd/internal/backend"
+	"github.com/monai/clankers/sandbox/clankerd/internal/config"
+	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
 )
 
 func (c *ctl) smol(args []string) error {

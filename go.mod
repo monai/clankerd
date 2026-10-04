@@ -1,4 +1,4 @@
-module github.com/monai/clankers/sandbox/clanker
+module github.com/monai/clankers/sandbox/clankerd
 
 go 1.26.0
 

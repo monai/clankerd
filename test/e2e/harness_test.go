@@ -46,7 +46,7 @@ exec sleep 600
 `
 
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "clanker-e2e-bin")
+	dir, err := os.MkdirTemp("", "clankerd-e2e-bin")
 	if err != nil {
 		panic(err)
 	}
@@ -117,7 +117,7 @@ func newRig(t *testing.T) *rig {
 	r.work = t.TempDir()
 	r.chromeLog = filepath.Join(r.smolDir, "chrome.log")
 	r.appBase = freeTCPRange(slots, "127.0.0.1", "0.0.0.0")
-	r.cdpBase = freeTCPRange(slots, "127.0.0.1", "127.0.0.2")
+	r.cdpBase = freeTCPRange(slots, "127.0.0.1", "127.0.0.2", "::1")
 	r.chromeBas = freeTCPRange(slots, "127.0.0.1")
 	r.udp = freeUDP()
 	r.env = map[string]string{

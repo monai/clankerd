@@ -10,10 +10,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/monai/clankers/sandbox/clanker/internal/backend"
-	"github.com/monai/clankers/sandbox/clanker/internal/config"
-	"github.com/monai/clankers/sandbox/clanker/internal/daemon"
-	"github.com/monai/clankers/sandbox/clanker/internal/wire"
+	"github.com/monai/clankers/sandbox/clankerd/internal/backend"
+	"github.com/monai/clankers/sandbox/clankerd/internal/config"
+	"github.com/monai/clankers/sandbox/clankerd/internal/daemon"
+	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
 )
 
 // Daemon runs clankerd and returns its exit code.

@@ -7,8 +7,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/monai/clankers/sandbox/clanker/internal/chrome"
-	"github.com/monai/clankers/sandbox/clanker/internal/wire"
+	"github.com/monai/clankers/sandbox/clankerd/internal/chrome"
+	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
 )
 
 // handle answers one request. Operations are whitelisted and every argument is validated; nothing a

@@ -15,13 +15,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/monai/clankers/sandbox/clanker/internal/backend"
-	"github.com/monai/clankers/sandbox/clanker/internal/chrome"
-	"github.com/monai/clankers/sandbox/clanker/internal/config"
-	"github.com/monai/clankers/sandbox/clanker/internal/mdns"
-	"github.com/monai/clankers/sandbox/clanker/internal/relay"
-	"github.com/monai/clankers/sandbox/clanker/internal/state"
-	"github.com/monai/clankers/sandbox/clanker/internal/wire"
+	"github.com/monai/clankers/sandbox/clankerd/internal/backend"
+	"github.com/monai/clankers/sandbox/clankerd/internal/chrome"
+	"github.com/monai/clankers/sandbox/clankerd/internal/config"
+	"github.com/monai/clankers/sandbox/clankerd/internal/mdns"
+	"github.com/monai/clankers/sandbox/clankerd/internal/relay"
+	"github.com/monai/clankers/sandbox/clankerd/internal/state"
+	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
 )
 
 const execTimeout = 30 * time.Second
@@ -208,12 +208,17 @@ func (d *Daemon) wire(l *lease) ([]string, error) {
 	var warns []string
 	if l.cancel == nil {
 		ctx, cancel := context.WithCancel(d.ctx)
-		cdp, err := net.Listen("tcp", net.JoinHostPort(d.cfg.RelayBind, strconv.Itoa(d.cdpPort(l.Slot))))
+		cdps, errs, err := relay.ListenAll(d.cfg.RelayBind, strconv.Itoa(d.cdpPort(l.Slot)))
 		if err != nil {
 			cancel()
 			return nil, fmt.Errorf("cdp relay: %w", err)
 		}
-		go relay.Serve(ctx, cdp, net.JoinHostPort("127.0.0.1", strconv.Itoa(d.chromePort(l.Slot))))
+		for _, e := range errs {
+			d.log.Warn("cdp relay: address skipped", "name", l.Name, "err", e)
+		}
+		for _, cdp := range cdps {
+			go relay.Serve(ctx, cdp, relay.Target(net.JoinHostPort("localhost", strconv.Itoa(d.chromePort(l.Slot)))))
+		}
 		l.ctx, l.cancel, l.forwarders = ctx, cancel, map[netip.Addr]context.CancelFunc{}
 	}
 	warns = append(warns, d.syncForwarders(l)...)
@@ -258,7 +263,7 @@ func (d *Daemon) syncForwarders(l *lease) []string {
 		}
 		ctx, cancel := context.WithCancel(l.ctx)
 		l.forwarders[a] = cancel
-		go relay.Serve(ctx, ln, net.JoinHostPort("127.0.0.1", port))
+		go relay.Serve(ctx, ln, relay.Target(net.JoinHostPort("localhost", port)))
 	}
 	return warns
 }
@@ -266,7 +271,7 @@ func (d *Daemon) syncForwarders(l *lease) []string {
 const startRelayScript = `pf=$1
 if [ -f "$pf" ] && kill -0 "$(cat "$pf")" 2>/dev/null; then exit 0; fi
 mkdir -p "$(dirname "$pf")" || exit 1
-setsid -f clankerctl relay --pidfile "$pf" --listen "$2" --target "$3" </dev/null >/dev/null 2>&1
+setsid -f clankerctl relay --pidfile "$pf" --listen "$2" --listen "$3" --target "$4" </dev/null >/dev/null 2>&1
 `
 
 const stopRelayScript = `pf=$1
@@ -300,7 +305,7 @@ func (d *Daemon) ensureVMRelay(l *lease) error {
 	ctx, cancel := context.WithTimeout(d.ctx, execTimeout)
 	defer cancel()
 	if out, err := d.vm.Exec(ctx, "sh", "-c", startRelayScript, "sh",
-		d.pidFile(l.Name), net.JoinHostPort("127.0.0.1", port), net.JoinHostPort(host, port)); err != nil {
+		d.pidFile(l.Name), net.JoinHostPort("127.0.0.1", port), net.JoinHostPort("::1", port), net.JoinHostPort(host, port)); err != nil {
 		return fmt.Errorf("starting the relay in the VM: %w", err)
 	} else if strings.TrimSpace(out) != "" {
 		d.log.Debug("relay start output", "out", out)

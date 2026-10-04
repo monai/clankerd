@@ -37,7 +37,7 @@ type Config struct {
 	AppPortBase    int
 	CDPPortBase    int
 	ChromePortBase int
-	RelayBind      string
+	RelayBind      []string // addresses for the daemon CDP relay, IPv4 and IPv6 alike
 	MDNSSubnets    []netip.Prefix
 	MDNSGroup4     string
 	MDNSGroup6     string
@@ -76,14 +76,14 @@ func defaults() map[string]any {
 		"ports.app_base":    4000,
 		"ports.cdp_base":    9222,
 		"ports.chrome_base": 19222,
-		"ports.relay_bind":  "127.0.0.1",
+		"ports.relay_bind":  []string{"127.0.0.1", "::1"},
 		"mdns.subnets":      []string{},
 		"mdns.group4":       "224.0.0.251:5353",
 		"mdns.group6":       "[ff02::fb]:5353",
 		"chrome.bin":        "",
 		"guest.host_addr":   "",
 		"guest.dir":         "/tmp/clankerd",
-		"guest.bin":         "/mnt/workspace/sandbox/clanker/build/linux-arm64/clankerctl",
+		"guest.bin":         "/mnt/workspace/sandbox/clankerd/build/linux-arm64/clankerctl",
 		"log.level":         "info",
 
 		"smol.image":       "ghcr.io/monai/clankers:slim",
@@ -252,7 +252,7 @@ func build(k *koanf.Koanf, lay layout, cwd string) (*Config, error) {
 		AppPortBase:    num("ports.app_base"),
 		CDPPortBase:    num("ports.cdp_base"),
 		ChromePortBase: num("ports.chrome_base"),
-		RelayBind:      str(k, "ports.relay_bind"),
+		RelayBind:      list(k, "ports.relay_bind"),
 		MDNSGroup4:     str(k, "mdns.group4"),
 		MDNSGroup6:     str(k, "mdns.group6"),
 		ChromeBin:      str(k, "chrome.bin"),

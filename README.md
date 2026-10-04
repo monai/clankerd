@@ -37,11 +37,11 @@ from the current directory), user, system, defaults. `--home DIR` / `CLANKERD_HO
 | `CLANKERD_APP_PORT_BASE` | `ports.app_base` | `4000` |
 | `CLANKERD_CDP_PORT_BASE` | `ports.cdp_base` | `9222` |
 | `CLANKERD_CHROME_PORT_BASE` | `ports.chrome_base` | `19222` |
-| `CLANKERD_RELAY_BIND` | `ports.relay_bind` | `127.0.0.1` |
+| `CLANKERD_RELAY_BIND` (comma list) | `ports.relay_bind` | `127.0.0.1,::1` |
 | `CLANKERD_MDNS_SUBNETS` (comma list) | `mdns.subnets` | empty: announce nothing |
 | `CLANKERD_MDNS_GROUP4` / `GROUP6` | `mdns.group4` / `group6` | `224.0.0.251:5353` / `[ff02::fb]:5353` |
 | `CLANKERD_CHROME_BIN` | `chrome.bin` | auto-detect |
-| `CLANKERD_HOST_ADDR` | `guest.host_addr` | the VM's default gateway |
+| `CLANKERD_HOST_ADDR` | `guest.host_addr` | the VM's default gateways, IPv4 and IPv6 (RFC 8305 Happy Eyeballs) |
 | `CLANKERD_GUEST_DIR` | `guest.dir` | `/tmp/clankerd` (relay pidfiles in the VM) |
 | `CLANKERD_GUEST_BIN` | `guest.bin` | mounted dev build; empty = none |
 | `CLANKERD_LOG_LEVEL` | `log.level` | `info` |
