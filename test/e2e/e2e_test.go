@@ -562,11 +562,28 @@ func TestSmolUpRefusesAVMFromAnotherConfiguration(t *testing.T) {
 	contains(t, r.fail("smol", "up"), "not created from the current configuration")
 }
 
-func TestVMSideErrorWhenSocketIsMissing(t *testing.T) {
+func TestSandboxDetection(t *testing.T) {
 	r := newRig(t)
+	r.env["CLANKERD_CMDLINE_PATH"] = r.fakeSmolvmCmdline()
 	r.env["CLANKERD_GUEST_SOCKET"] = filepath.Join(r.work, "absent.sock")
-	msg := r.fail("lease", "acquire", "shop")
-	contains(t, msg, "not running", "must be mounted")
+	contains(t, r.fail("lease", "acquire", "shop"), "running in a vm", "control socket", "is missing")
+	contains(t, r.fail("smol", "up"), "running in a vm", "is missing")
+
+	r.env["CLANKERD_CMDLINE_PATH"] = filepath.Join(r.work, "no-cmdline")
+	dockerenv := filepath.Join(r.work, "dockerenv")
+	os.WriteFile(dockerenv, nil, 0o644)
+	r.env["CLANKERD_DOCKERENV_PATH"] = dockerenv
+	contains(t, r.fail("lease", "acquire", "shop"), "running in a docker", "is missing")
+
+	os.Remove(dockerenv)
+	delete(r.env, "CLANKERD_GUEST_SOCKET")
+	contains(t, r.fail("lease", "acquire", "shop"), "clankerd is not running", "smol up")
+}
+
+func TestSmolRefusesInsideTheVM(t *testing.T) {
+	r := newRig(t)
+	r.up()
+	contains(t, r.vm("smol", "status").err, "run on the host, not in a vm")
 }
 
 func TestStalePIDOfAnotherProcessIsNotKilled(t *testing.T) {

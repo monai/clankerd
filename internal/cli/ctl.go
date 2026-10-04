@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/monai/clankers/sandbox/clankerd/internal/config"
+	"github.com/monai/clankers/sandbox/clankerd/internal/isolation"
 	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
 )
 
@@ -97,19 +97,18 @@ func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
 
 type target struct {
 	sock string
-	vm   bool
+	kind isolation.Kind
 	cfg  *config.Config
 	cf   *config.Flags
 }
 
 func (t *target) call(req wire.Request) (*wire.Response, error) {
 	resp, err := wire.Call(t.sock, req)
-	if err != nil && errors.Is(err, wire.ErrDaemonDown) && !t.vm {
-		hint := "start it with `clankerctl smol up`"
-		if runtime.GOOS == "linux" {
-			hint += fmt.Sprintf("; inside the VM the control socket %s must be mounted (recreate the VM with `smol down`, `smol up`)", guestSocket())
+	if err != nil && errors.Is(err, wire.ErrDaemonDown) {
+		if t.kind.Sandboxed() {
+			return resp, fmt.Errorf("%w; run `clankerctl smol up` on the host", err)
 		}
-		return resp, fmt.Errorf("%w; %s", err, hint)
+		return resp, fmt.Errorf("%w; start it with `clankerctl smol up`", err)
 	}
 	return resp, err
 }
@@ -122,8 +121,13 @@ func guestSocket() string {
 }
 
 func connect(cf *config.Flags) (*target, error) {
-	if fi, err := os.Stat(guestSocket()); err == nil && fi.Mode()&os.ModeSocket != 0 {
-		return &target{sock: guestSocket(), vm: true, cf: cf}, nil
+	if kind := isolation.Detect(); kind.Sandboxed() {
+		sock := guestSocket()
+		if fi, err := os.Stat(sock); err != nil || fi.Mode()&os.ModeSocket == 0 {
+			return nil, fmt.Errorf("running in a %s but the control socket %s is missing; "+
+				"recreate it from the host with `clankerctl smol down`, `smol up`", kind, sock)
+		}
+		return &target{sock: sock, kind: kind, cf: cf}, nil
 	}
 	cwd, err := os.Getwd()
 	if err != nil {

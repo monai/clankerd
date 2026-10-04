@@ -36,8 +36,8 @@ func (c *ctl) smol(args []string) error {
 	if err != nil {
 		return err
 	}
-	if t.vm {
-		return errors.New("smol commands run on the host, not in the VM")
+	if t.kind.Sandboxed() {
+		return fmt.Errorf("smol commands run on the host, not in a %s", t.kind)
 	}
 	vm := backend.NewSmolvm(t.cfg.VM)
 	ctx := context.Background()

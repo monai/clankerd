@@ -144,6 +144,8 @@ func newRig(t *testing.T) *rig {
 		"CLANKERD_MDNS_GROUP6":      fmt.Sprintf("[::1]:%d", r.udp),
 		"CLANKERD_CHROME_BIN":       filepath.Join(binDir, "fake-chrome"),
 		"CLANKERD_GUEST_DIR":        filepath.Join(r.smolDir, "guest"),
+		"CLANKERD_CMDLINE_PATH":     filepath.Join(r.work, "no-cmdline"),
+		"CLANKERD_DOCKERENV_PATH":   filepath.Join(r.work, "no-dockerenv"),
 		"FAKE_SMOLVM_DIR":           r.smolDir,
 		"FAKE_CHROME_LOG":           r.chromeLog,
 	}
@@ -212,9 +214,12 @@ func (r *rig) fail(args ...string) string {
 
 func (r *rig) vm(args ...string) result {
 	r.t.Helper()
-	saved := r.env["CLANKERD_GUEST_SOCKET"]
+	r.env["CLANKERD_CMDLINE_PATH"] = r.fakeSmolvmCmdline()
 	r.env["CLANKERD_GUEST_SOCKET"] = r.sock()
-	defer func() { r.env["CLANKERD_GUEST_SOCKET"] = saved }()
+	defer func() {
+		r.env["CLANKERD_CMDLINE_PATH"] = filepath.Join(r.work, "no-cmdline")
+		delete(r.env, "CLANKERD_GUEST_SOCKET")
+	}()
 	for _, k := range []string{"CLANKERD_HOME", "CLANKERD_SLOTS"} {
 		defer func(k, v string) { r.env[k] = v }(k, r.env[k])
 		delete(r.env, k)
@@ -347,4 +352,10 @@ func eventually(t *testing.T, what string, f func() error) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("%s: %v", what, err)
+}
+
+func (r *rig) fakeSmolvmCmdline() string {
+	p := filepath.Join(r.work, "cmdline")
+	os.WriteFile(p, []byte(`reboot=k init=/init.krun "SMOLVM_MACHINE_NAME=sandbox" maxcpus=4`), 0o644)
+	return p
 }

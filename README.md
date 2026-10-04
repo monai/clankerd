@@ -15,6 +15,9 @@ clankerctl browser start shop                                 # host Chrome, CDP
 clankerctl lease release shop [--purge]
 ```
 
+`clankerctl` works out which side it is on from the platform: a smolvm guest (`SMOLVM_MACHINE_NAME` on the kernel
+command line) or a Docker container (`/.dockerenv`) talks to the daemon through the mounted socket; anything else is the host.
+
 ## Build
 
 ```sh
