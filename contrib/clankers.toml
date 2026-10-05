@@ -2,9 +2,7 @@
 image = "ghcr.io/monai/clankers:slim"
 user = "agent"
 volumes = [".:/mnt/workspace"]
-env = ["HOME=/home/agent", "HOST_UID={{.UID}}", "HOST_GID={{.GID}}"]
+env = ["HOME=/home/agent"]
 init = [
-  "groupmod -o -g $HOST_GID agent && usermod -o -u $HOST_UID agent && { mountpoint -q /home/agent || chown -R $HOST_UID:$HOST_GID /home/agent; } && chown $HOST_UID:$HOST_GID /workspace",
   "mkdir -p /storage/docker",
 ]
-cmd = ["sudo", "dockerd", "--data-root=/storage/docker", "-G", "agent"]
