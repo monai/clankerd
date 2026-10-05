@@ -113,53 +113,117 @@ func (c *ctl) startDaemon(t *target) error {
 	return fmt.Errorf("clankerd did not start; see %s", t.cfg.Dirs.LogFile())
 }
 
-func (c *ctl) smolUp(ctx context.Context, t *target, vm backend.Backend) error {
-	cfg := t.cfg
+// resolveSpec turns the configuration into the spec a VM should have.
+func resolveSpec(cfg *config.Config) (backend.CreateSpec, error) {
 	vals := templateData{UID: os.Getuid(), GID: os.Getgid()}
 	volumes, err := vals.render(cfg.Smol.Volumes)
 	if err != nil {
-		return fmt.Errorf("smol.volumes: %w", err)
+		return backend.CreateSpec{}, fmt.Errorf("smol.volumes: %w", err)
 	}
 	env, err := vals.render(cfg.Smol.Env)
 	if err != nil {
-		return fmt.Errorf("smol.env: %w", err)
+		return backend.CreateSpec{}, fmt.Errorf("smol.env: %w", err)
 	}
 	init, err := vals.render(cfg.Smol.Init)
 	if err != nil {
-		return fmt.Errorf("smol.init: %w", err)
+		return backend.CreateSpec{}, fmt.Errorf("smol.init: %w", err)
 	}
-	spec := backend.CreateSpec{
+	return backend.CreateSpec{
 		Image: cfg.Smol.Image, CPUs: cfg.Smol.CPUs, Mem: cfg.Smol.Mem, Storage: cfg.Smol.Storage,
 		Net: cfg.Smol.Net, NetBackend: cfg.Smol.NetBackend, User: cfg.Smol.User,
 		Volumes: volumes, Env: env, Init: init, Cmd: cfg.Smol.Cmd,
 		PortFrom: cfg.AppPortBase, PortTo: cfg.AppPortBase + cfg.Slots - 1,
 		Socket: cfg.Dirs.Socket(), GuestSock: wire.GuestSocket,
+	}, nil
+}
+
+func recordFile(cfg *config.Config) string { return filepath.Join(cfg.Dirs.State, "vm-spec") }
+
+func writeRecord(cfg *config.Config, spec backend.CreateSpec) error {
+	if err := os.MkdirAll(cfg.Dirs.State, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(recordFile(cfg), spec.Marshal(), 0o600)
+}
+
+// reconcile makes a stopped VM match spec. The record holds what was last applied, since smolvm
+// cannot list a machine's volumes.
+func reconcile(ctx context.Context, cfg *config.Config, vm backend.Backend, spec backend.CreateSpec) error {
+	b, err := os.ReadFile(recordFile(cfg))
+	prev, ok := backend.ParseSpec(b)
+	if err != nil || !ok {
+		return fmt.Errorf("vm %q exists but was not created from the current configuration "+
+			"(config changed, or the VM came from elsewhere); recreate it with `clankerctl smol down` then `smol up`", cfg.VM)
+	}
+	if fixed := prev.Fixed(spec); len(fixed) > 0 {
+		for i, f := range fixed {
+			fixed[i] = "smol." + f
+		}
+		return fmt.Errorf("vm %q: %s cannot be changed on an existing VM", cfg.VM, strings.Join(fixed, ", "))
+	}
+	next := backend.Merge(prev, spec)
+	if err := vm.Update(ctx, prev, next); err != nil {
+		return err
+	}
+	return writeRecord(cfg, next)
+}
+
+func (c *ctl) smolUp(ctx context.Context, t *target, vm backend.Backend) error {
+	return c.bringUp(ctx, t, vm, "up", true)
+}
+
+func (c *ctl) smolStart(ctx context.Context, t *target, vm backend.Backend) error {
+	return c.bringUp(ctx, t, vm, "start", false)
+}
+
+// bringUp starts the VM and the daemon. A missing VM is created if create is set; a stopped one is
+// brought to the current configuration first; a running one is left alone.
+func (c *ctl) bringUp(ctx context.Context, t *target, vm backend.Backend, verb string, create bool) error {
+	cfg := t.cfg
+	st, err := vm.Status(ctx)
+	if err != nil {
+		return err
+	}
+	if st == backend.Missing && !create {
+		return fmt.Errorf("vm %q does not exist; create it with `clankerctl smol up`", cfg.VM)
+	}
+	switch st {
+	case backend.Missing:
+		spec, err := resolveSpec(cfg)
+		if err != nil {
+			return err
+		}
+		if err := vm.Create(ctx, spec); err != nil {
+			return err
+		}
+		if err := writeRecord(cfg, spec); err != nil {
+			return err
+		}
+	case backend.Stopped:
+		spec, err := resolveSpec(cfg)
+		if err != nil {
+			return err
+		}
+		if err := reconcile(ctx, cfg, vm, spec); err != nil {
+			return err
+		}
 	}
 	if !c.daemonUp(t) {
 		if err := c.startDaemon(t); err != nil {
 			return err
 		}
 	}
-	st, err := vm.Status(ctx)
-	if err != nil {
-		return err
-	}
-	fpFile := filepath.Join(cfg.Dirs.State, "vm-spec")
-	if st == backend.Missing {
-		if err := vm.Create(ctx, spec); err != nil {
-			return err
-		}
-		if err := os.WriteFile(fpFile, []byte(spec.Fingerprint()), 0o600); err != nil {
-			return err
-		}
-	} else if b, err := os.ReadFile(fpFile); err != nil || string(b) != spec.Fingerprint() {
-		return fmt.Errorf("vm %q exists but was not created from the current configuration "+
-			"(config changed, or the VM came from elsewhere); recreate it with `clankerctl smol down` then `smol up`", cfg.VM)
-	}
 	if err := c.startVM(ctx, t, vm, st); err != nil {
 		return err
 	}
-	fmt.Fprintf(c.stdout, "up: vm=%s ports=%d-%d ctl=%s\n", cfg.VM, cfg.AppPortBase, cfg.AppPortBase+cfg.Slots-1, t.sock)
+	switch {
+	case st == backend.Running:
+		fmt.Fprintf(c.stdout, "%s: vm=%s already running\n", verb, cfg.VM)
+	case verb == "up":
+		fmt.Fprintf(c.stdout, "up: vm=%s ports=%d-%d ctl=%s\n", cfg.VM, cfg.AppPortBase, cfg.AppPortBase+cfg.Slots-1, t.sock)
+	default:
+		fmt.Fprintln(c.stdout, verb+": vm="+cfg.VM)
+	}
 	return nil
 }
 
@@ -174,26 +238,6 @@ func (c *ctl) startVM(ctx context.Context, t *target, vm backend.Backend, st bac
 		return err
 	}
 	c.warn(resp)
-	return nil
-}
-
-func (c *ctl) smolStart(ctx context.Context, t *target, vm backend.Backend) error {
-	st, err := vm.Status(ctx)
-	if err != nil {
-		return err
-	}
-	if st == backend.Missing {
-		return fmt.Errorf("vm %q does not exist; create it with `clankerctl smol up`", t.cfg.VM)
-	}
-	if !c.daemonUp(t) {
-		if err := c.startDaemon(t); err != nil {
-			return err
-		}
-	}
-	if err := c.startVM(ctx, t, vm, st); err != nil {
-		return err
-	}
-	fmt.Fprintln(c.stdout, "start: vm="+t.cfg.VM)
 	return nil
 }
 

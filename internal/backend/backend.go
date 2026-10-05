@@ -4,10 +4,10 @@ package backend
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 )
 
@@ -40,14 +40,117 @@ type CreateSpec struct {
 	GuestSock  string
 }
 
-// Fingerprint identifies the configuration a VM was created from.
-func (c CreateSpec) Fingerprint() string {
+// Marshal is the form a spec is recorded in once it has been applied to a VM.
+func (c CreateSpec) Marshal() []byte {
 	b, _ := json.Marshal(c)
-	return fmt.Sprintf("%x", sha256.Sum256(b))
+	return b
+}
+
+// ParseSpec reads a recorded spec. Anything else, such as the hash older versions wrote, is not ok.
+func ParseSpec(b []byte) (CreateSpec, bool) {
+	var c CreateSpec
+	return c, json.Unmarshal(b, &c) == nil && c.PortFrom > 0
+}
+
+// Fixed names the settings that differ between c and next and that `machine update` cannot change.
+func (c CreateSpec) Fixed(next CreateSpec) []string {
+	var out []string
+	add := func(name string, differs bool) {
+		if differs {
+			out = append(out, name)
+		}
+	}
+	add("image", c.Image != next.Image)
+	add("user", c.User != next.User)
+	add("init", !slices.Equal(c.Init, next.Init))
+	add("cmd", !slices.Equal(c.Cmd, next.Cmd))
+	add("net_backend", c.NetBackend != next.NetBackend)
+	add("socket", c.Socket != next.Socket || c.GuestSock != next.GuestSock)
+	return out
+}
+
+// Merge is the spec that results from applying next to a VM currently at prev. Resources left
+// unset in next keep their current value: smolvm has no way to return them to its default.
+func Merge(prev, next CreateSpec) CreateSpec {
+	if next.CPUs == 0 {
+		next.CPUs = prev.CPUs
+	}
+	if next.Mem == 0 {
+		next.Mem = prev.Mem
+	}
+	if next.Storage == 0 {
+		next.Storage = prev.Storage
+	}
+	return next
+}
+
+// volumeKey is the HOST:GUEST part of a volume; `machine update` ignores the mode when removing.
+func volumeKey(v string) string {
+	parts := strings.SplitN(v, ":", 3)
+	return strings.Join(parts[:min(2, len(parts))], ":")
+}
+
+func envKey(e string) string { k, _, _ := strings.Cut(e, "="); return k }
+
+// UpdateArgs are the `machine update` options that take a VM from prev to next, or nil when
+// nothing changes. Removals come before additions, so a volume whose mode changed is replaced.
+func UpdateArgs(prev, next CreateSpec) []string {
+	var args []string
+	for _, v := range prev.Volumes {
+		if !slices.Contains(next.Volumes, v) {
+			args = append(args, "--remove-volume", volumeKey(v))
+		}
+	}
+	for _, v := range next.Volumes {
+		if !slices.Contains(prev.Volumes, v) {
+			args = append(args, "-v", v)
+		}
+	}
+	if prev.PortFrom != next.PortFrom || prev.PortTo != next.PortTo {
+		args = append(args, "--remove-port", portRange(prev), "-p", portRange(next))
+	}
+	if next.CPUs != prev.CPUs {
+		args = append(args, "--cpus", fmt.Sprint(next.CPUs))
+	}
+	if next.Mem != prev.Mem {
+		args = append(args, "--mem", fmt.Sprint(next.Mem))
+	}
+	if next.Storage != prev.Storage {
+		args = append(args, "--storage", fmt.Sprint(next.Storage))
+	}
+	if next.Net != prev.Net {
+		if next.Net {
+			args = append(args, "--net")
+		} else {
+			args = append(args, "--no-net")
+		}
+	}
+	keep := map[string]bool{}
+	for _, e := range next.Env {
+		keep[envKey(e)] = true
+	}
+	for _, e := range prev.Env {
+		if !keep[envKey(e)] {
+			args = append(args, "--remove-env", envKey(e))
+		}
+	}
+	for _, e := range next.Env {
+		if !slices.Contains(prev.Env, e) {
+			args = append(args, "-e", e)
+		}
+	}
+	return args
+}
+
+func portRange(c CreateSpec) string {
+	return fmt.Sprintf("%d-%d:%d-%d", c.PortFrom, c.PortTo, c.PortFrom, c.PortTo)
 }
 
 type Backend interface {
 	Create(ctx context.Context, spec CreateSpec) error
+	// Update applies the difference between two specs to a stopped VM. The change takes effect
+	// on the next Start.
+	Update(ctx context.Context, prev, next CreateSpec) error
 	Start(ctx context.Context) error
 	// Exec runs argv inside the VM and returns its combined output.
 	Exec(ctx context.Context, argv ...string) (string, error)
@@ -102,7 +205,7 @@ func (s *Smolvm) Create(ctx context.Context, c CreateSpec) error {
 	for _, i := range c.Init {
 		args = append(args, "--init", i)
 	}
-	args = append(args, "-p", fmt.Sprintf("%d-%d:%d-%d", c.PortFrom, c.PortTo, c.PortFrom, c.PortTo))
+	args = append(args, "-p", portRange(c))
 	if c.Socket != "" {
 		args = append(args, "--mount-socket", c.Socket+":"+c.GuestSock)
 	}
@@ -111,6 +214,15 @@ func (s *Smolvm) Create(ctx context.Context, c CreateSpec) error {
 		args = append(args, c.Cmd...)
 	}
 	_, err := s.run(ctx, args...)
+	return err
+}
+
+func (s *Smolvm) Update(ctx context.Context, prev, next CreateSpec) error {
+	opts := UpdateArgs(prev, next)
+	if len(opts) == 0 {
+		return nil
+	}
+	_, err := s.run(ctx, append([]string{"machine", "update", "--name", s.Name}, opts...)...)
 	return err
 }
 

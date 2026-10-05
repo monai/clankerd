@@ -26,6 +26,10 @@ printf '%s\n' "$(echo "$*" | tr '\n' ' ')" >> "$FAKE_SMOLVM_DIR/calls.log"
 sub=$2; shift 2
 case $sub in
   create) touch "$FAKE_SMOLVM_DIR/exists";;
+  update)
+    [ -f "$FAKE_SMOLVM_DIR/exists" ] || exit 1
+    [ ! -f "$FAKE_SMOLVM_DIR/running" ] || { echo "machine must be stopped" >&2; exit 1; }
+    [ ! -f "$FAKE_SMOLVM_DIR/update_fails" ] || { echo "cannot be shrunk" >&2; exit 1; };;
   start) [ -f "$FAKE_SMOLVM_DIR/exists" ] || exit 1; touch "$FAKE_SMOLVM_DIR/running";;
   stop) rm -f "$FAKE_SMOLVM_DIR/running";;
   delete)

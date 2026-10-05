@@ -3,6 +3,7 @@
 package config
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/netip"
@@ -50,22 +51,45 @@ type Config struct {
 	Dirs           Dirs
 }
 
-type key struct{ toml, env, flag string }
+type kind int
+
+const (
+	scalar kind = iota
+	boolean
+	csv   // list; a flag or env value may also hold comma-separated items
+	items // list; every flag or JSON array element is one item
+)
+
+type key struct {
+	toml, env, flag string
+	kind            kind
+}
 
 var keys = []key{
-	{"vm.name", "CLANKERD_VM", "vm"},
-	{"ports.slots", "CLANKERD_SLOTS", "slots"},
-	{"ports.app_base", "CLANKERD_APP_PORT_BASE", "app-port-base"},
-	{"ports.cdp_base", "CLANKERD_CDP_PORT_BASE", "cdp-port-base"},
-	{"ports.chrome_base", "CLANKERD_CHROME_PORT_BASE", "chrome-port-base"},
-	{"ports.relay_bind", "CLANKERD_RELAY_BIND", "relay-bind"},
-	{"mdns.subnets", "CLANKERD_MDNS_SUBNETS", "mdns-subnets"},
-	{"mdns.group4", "CLANKERD_MDNS_GROUP4", "mdns-group4"},
-	{"mdns.group6", "CLANKERD_MDNS_GROUP6", "mdns-group6"},
-	{"chrome.bin", "CLANKERD_CHROME_BIN", "chrome-bin"},
-	{"guest.host_addr", "CLANKERD_HOST_ADDR", "host-addr"},
-	{"guest.dir", "CLANKERD_GUEST_DIR", "guest-dir"},
-	{"log.level", "CLANKERD_LOG_LEVEL", "log-level"},
+	{"vm.name", "CLANKERD_VM", "vm", scalar},
+	{"ports.slots", "CLANKERD_SLOTS", "slots", scalar},
+	{"ports.app_base", "CLANKERD_APP_PORT_BASE", "app-port-base", scalar},
+	{"ports.cdp_base", "CLANKERD_CDP_PORT_BASE", "cdp-port-base", scalar},
+	{"ports.chrome_base", "CLANKERD_CHROME_PORT_BASE", "chrome-port-base", scalar},
+	{"ports.relay_bind", "CLANKERD_RELAY_BIND", "relay-bind", csv},
+	{"mdns.subnets", "CLANKERD_MDNS_SUBNETS", "mdns-subnets", csv},
+	{"mdns.group4", "CLANKERD_MDNS_GROUP4", "mdns-group4", scalar},
+	{"mdns.group6", "CLANKERD_MDNS_GROUP6", "mdns-group6", scalar},
+	{"chrome.bin", "CLANKERD_CHROME_BIN", "chrome-bin", scalar},
+	{"guest.host_addr", "CLANKERD_HOST_ADDR", "host-addr", scalar},
+	{"guest.dir", "CLANKERD_GUEST_DIR", "guest-dir", scalar},
+	{"log.level", "CLANKERD_LOG_LEVEL", "log-level", scalar},
+	{"smol.image", "CLANKERD_SMOL_IMAGE", "smol-image", scalar},
+	{"smol.cpus", "CLANKERD_SMOL_CPUS", "smol-cpus", scalar},
+	{"smol.mem", "CLANKERD_SMOL_MEM", "smol-mem", scalar},
+	{"smol.storage", "CLANKERD_SMOL_STORAGE", "smol-storage", scalar},
+	{"smol.net", "CLANKERD_SMOL_NET", "smol-net", boolean},
+	{"smol.net_backend", "CLANKERD_SMOL_NET_BACKEND", "smol-net-backend", scalar},
+	{"smol.user", "CLANKERD_SMOL_USER", "smol-user", scalar},
+	{"smol.volumes", "CLANKERD_SMOL_VOLUMES", "smol-volumes", items},
+	{"smol.env", "CLANKERD_SMOL_ENV", "smol-env", items},
+	{"smol.init", "CLANKERD_SMOL_INIT", "smol-init", items},
+	{"smol.cmd", "CLANKERD_SMOL_CMD", "smol-cmd", items},
 }
 
 func defaults() map[string]any {
@@ -90,15 +114,45 @@ type Flags struct {
 	fs   *flag.FlagSet
 	home *string
 	file *string
-	vals map[string]*string
+	vals map[string]flag.Value
 }
 
+// listValue is a repeatable flag.
+type listValue struct{ items []string }
+
+func (l *listValue) String() string     { return strings.Join(l.items, ",") }
+func (l *listValue) Set(v string) error { l.items = append(l.items, v); return nil }
+
+// boolValue lets `--smol-net` stand alone while keeping `--smol-net=false` possible.
+type boolValue struct{ v string }
+
+func (b *boolValue) String() string     { return b.v }
+func (b *boolValue) Set(v string) error { b.v = v; return nil }
+func (b *boolValue) IsBoolFlag() bool   { return true }
+
+type stringValue struct{ v string }
+
+func (s *stringValue) String() string     { return s.v }
+func (s *stringValue) Set(v string) error { s.v = v; return nil }
+
 func AddFlags(fs *flag.FlagSet) *Flags {
-	f := &Flags{fs: fs, vals: map[string]*string{}}
+	f := &Flags{fs: fs, vals: map[string]flag.Value{}}
 	f.home = fs.String("home", "", "directory holding all config and state (env CLANKERD_HOME)")
 	f.file = fs.String("config", "", "extra TOML config file (env CLANKERD_CONFIG)")
 	for _, k := range keys {
-		f.vals[k.toml] = fs.String(k.flag, "", "overrides "+k.toml+" (env "+k.env+")")
+		var v flag.Value = &stringValue{}
+		switch k.kind {
+		case boolean:
+			v = &boolValue{}
+		case csv, items:
+			v = &listValue{}
+		}
+		f.vals[k.toml] = v
+		usage := "overrides " + k.toml + " (env " + k.env + ")"
+		if k.kind == csv || k.kind == items {
+			usage += "; repeatable"
+		}
+		fs.Var(v, k.flag, usage)
 	}
 	return f
 }
@@ -107,6 +161,12 @@ func AddFlags(fs *flag.FlagSet) *Flags {
 func (f *Flags) Args() []string {
 	var out []string
 	f.fs.Visit(func(fl *flag.Flag) {
+		if l, ok := fl.Value.(*listValue); ok {
+			for _, it := range l.items {
+				out = append(out, "--"+fl.Name+"="+it)
+			}
+			return
+		}
 		if _, ok := f.vals[tomlKeyForFlag(fl.Name)]; ok || fl.Name == "home" || fl.Name == "config" {
 			out = append(out, "--"+fl.Name+"="+fl.Value.String())
 		}
@@ -123,14 +183,69 @@ func tomlKeyForFlag(name string) string {
 	return ""
 }
 
+func keyFor(tomlKey string) key {
+	for _, k := range keys {
+		if k.toml == tomlKey {
+			return k
+		}
+	}
+	return key{}
+}
+
+// splitCSV splits comma-separated items and drops empty ones.
+func splitCSV(in []string) []string {
+	out := []string{}
+	for _, v := range in {
+		for _, s := range strings.Split(v, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
 func (f *Flags) set() map[string]any {
 	m := map[string]any{}
 	f.fs.Visit(func(fl *flag.Flag) {
-		if k := tomlKeyForFlag(fl.Name); k != "" {
+		k := tomlKeyForFlag(fl.Name)
+		if k == "" {
+			return
+		}
+		switch l := fl.Value.(type) {
+		case *listValue:
+			if keyFor(k).kind == csv {
+				m[k] = splitCSV(l.items)
+			} else {
+				m[k] = append([]string{}, l.items...)
+			}
+		default:
 			m[k] = fl.Value.String()
 		}
 	})
 	return m
+}
+
+// envValue reads a list from an environment variable: a JSON array, or else one item
+// (comma separated for the csv keys).
+func envValue(k key, v string) (any, error) {
+	if k.kind != csv && k.kind != items {
+		return v, nil
+	}
+	if t := strings.TrimSpace(v); strings.HasPrefix(t, "[") {
+		var l []string
+		if err := json.Unmarshal([]byte(t), &l); err != nil {
+			return nil, fmt.Errorf("%s: want a JSON array of strings: %w", k.env, err)
+		}
+		return l, nil
+	}
+	if k.kind == csv {
+		return splitCSV([]string{v}), nil
+	}
+	if v == "" {
+		return []string{}, nil
+	}
+	return []string{v}, nil
 }
 
 func (f *Flags) visited(name string) bool {
@@ -174,7 +289,11 @@ func Load(f *Flags, cwd string) (*Config, error) {
 	env := map[string]any{}
 	for _, kk := range keys {
 		if v, ok := os.LookupEnv(kk.env); ok {
-			env[kk.toml] = v
+			ev, err := envValue(kk, v)
+			if err != nil {
+				return nil, err
+			}
+			env[kk.toml] = ev
 		}
 	}
 	if err := k.Load(confmap.Provider(env, "."), nil); err != nil {

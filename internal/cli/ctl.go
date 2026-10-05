@@ -21,7 +21,7 @@ var Version = "dev"
 const ctlUsage = `usage: clankerctl <command>
 
   smol up|down|status             create+start / delete the VM and the host daemon (host only)
-  smol start|stop                 start / stop an existing VM and the host daemon, keeping the VM (host only)
+  smol start|stop                 start (applying config changes) / stop an existing VM and the host daemon, keeping the VM (host only)
   lease acquire NAME [HOST.local ...]   reserve ports and .local names (repeat to change the hostnames)
   lease release NAME [--purge]    free a lease; --purge also deletes its Chrome profile
   lease list | lease show NAME    see leases (--json for structured output)

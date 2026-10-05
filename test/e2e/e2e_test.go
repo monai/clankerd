@@ -555,14 +555,133 @@ func TestVersion(t *testing.T) {
 	contains(t, r.ok("version"), "clankerctl")
 }
 
-func TestSmolUpRefusesAVMFromAnotherConfiguration(t *testing.T) {
+func (r *rig) config(toml string) {
+	r.t.Helper()
+	if err := os.WriteFile(filepath.Join(r.home, "config.toml"), []byte(toml), 0o644); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+func (r *rig) lastCall(prefix string) string {
+	last := ""
+	for _, c := range r.smolCalls() {
+		if strings.HasPrefix(c, prefix) {
+			last = c
+		}
+	}
+	return last
+}
+
+func TestSmolUpOnARunningVMChangesNothing(t *testing.T) {
+	r := newRig(t)
+	r.config("[smol]\nvolumes = [\"/a:/a\"]\n")
+	r.up()
+	r.config("[smol]\nvolumes = [\"/b:/b\"]\nimage = \"other\"\n")
+	n := len(r.smolCalls())
+	out := r.ok("smol", "up")
+	contains(t, out, "up: vm=sandbox already running")
+	if strings.Contains(out, "stop") || strings.Contains(out, "recreate") {
+		t.Errorf("tells the user what to do: %s", out)
+	}
+	for _, c := range r.smolCalls()[n:] {
+		if strings.HasPrefix(c, "machine update") || strings.HasPrefix(c, "machine create") {
+			t.Errorf("touched a running VM: %s", c)
+		}
+	}
+}
+
+func TestSmolStartAppliesChangedVolumes(t *testing.T) {
+	r := newRig(t)
+	r.config("[smol]\nvolumes = [\"/a:/a\", \"/b:/b:ro\"]\ncpus = 2\n")
+	r.up()
+	r.ok("smol", "stop")
+
+	r.config("[smol]\nvolumes = [\"/b:/b\", \"/c:/c\"]\ncpus = 2\n")
+	r.ok("smol", "start")
+	contains(t, r.lastCall("machine update"), "--name sandbox", "--remove-volume /a:/a", "--remove-volume /b:/b", "-v /b:/b -v /c:/c")
+	if strings.Contains(r.lastCall("machine update"), "--cpus") {
+		t.Errorf("unchanged cpus passed: %s", r.lastCall("machine update"))
+	}
+	calls := r.smolCalls()
+	if !strings.HasPrefix(calls[len(calls)-1], "machine start") && !strings.HasPrefix(calls[len(calls)-2], "machine start") {
+		t.Errorf("update must precede start: %v", calls)
+	}
+
+	r.ok("smol", "stop")
+	n := strings.Count(strings.Join(r.smolCalls(), "\n"), "machine update")
+	r.ok("smol", "up")
+	if m := strings.Count(strings.Join(r.smolCalls(), "\n"), "machine update"); m != n {
+		t.Errorf("update ran again for an applied spec")
+	}
+}
+
+func TestSmolUpOnAStoppedVMTakesVolumesFromEnvAndFlags(t *testing.T) {
 	r := newRig(t)
 	r.up()
-	os.WriteFile(filepath.Join(r.home, "config.toml"), []byte("[smol]\ncpus = 2\n"), 0o644)
+	r.ok("smol", "stop")
+	r.env["CLANKERD_SMOL_VOLUMES"] = `["/e:/e"]`
+	r.ok("smol", "up")
+	contains(t, r.lastCall("machine update"), "-v /e:/e")
+	r.ok("smol", "stop")
+	r.ok("smol", "up", "--smol-volumes=/f:/f", "--smol-volumes=/g:/g")
+	contains(t, r.lastCall("machine update"), "--remove-volume /e:/e", "-v /f:/f -v /g:/g")
+}
+
+func TestSmolStartAppliesResourcesPortsEnvAndNet(t *testing.T) {
+	r := newRig(t)
+	r.config("[smol]\nenv = [\"A=1\", \"B=2\"]\n")
+	r.up()
+	r.ok("smol", "stop")
+	r.config("[smol]\ncpus = 4\nmem = 2048\nstorage = 16\nnet = true\nenv = [\"A=9\"]\n")
+	r.ok("smol", "start", "--slots=2")
+	contains(t, r.lastCall("machine update"), "--cpus 4", "--mem 2048", "--storage 16", "--net", "--remove-env B", "-e A=9",
+		fmt.Sprintf("--remove-port %d-%d:%d-%d", r.appBase, r.appBase+slots-1, r.appBase, r.appBase+slots-1),
+		fmt.Sprintf("-p %d-%d:%d-%d", r.appBase, r.appBase+1, r.appBase, r.appBase+1))
+}
+
+func TestSmolStartRejectsWhatUpdateCannotChange(t *testing.T) {
+	r := newRig(t)
+	r.config("[smol]\nimage = \"a\"\n")
+	r.up()
+	r.ok("smol", "stop")
+	for _, toml := range []string{"image = \"b\"", "image = \"a\"\nuser = \"x\"", "image = \"a\"\ninit = [\"x\"]",
+		"image = \"a\"\ncmd = [\"x\"]", "image = \"a\"\nnet_backend = \"x\""} {
+		r.config("[smol]\n" + toml + "\n")
+		err := r.fail("smol", "start")
+		contains(t, err, "cannot be changed")
+		if r.lastCall("machine update") != "" {
+			t.Errorf("updated despite an unchangeable setting: %s", toml)
+		}
+	}
+	r.config("[smol]\nimage = \"a\"\n")
+	r.ok("smol", "start")
+}
+
+func TestSmolStartKeepsTheRecordWhenUpdateFails(t *testing.T) {
+	r := newRig(t)
+	r.config("[smol]\nstorage = 8\n")
+	r.up()
+	r.ok("smol", "stop")
+	os.WriteFile(filepath.Join(r.smolDir, "update_fails"), nil, 0o644)
+	r.config("[smol]\nstorage = 4\n")
+	contains(t, r.fail("smol", "start"), "cannot be shrunk")
+	os.Remove(filepath.Join(r.smolDir, "update_fails"))
+	r.ok("smol", "start")
+	contains(t, r.lastCall("machine update"), "--storage 4")
+}
+
+func TestSmolUpRefusesAVMItDidNotRecord(t *testing.T) {
+	r := newRig(t)
+	r.up()
+	r.ok("smol", "stop")
+	spec := filepath.Join(r.home, "state", "sandbox", "vm-spec")
+	if _, err := os.Stat(spec); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(spec, []byte("3f2a9c"), 0o600)
 	contains(t, r.fail("smol", "up"), "not created from the current configuration")
 	r.ok("smol", "down")
 	r.up()
-	contains(t, strings.Join(r.smolCalls(), "\n"), "--cpus 2")
 
 	r.ok("smol", "down")
 	os.WriteFile(filepath.Join(r.smolDir, "exists"), nil, 0o644)
