@@ -15,14 +15,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/monai/clankers/sandbox/clankerd/internal/backend"
-	"github.com/monai/clankers/sandbox/clankerd/internal/chrome"
-	"github.com/monai/clankers/sandbox/clankerd/internal/config"
-	"github.com/monai/clankers/sandbox/clankerd/internal/lock"
-	"github.com/monai/clankers/sandbox/clankerd/internal/mdns"
-	"github.com/monai/clankers/sandbox/clankerd/internal/relay"
-	"github.com/monai/clankers/sandbox/clankerd/internal/state"
-	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
+	"github.com/monai/clankers/clankerd/internal/backend"
+	"github.com/monai/clankers/clankerd/internal/chrome"
+	"github.com/monai/clankers/clankerd/internal/config"
+	"github.com/monai/clankers/clankerd/internal/lock"
+	"github.com/monai/clankers/clankerd/internal/mdns"
+	"github.com/monai/clankers/clankerd/internal/relay"
+	"github.com/monai/clankers/clankerd/internal/state"
+	"github.com/monai/clankers/clankerd/internal/wire"
 )
 
 const execTimeout = 30 * time.Second

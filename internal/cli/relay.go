@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/monai/clankers/sandbox/clankerd/internal/relay"
+	"github.com/monai/clankers/clankerd/internal/relay"
 )
 
 type listFlag []string

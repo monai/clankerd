@@ -10,10 +10,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/monai/clankers/sandbox/clankerd/internal/backend"
-	"github.com/monai/clankers/sandbox/clankerd/internal/config"
-	"github.com/monai/clankers/sandbox/clankerd/internal/daemon"
-	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
+	"github.com/monai/clankers/clankerd/internal/backend"
+	"github.com/monai/clankers/clankerd/internal/config"
+	"github.com/monai/clankers/clankerd/internal/daemon"
+	"github.com/monai/clankers/clankerd/internal/wire"
 )
 
 func Daemon(args []string, stdout, stderr io.Writer) int {

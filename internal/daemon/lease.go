@@ -7,7 +7,7 @@ import (
 	"net/netip"
 	"sync"
 
-	"github.com/monai/clankers/sandbox/clankerd/internal/state"
+	"github.com/monai/clankers/clankerd/internal/state"
 )
 
 type phase int

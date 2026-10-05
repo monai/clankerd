@@ -11,9 +11,9 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/monai/clankers/sandbox/clankerd/internal/config"
-	"github.com/monai/clankers/sandbox/clankerd/internal/isolation"
-	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
+	"github.com/monai/clankers/clankerd/internal/config"
+	"github.com/monai/clankers/clankerd/internal/isolation"
+	"github.com/monai/clankers/clankerd/internal/wire"
 )
 
 var Version = "dev"

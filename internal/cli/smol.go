@@ -14,10 +14,10 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/monai/clankers/sandbox/clankerd/internal/backend"
-	"github.com/monai/clankers/sandbox/clankerd/internal/config"
-	"github.com/monai/clankers/sandbox/clankerd/internal/lock"
-	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
+	"github.com/monai/clankers/clankerd/internal/backend"
+	"github.com/monai/clankers/clankerd/internal/config"
+	"github.com/monai/clankers/clankerd/internal/lock"
+	"github.com/monai/clankers/clankerd/internal/wire"
 )
 
 func (c *ctl) smol(args []string) error {

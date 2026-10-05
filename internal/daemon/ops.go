@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/monai/clankers/sandbox/clankerd/internal/chrome"
-	"github.com/monai/clankers/sandbox/clankerd/internal/wire"
+	"github.com/monai/clankers/clankerd/internal/chrome"
+	"github.com/monai/clankers/clankerd/internal/wire"
 )
 
 func (d *Daemon) handle(c net.Conn) {
