@@ -43,7 +43,7 @@ func (c *ctl) smol(args []string) error {
 	}
 	vm := backend.NewSmolvm(t.cfg.VM)
 	ctx := context.Background()
-	if sub == "up" || sub == "down" {
+	if sub != "status" {
 		if err := os.MkdirAll(t.cfg.Dirs.Runtime, 0o700); err != nil {
 			return err
 		}
@@ -56,6 +56,10 @@ func (c *ctl) smol(args []string) error {
 	switch sub {
 	case "up":
 		return c.smolUp(ctx, t, vm)
+	case "start":
+		return c.smolStart(ctx, t, vm)
+	case "stop":
+		return c.smolStop(ctx, t, vm)
 	case "down":
 		return c.smolDown(ctx, t, vm)
 	case "status":
@@ -152,6 +156,14 @@ func (c *ctl) smolUp(ctx context.Context, t *target, vm backend.Backend) error {
 		return fmt.Errorf("vm %q exists but was not created from the current configuration "+
 			"(config changed, or the VM came from elsewhere); recreate it with `clankerctl smol down` then `smol up`", cfg.VM)
 	}
+	if err := c.startVM(ctx, t, vm, st); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.stdout, "up: vm=%s ports=%d-%d ctl=%s\n", cfg.VM, cfg.AppPortBase, cfg.AppPortBase+cfg.Slots-1, t.sock)
+	return nil
+}
+
+func (c *ctl) startVM(ctx context.Context, t *target, vm backend.Backend, st backend.State) error {
 	if st != backend.Running {
 		if err := vm.Start(ctx); err != nil {
 			return err
@@ -162,18 +174,59 @@ func (c *ctl) smolUp(ctx context.Context, t *target, vm backend.Backend) error {
 		return err
 	}
 	c.warn(resp)
-	fmt.Fprintf(c.stdout, "up: vm=%s ports=%d-%d ctl=%s\n", cfg.VM, cfg.AppPortBase, cfg.AppPortBase+cfg.Slots-1, t.sock)
+	return nil
+}
+
+func (c *ctl) smolStart(ctx context.Context, t *target, vm backend.Backend) error {
+	st, err := vm.Status(ctx)
+	if err != nil {
+		return err
+	}
+	if st == backend.Missing {
+		return fmt.Errorf("vm %q does not exist; create it with `clankerctl smol up`", t.cfg.VM)
+	}
+	if !c.daemonUp(t) {
+		if err := c.startDaemon(t); err != nil {
+			return err
+		}
+	}
+	if err := c.startVM(ctx, t, vm, st); err != nil {
+		return err
+	}
+	fmt.Fprintln(c.stdout, "start: vm="+t.cfg.VM)
+	return nil
+}
+
+func (c *ctl) releaseLeases(t *target) {
+	resp, err := wire.Call(t.sock, wire.Request{Op: wire.OpLeaseList})
+	if err != nil {
+		return
+	}
+	for _, l := range resp.Leases {
+		if _, err := wire.Call(t.sock, wire.Request{Op: wire.OpLeaseRelease, Name: l.Name}); err != nil {
+			fmt.Fprintf(c.stderr, "warning: releasing %s: %v\n", l.Name, err)
+		}
+	}
+}
+
+func (c *ctl) smolStop(ctx context.Context, t *target, vm backend.Backend) error {
+	c.releaseLeases(t)
+	c.stopDaemon(t)
+	st, err := vm.Status(ctx)
+	if err != nil {
+		return err
+	}
+	if st == backend.Running {
+		if err := vm.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintln(c.stdout, "stop: vm="+t.cfg.VM)
 	return nil
 }
 
 func (c *ctl) smolDown(ctx context.Context, t *target, vm backend.Backend) error {
-	if resp, err := wire.Call(t.sock, wire.Request{Op: wire.OpLeaseList}); err == nil {
-		for _, l := range resp.Leases {
-			if _, err := wire.Call(t.sock, wire.Request{Op: wire.OpLeaseRelease, Name: l.Name}); err != nil {
-				fmt.Fprintf(c.stderr, "warning: releasing %s: %v\n", l.Name, err)
-			}
-		}
-	}
+	c.releaseLeases(t)
 	c.stopDaemon(t)
 	st, err := vm.Status(ctx)
 	if err != nil {

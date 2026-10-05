@@ -733,3 +733,29 @@ func TestVMNameRequired(t *testing.T) {
 	delete(r.env, "CLANKERD_VM")
 	contains(t, r.fail("smol", "up"), "vm.name is required")
 }
+
+func TestSmolStopKeepsVMAndStartResumesIt(t *testing.T) {
+	r := newRig(t)
+	contains(t, r.fail("smol", "start"), "does not exist")
+	r.up()
+	r.acquire("shop")
+	pid := r.daemonPID()
+
+	r.ok("smol", "stop")
+	calls := strings.Join(r.smolCalls(), "\n")
+	contains(t, calls, "machine stop")
+	if strings.Contains(calls, "machine delete") {
+		t.Fatalf("stop deleted the VM: %s", calls)
+	}
+	waitFor(t, "daemon exit", func() bool { return !alive(pid) })
+	contains(t, r.ok("smol", "status"), "daemon: stopped", "vm: stopped")
+
+	r.ok("smol", "start")
+	contains(t, r.ok("smol", "status"), "daemon: running", "vm: running")
+	if out := r.ok("lease", "list"); strings.Contains(out, "shop") {
+		t.Fatalf("lease survived stop: %s", out)
+	}
+	if n := strings.Count(strings.Join(r.smolCalls(), "\n"), "machine create"); n != 1 {
+		t.Fatalf("create ran %d times", n)
+	}
+}
