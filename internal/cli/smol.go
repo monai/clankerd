@@ -162,7 +162,7 @@ func (c *ctl) smolUp(ctx context.Context, t *target, vm backend.Backend) error {
 		return err
 	}
 	c.warn(resp)
-	fmt.Fprintf(c.stdout, "up: vm=%s apps=%d-%d ctl=%s\n", cfg.VM, cfg.AppPortBase, cfg.AppPortBase+cfg.Slots-1, t.sock)
+	fmt.Fprintf(c.stdout, "up: vm=%s ports=%d-%d ctl=%s\n", cfg.VM, cfg.AppPortBase, cfg.AppPortBase+cfg.Slots-1, t.sock)
 	return nil
 }
 

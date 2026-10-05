@@ -537,6 +537,7 @@ func TestProjectConfigFoundByWalkingUp(t *testing.T) {
 	r := newRig(t)
 	delete(r.env, "CLANKERD_HOME")
 	delete(r.env, "CLANKERD_SLOTS")
+	delete(r.env, "CLANKERD_VM")
 	proj := filepath.Join(r.work, "proj")
 	deep := filepath.Join(proj, "a", "b")
 	os.MkdirAll(filepath.Join(proj, ".clankerd"), 0o755)
@@ -725,4 +726,10 @@ func TestConcurrentSmolUpAndDown(t *testing.T) {
 		}
 	}
 	contains(t, r.ok("smol", "status"), "daemon: stopped", "vm: missing")
+}
+
+func TestVMNameRequired(t *testing.T) {
+	r := newRig(t)
+	delete(r.env, "CLANKERD_VM")
+	contains(t, r.fail("smol", "up"), "vm.name is required")
 }

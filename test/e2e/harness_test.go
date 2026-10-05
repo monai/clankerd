@@ -133,6 +133,7 @@ func newRig(t *testing.T) *rig {
 		"PATH":                      binDir + ":" + os.Getenv("PATH"),
 		"HOME":                      r.work,
 		"CLANKERD_HOME":             r.home,
+		"CLANKERD_VM":               "sandbox",
 		"CLANKERD_SLOTS":            strconv.Itoa(slots),
 		"CLANKERD_APP_PORT_BASE":    strconv.Itoa(r.appBase),
 		"CLANKERD_CDP_PORT_BASE":    strconv.Itoa(r.cdpBase),

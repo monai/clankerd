@@ -69,7 +69,6 @@ var keys = []key{
 
 func defaults() map[string]any {
 	return map[string]any{
-		"vm.name":           "sandbox",
 		"ports.slots":       10,
 		"ports.app_base":    4000,
 		"ports.cdp_base":    9222,
@@ -272,8 +271,11 @@ func build(k *koanf.Koanf, lay layout, cwd string) (*Config, error) {
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("%s", strings.Join(errs, "; "))
 	}
-	if c.VM == "" || strings.ContainsAny(c.VM, "/\\ \t") {
-		return nil, fmt.Errorf("invalid vm name %q", c.VM)
+	if c.VM == "" {
+		return nil, fmt.Errorf("vm.name is required")
+	}
+	if strings.ContainsAny(c.VM, "/\\ \t") {
+		return nil, fmt.Errorf("vm.name %q must not contain slashes or whitespace", c.VM)
 	}
 	if c.Slots < 1 || c.Slots > 1000 {
 		return nil, fmt.Errorf("ports.slots must be between 1 and 1000, got %d", c.Slots)

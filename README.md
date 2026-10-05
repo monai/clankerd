@@ -35,7 +35,7 @@ from the current directory), user, system, defaults. `--home DIR` / `CLANKERD_HO
 
 | env / flag | TOML | default |
 |---|---|---|
-| `CLANKERD_VM` `--vm` | `vm.name` | `sandbox` |
+| `CLANKERD_VM` `--vm` | `vm.name` | none: required |
 | `CLANKERD_SLOTS` | `ports.slots` | `10` |
 | `CLANKERD_APP_PORT_BASE` | `ports.app_base` | `4000` |
 | `CLANKERD_CDP_PORT_BASE` | `ports.cdp_base` | `9222` |
