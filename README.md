@@ -48,7 +48,8 @@ from the current directory), user, system, defaults. `--home DIR` / `CLANKERD_HO
 | `CLANKERD_GUEST_DIR` | `guest.dir` | `/tmp/clankerd` (relay pidfiles in the VM) |
 | `CLANKERD_LOG_LEVEL` | `log.level` | `info` |
 
-`[smol]` (TOML only): `image cpus mem storage net net_backend user volumes env init`. None has a default: an unset
+`[smol]` (TOML only): `image cpus mem storage net net_backend user volumes env init cmd`. None has a default: an unset
 key adds no flag, so smolvm's own default applies. `env`, `volumes` and `init` are Go templates with `{{.UID}}` and `{{.GID}}` (the host ids); an unknown field fails `smol up`.
+`cmd` is the VM's workload: smolvm launches it on every start, unlike `init`, which runs once on the first.
 `contrib/clankers.toml` wires the `ghcr.io/monai/clankers` image; use it with `--config` or `CLANKERD_CONFIG`.
 The daemon logs to `<state>/clankerd.log`; `clankerd run` runs it in the foreground.

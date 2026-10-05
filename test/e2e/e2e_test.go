@@ -45,7 +45,7 @@ func TestSmolUpDownStatus(t *testing.T) {
 		fmt.Sprintf("-p %d-%d:%d-%d", r.appBase, r.appBase+slots-1, r.appBase, r.appBase+slots-1),
 		"--mount-socket "+r.sock()+":/run/clankerd/ctl.sock",
 		"--image ghcr.io/monai/clankers:slim", "--user agent", "--env HOST_UID=", "--env HOME=/home/agent",
-		"--init", "machine start")
+		"--init", "-- sudo dockerd --data-root=/storage/docker -G agent", "machine start")
 	for _, flag := range []string{"--cpus", "--mem", "--storage", "--net"} {
 		if strings.Contains(calls, flag) {
 			t.Errorf("contrib profile passes %s; smolvm's default should apply", flag)

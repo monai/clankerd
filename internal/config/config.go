@@ -29,6 +29,7 @@ type Smol struct {
 	Volumes    []string
 	Env        []string
 	Init       []string
+	Cmd        []string
 }
 
 type Config struct {
@@ -258,6 +259,7 @@ func build(k *koanf.Koanf, lay layout, cwd string) (*Config, error) {
 			Volumes:    list(k, "smol.volumes"),
 			Env:        list(k, "smol.env"),
 			Init:       list(k, "smol.init"),
+			Cmd:        list(k, "smol.cmd"),
 		},
 	}
 	for _, s := range list(k, "mdns.subnets") {

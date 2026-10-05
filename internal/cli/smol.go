@@ -131,7 +131,7 @@ func (c *ctl) smolUp(ctx context.Context, t *target, vm backend.Backend) error {
 	spec := backend.CreateSpec{
 		Image: cfg.Smol.Image, CPUs: cfg.Smol.CPUs, Mem: cfg.Smol.Mem, Storage: cfg.Smol.Storage,
 		Net: cfg.Smol.Net, NetBackend: cfg.Smol.NetBackend, User: cfg.Smol.User,
-		Volumes: volumes, Env: env, Init: init,
+		Volumes: volumes, Env: env, Init: init, Cmd: cfg.Smol.Cmd,
 		PortFrom: cfg.AppPortBase, PortTo: cfg.AppPortBase + cfg.Slots - 1,
 		Socket: cfg.Dirs.Socket(), GuestSock: wire.GuestSocket,
 	}

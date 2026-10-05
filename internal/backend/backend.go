@@ -33,6 +33,7 @@ type CreateSpec struct {
 	Volumes    []string
 	Env        []string
 	Init       []string
+	Cmd        []string
 	PortFrom   int
 	PortTo     int
 	Socket     string
@@ -104,6 +105,10 @@ func (s *Smolvm) Create(ctx context.Context, c CreateSpec) error {
 	args = append(args, "-p", fmt.Sprintf("%d-%d:%d-%d", c.PortFrom, c.PortTo, c.PortFrom, c.PortTo))
 	if c.Socket != "" {
 		args = append(args, "--mount-socket", c.Socket+":"+c.GuestSock)
+	}
+	if len(c.Cmd) > 0 {
+		args = append(args, "--")
+		args = append(args, c.Cmd...)
 	}
 	_, err := s.run(ctx, args...)
 	return err
