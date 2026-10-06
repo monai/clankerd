@@ -29,6 +29,19 @@ fn vmctl(dir: &std::path::Path, guestd: &std::path::Path, args: &[&str]) -> Outp
 }
 
 #[test]
+fn logs_show_workload_output() {
+    let dir = tempfile::Builder::new().prefix("vm").tempdir().unwrap();
+    let guestd = guestd();
+    let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
+    let run = ["run", "--name", "talker", "img", "sh", "-c", "echo from-guest"];
+    assert!(v(&run).status.success());
+    let out = v(&["logs", "talker"]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("from-guest"));
+    assert_eq!(v(&["logs", "nope"]).status.code(), Some(125));
+}
+
+#[test]
 fn run_ps_inspect_rm() {
     let dir = tempfile::Builder::new().prefix("vm").tempdir().unwrap();
     let guestd = guestd();

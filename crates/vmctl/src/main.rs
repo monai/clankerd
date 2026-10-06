@@ -1,5 +1,6 @@
 //! vmctl: Docker-style CLI over libclankerd.
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -41,6 +42,8 @@ enum Command {
     },
     /// Show machine configuration and state as JSON.
     Inspect { machines: Vec<String> },
+    /// Print the console output (kernel, guestd and workload) of a machine.
+    Logs { machine: String },
     /// Remove machines.
     Rm {
         /// Remove running machines too.
@@ -165,6 +168,11 @@ fn run(cli: Cli) -> Result<u8, Error> {
             }
             println!("{}", serde_json::to_string_pretty(&infos).unwrap());
             Ok(code)
+        }
+        Command::Logs { machine } => {
+            let bytes = engine.get(&machine)?.logs()?;
+            std::io::stdout().write_all(&bytes).map_err(Error::from)?;
+            Ok(0)
         }
         Command::Rm { force, machines } => Ok(each(&machines, |n| {
             engine.get(n)?.remove(force)?;

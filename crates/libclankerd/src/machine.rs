@@ -26,6 +26,9 @@ pub struct MachineInfo {
     pub state: MachineState,
 }
 
+/// File in the machine directory that receives the console output.
+pub const CONSOLE_LOG: &str = "console.log";
+
 /// A handle on a machine. Cheap to clone; dropping it never stops the machine.
 #[derive(Clone)]
 pub struct Machine {
@@ -142,6 +145,18 @@ impl Machine {
                 .wait_timeout(starting, Duration::from_millis(500))
                 .unwrap_or_else(|e| e.into_inner())
                 .0;
+        }
+    }
+
+    /// Everything the machine printed on its console (kernel, guestd and
+    /// workload output) since it was created. Empty before the first start.
+    pub fn logs(&self) -> Result<Vec<u8>> {
+        // Existence check first so unknown ids report NotFound.
+        self.inspect()?;
+        match fs::read(self.inner.store.machine_dir(&self.id).join(CONSOLE_LOG)) {
+            Ok(bytes) => Ok(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(e.into()),
         }
     }
 
