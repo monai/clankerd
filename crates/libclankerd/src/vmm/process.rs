@@ -17,6 +17,11 @@ pub struct LocalProcessVmm {
 }
 
 impl LocalProcessVmm {
+    /// The stand-in guest's loopback address. The guest shares the host's
+    /// network namespace here, so its loopback is shifted to keep guest
+    /// services from colliding with host services on the same port.
+    pub const GUEST_LOOPBACK: &'static str = "127.0.0.2";
+
     pub fn new(guestd: impl Into<PathBuf>) -> Self {
         LocalProcessVmm {
             guestd: guestd.into(),
@@ -43,6 +48,10 @@ impl Vmm for LocalProcessVmm {
             .arg(&config)
             .arg("--exit-file")
             .arg(&spec.exit_file)
+            .arg("--host-socket")
+            .arg(&spec.host_socket)
+            .arg("--loopback")
+            .arg(Self::GUEST_LOOPBACK)
             .env("LISTEN_FDS", "1")
             .stdin(Stdio::null())
             .stdout(console.try_clone()?)

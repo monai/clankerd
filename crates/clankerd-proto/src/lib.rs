@@ -2,8 +2,10 @@
 //!
 //! * [`varlink`]: the varlink wire format (NUL-terminated JSON messages).
 //! * [`guest`]: the `io.clankerd.Guest` interface (types and method names).
-//!
-//! The exec/tunnel frame codec lands here in later tickets.
+//! * [`tunnel`]: tunnel targets and minimal framing (the exec codec lands separately).
+//! * [`listen_fds`]: the `LISTEN_FDS` socket handoff convention.
 
 pub mod guest;
+pub mod listen_fds;
+pub mod tunnel;
 pub mod varlink;
