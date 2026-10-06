@@ -85,9 +85,28 @@ impl Store {
 }
 
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_vec_pretty(value)?)?;
-    fs::rename(&tmp, path)?;
+    write_atomic(path, &serde_json::to_vec_pretty(value)?)
+}
+
+/// Replaces `path` with `bytes` atomically: readers see the old or the new
+/// content, never a partial file. The temp file name is unique per writer, so
+/// concurrent writers (other threads, or another process over the same
+/// directory) never share one.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let tmp = path.with_extension(format!(
+        "tmp.{}.{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let write = || -> std::io::Result<()> {
+        fs::write(&tmp, bytes)?;
+        fs::rename(&tmp, path)
+    };
+    write().inspect_err(|_| {
+        let _ = fs::remove_file(&tmp);
+    })?;
     Ok(())
 }
 
@@ -98,5 +117,49 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, id: &str) -> Result<T> {
             Err(Error::not_found(format!("no such machine: {id}")))
         }
         Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn state_reads_never_see_a_torn_write_from_concurrent_writers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = Record {
+            id: "a".repeat(64),
+            name: "n".into(),
+            created: SystemTime::now(),
+            config: MachineConfig::default(),
+            host_config: HostConfig::default(),
+            image_id: String::new(),
+        };
+        store.create(&record, &MachineState::created()).unwrap();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        // Two writers over one directory stand in for two processes.
+        let writers: Vec<_> = (0..2)
+            .map(|_| {
+                let (store, id, stop) = (store.clone(), record.id.clone(), stop.clone());
+                std::thread::spawn(move || {
+                    let mut state = MachineState::created();
+                    state.error = "x".repeat(4096);
+                    while !stop.load(Ordering::Relaxed) {
+                        store.save_state(&id, &state).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for _ in 0..3000 {
+            store.load_state(&record.id).expect("a whole state record");
+        }
+        stop.store(true, Ordering::Relaxed);
+        for w in writers {
+            w.join().unwrap();
+        }
     }
 }

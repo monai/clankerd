@@ -227,11 +227,10 @@ impl ImageStore {
     }
 
     fn write(&self, info: &ImageInfo) -> Result<()> {
-        let path = self.image_path(&info.id);
-        let tmp = path.with_extension("json.tmp");
-        fs::write(&tmp, serde_json::to_vec_pretty(info)?)?;
-        fs::rename(&tmp, &path)?;
-        Ok(())
+        crate::store::write_atomic(
+            &self.image_path(&info.id),
+            &serde_json::to_vec_pretty(info)?,
+        )
     }
 }
 
