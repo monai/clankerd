@@ -6,4 +6,5 @@
 //! The exec/tunnel frame codec lands here in later tickets.
 
 pub mod guest;
+pub mod rootdisk;
 pub mod varlink;

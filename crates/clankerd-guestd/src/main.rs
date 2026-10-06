@@ -16,6 +16,9 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+mod rootdisk;
+mod unpack;
+
 use clankerd_proto::guest::{ERROR_METHOD_NOT_FOUND, Event, METHOD_EVENTS, Workload};
 use clankerd_proto::varlink::{self, Call, Reply};
 
@@ -40,20 +43,40 @@ struct Inner {
 fn main() {
     let mut config = None;
     let mut exit_file = None;
+    let mut populate = false;
+    let mut boot_dir = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--config" => config = args.next().map(PathBuf::from),
             "--exit-file" => exit_file = args.next().map(PathBuf::from),
+            // Population boot: no workload; serve the root-disk methods only.
+            "--populate" => populate = true,
+            // Directory with the static e2fsprogs binaries (default: next to this binary).
+            "--boot-dir" => boot_dir = args.next().map(PathBuf::from),
             other => die(&format!("unknown argument {other}")),
         }
     }
-    let config = config.unwrap_or_else(|| die("--config is required"));
-    let exit_file = exit_file.unwrap_or_else(|| die("--exit-file is required"));
-    let workload: Workload = std::fs::read(&config)
-        .map_err(|e| e.to_string())
-        .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
-        .unwrap_or_else(|e| die(&format!("reading {}: {e}", config.display())));
+    let boot_dir = boot_dir.unwrap_or_else(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("/"))
+    });
+    let disk = Arc::new(rootdisk::Ctx {
+        boot_dir,
+        populate_mode: populate,
+    });
+
+    let workload = (!populate).then(|| {
+        let config = config.unwrap_or_else(|| die("--config is required"));
+        let exit_file = exit_file.unwrap_or_else(|| die("--exit-file is required"));
+        let workload: Workload = std::fs::read(&config)
+            .map_err(|e| e.to_string())
+            .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
+            .unwrap_or_else(|e| die(&format!("reading {}: {e}", config.display())));
+        (workload, exit_file)
+    });
 
     if std::env::var("LISTEN_FDS").ok().as_deref() != Some("1") {
         die("expected one socket via LISTEN_FDS");
@@ -62,15 +85,16 @@ fn main() {
     let listener = unsafe { UnixListener::from_raw_fd(LISTEN_FD) };
 
     let shared = Arc::new(Shared::default());
-    let child = spawn_workload(&workload);
-    {
+    if let Some((workload, exit_file)) = workload {
+        let child = spawn_workload(&workload);
         let shared = shared.clone();
         std::thread::spawn(move || supervise(child, shared, exit_file));
     }
 
     for conn in listener.incoming().flatten() {
         let shared = shared.clone();
-        std::thread::spawn(move || serve(conn, shared));
+        let disk = disk.clone();
+        std::thread::spawn(move || serve(conn, shared, disk));
     }
 }
 
@@ -135,7 +159,7 @@ fn supervise(child: Result<std::process::Child, i32>, shared: Arc<Shared>, exit_
     std::process::exit(0);
 }
 
-fn serve(conn: UnixStream, shared: Arc<Shared>) {
+fn serve(conn: UnixStream, shared: Arc<Shared>, disk: Arc<rootdisk::Ctx>) {
     let Ok(mut out) = conn.try_clone() else {
         return;
     };
@@ -143,6 +167,9 @@ fn serve(conn: UnixStream, shared: Arc<Shared>) {
     let Ok(Some(call)) = varlink::read::<Call, _>(&mut input) else {
         return;
     };
+    if rootdisk::handle(&call, &mut input, &mut out, &disk) {
+        return;
+    }
     if call.method != METHOD_EVENTS {
         let _ = varlink::write(
             &mut out,
