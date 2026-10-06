@@ -1,2 +1,6 @@
 [tools]
 go = "1.26"
+rust = { version = "1.98.1", targets = "aarch64-apple-darwin,aarch64-unknown-linux-musl", profile = "minimal", components = "clippy,rustfmt" }
+zig = "0.15.2"
+"aqua:rust-cross/cargo-zigbuild" = "0.23.4"
+"github:indygreg/apple-platform-rs" = { version = "apple-codesign/0.29.0", bin = "rcodesign" }
