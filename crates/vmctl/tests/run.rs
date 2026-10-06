@@ -33,7 +33,15 @@ fn logs_show_workload_output() {
     let dir = tempfile::Builder::new().prefix("vm").tempdir().unwrap();
     let guestd = guestd();
     let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
-    let run = ["run", "--name", "talker", "img", "sh", "-c", "echo from-guest"];
+    let run = [
+        "run",
+        "--name",
+        "talker",
+        "img",
+        "sh",
+        "-c",
+        "echo from-guest",
+    ];
     assert!(v(&run).status.success());
     let out = v(&["logs", "talker"]);
     assert!(out.status.success());

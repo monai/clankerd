@@ -71,6 +71,7 @@ dependencies = [
  "clankerd-proto",
  "libc",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
