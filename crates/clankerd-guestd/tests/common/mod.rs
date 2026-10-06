@@ -120,10 +120,16 @@ impl Guestd {
 /// verified separately by scripts/rust-verify.sh).
 pub fn boot_dir_with_mke2fs() -> tempfile::TempDir {
     let dir = tempfile::Builder::new().prefix("boot").tempdir().unwrap();
-    let mke2fs = ["/usr/sbin/mke2fs", "/sbin/mke2fs", "/usr/bin/mke2fs"]
-        .into_iter()
-        .find(|p| Path::new(p).exists())
-        .expect("mke2fs (e2fsprogs) must be installed to run seam B tests");
+    // CLANKERD_TEST_BOOT_DIR points at a real boot directory (e.g. the output of
+    // scripts/build-e2fsprogs.sh) to exercise the shipped static binary.
+    let mke2fs = match std::env::var_os("CLANKERD_TEST_BOOT_DIR") {
+        Some(d) => PathBuf::from(d).join("mke2fs"),
+        None => ["/usr/sbin/mke2fs", "/sbin/mke2fs", "/usr/bin/mke2fs"]
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|p| p.exists())
+            .expect("mke2fs (e2fsprogs) must be installed to run seam B tests"),
+    };
     std::os::unix::fs::symlink(mke2fs, dir.path().join("mke2fs")).unwrap();
     dir
 }

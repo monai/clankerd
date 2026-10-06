@@ -38,6 +38,7 @@ rust-build:
 	mkdir -p $(RUST_OUT)/darwin-arm64 $(RUST_OUT)/linux-arm64
 	cp target/$(DARWIN)/release/vmctl target/$(DARWIN)/release/clankerd-vmspawn $(RUST_OUT)/darwin-arm64/
 	cp target/$(MUSL)/release/clankerd-guestd $(RUST_OUT)/linux-arm64/
+	scripts/build-e2fsprogs.sh $(RUST_OUT)/linux-arm64
 
 # Ad-hoc signs with the hypervisor entitlement (rcodesign works on Linux).
 rust-sign:
