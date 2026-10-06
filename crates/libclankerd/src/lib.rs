@@ -11,6 +11,8 @@
 //! * `machine`: [`Machine`] handle and the start/monitor/reattach lifecycle.
 //! * `config`: [`MachineConfig`] (what runs) and [`HostConfig`] (how it is hosted).
 //! * `state`: [`MachineState`], [`Status`], [`WaitResult`].
+//! * `images`: the image cache (pull, list, resolve); `merge`: layers to one tar;
+//!   `rootdisk`: base root disk building and per-machine clones.
 //! * `store`: atomic on-disk persistence of config and state (private).
 //! * `guest`: host-side varlink client for clankerd-guestd (private).
 //! * [`vmm`]: the [`Vmm`] trait and its implementations; the only seam tests fake.
@@ -23,14 +25,19 @@ mod config;
 mod engine;
 mod error;
 mod guest;
+mod images;
 mod machine;
+mod merge;
+mod rootdisk;
 mod state;
 mod store;
 pub mod vmm;
 
 pub use config::{HostConfig, MachineConfig};
-pub use engine::{Engine, EngineConfig};
+pub use engine::{Engine, EngineConfig, ROOT_DISK};
 pub use error::{Error, ErrorKind, Result};
+pub use images::{ImageInfo, LayerInfo};
 pub use machine::{Machine, MachineInfo};
+pub use rootdisk::{DiskPopulator, LocalGuestdPopulator};
 pub use state::{MachineState, Status, WaitResult};
 pub use vmm::Vmm;

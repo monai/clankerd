@@ -2,6 +2,8 @@
 //! fake is the `Vmm` (clankerd-guestd as a local process, unix sockets for vsock).
 #![allow(dead_code)]
 
+pub mod registry;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, OnceLock};

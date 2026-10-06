@@ -21,6 +21,10 @@ pub struct Record {
     pub created: SystemTime,
     pub config: MachineConfig,
     pub host_config: HostConfig,
+    /// Digest the image reference was pinned to at create time (`sha256:...`);
+    /// empty when the engine has no image cache.
+    #[serde(default)]
+    pub image_id: String,
 }
 
 #[derive(Debug, Clone)]

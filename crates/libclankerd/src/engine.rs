@@ -8,10 +8,15 @@ use std::time::{Duration, SystemTime};
 
 use crate::config::{HostConfig, MachineConfig};
 use crate::error::{Error, Result};
+use crate::images::{ImageInfo, ImageStore};
 use crate::machine::{Machine, MachineInfo};
+use crate::rootdisk::{DiskPopulator, clone_file, ensure_base};
 use crate::state::MachineState;
 use crate::store::{Record, Store};
 use crate::vmm::{UnavailableVmm, Vmm};
+
+/// File name of a machine's root disk inside its state directory.
+pub const ROOT_DISK: &str = "root.ext4";
 
 pub struct EngineConfig {
     /// Persistent per-machine config and state.
@@ -21,6 +26,14 @@ pub struct EngineConfig {
     pub vmm: Arc<dyn Vmm>,
     /// How long `Machine::start` waits for the guest's ready event.
     pub start_timeout: Duration,
+    /// Image cache (blobs, image records, base root disks). When `None`, images
+    /// are not resolved: machines are created without a pinned digest or root disk.
+    pub cache_dir: Option<PathBuf>,
+    /// Builds base root disks; required to create machines when `cache_dir` is set.
+    pub populator: Option<Arc<dyn DiskPopulator>>,
+    /// Registries (`host:port`) reached over plain HTTP, like Docker's
+    /// `insecure-registries`.
+    pub insecure_registries: Vec<String>,
 }
 
 impl EngineConfig {
@@ -31,6 +44,24 @@ impl EngineConfig {
             runtime_dir: runtime_dir.into(),
             vmm: Arc::new(UnavailableVmm),
             start_timeout: Duration::from_secs(30),
+            cache_dir: None,
+            populator: None,
+            insecure_registries: Vec::new(),
+        }
+    }
+
+    /// Per-user default image cache location (`~/Library/Caches/clankerd` on macOS).
+    pub fn default_cache_dir() -> PathBuf {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        if cfg!(target_os = "macos") {
+            home.join("Library/Caches/clankerd")
+        } else {
+            std::env::var_os("XDG_CACHE_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".cache"))
+                .join("clankerd")
         }
     }
 
@@ -63,6 +94,8 @@ pub(crate) struct Inner {
     pub runtime_dir: PathBuf,
     pub vmm: Arc<dyn Vmm>,
     pub start_timeout: Duration,
+    pub images: Option<ImageStore>,
+    pub populator: Option<Arc<dyn DiskPopulator>>,
     /// Serialises state read-modify-write; holds ids whose start is in flight.
     pub guarded: Mutex<HashSet<String>>,
     /// Signalled on every state change.
@@ -134,6 +167,11 @@ impl Engine {
             runtime_dir: config.runtime_dir,
             vmm: config.vmm,
             start_timeout: config.start_timeout,
+            images: match &config.cache_dir {
+                Some(dir) => Some(ImageStore::open(dir, config.insecure_registries)?),
+                None => None,
+            },
+            populator: config.populator,
             guarded: Mutex::default(),
             changed: Condvar::new(),
         });
@@ -162,25 +200,79 @@ impl Engine {
         let id = random_id()?;
         let name = name.map_or_else(|| format!("machine-{}", &id[..8]), str::to_owned);
 
-        let _g = self.inner.lock();
-        for existing in self.inner.store.ids()? {
-            let (record, _) = self.inner.store.load(&existing)?;
-            if record.name == name {
-                return Err(Error::conflict(format!(
-                    "machine name \"{name}\" is already in use by {}",
-                    &record.id[..12]
-                )));
+        // Resolve and pin the image, and build its base disk, before taking the
+        // lock: pulling and building can take minutes.
+        let base = match &self.inner.images {
+            Some(store) => {
+                let image = self.resolve_image(store, &config.image)?;
+                let populator = self
+                    .inner
+                    .populator
+                    .as_deref()
+                    .ok_or_else(|| Error::unavailable("no root-disk populator configured"))?;
+                let (base, _) = ensure_base(store, populator, &image)?;
+                Some((image.id, base))
+            }
+            None => None,
+        };
+
+        {
+            let _g = self.inner.lock();
+            for existing in self.inner.store.ids()? {
+                let (record, _) = self.inner.store.load(&existing)?;
+                if record.name == name {
+                    return Err(Error::conflict(format!(
+                        "machine name \"{name}\" is already in use by {}",
+                        &record.id[..12]
+                    )));
+                }
+            }
+            let record = Record {
+                id: id.clone(),
+                name,
+                created: SystemTime::now(),
+                config,
+                host_config,
+                image_id: base.as_ref().map(|(id, _)| id.clone()).unwrap_or_default(),
+            };
+            self.inner.store.create(&record, &MachineState::created())?;
+        }
+        if let Some((_, base)) = base {
+            // The machine's root disk: `root.ext4` in its directory, a clone of the
+            // cached base. A VMM attaches it as the guest's root block device.
+            let disk = self.inner.store.machine_dir(&id).join(ROOT_DISK);
+            if let Err(e) = clone_file(&base, &disk) {
+                let _ = self.inner.store.remove(&id);
+                return Err(e);
             }
         }
-        let record = Record {
-            id: id.clone(),
-            name,
-            created: SystemTime::now(),
-            config,
-            host_config,
-        };
-        self.inner.store.create(&record, &MachineState::created())?;
         Ok(Machine::new(self.inner.clone(), id))
+    }
+
+    /// Pulls `reference` into the image cache (always contacting the registry)
+    /// and returns the cached image.
+    pub fn pull(&self, reference: &str) -> Result<ImageInfo> {
+        self.image_store()?.pull(reference)
+    }
+
+    /// Lists cached images, newest pull first.
+    pub fn images(&self) -> Result<Vec<ImageInfo>> {
+        self.image_store()?.list()
+    }
+
+    fn image_store(&self) -> Result<&ImageStore> {
+        self.inner
+            .images
+            .as_ref()
+            .ok_or_else(|| Error::unavailable("no image cache configured"))
+    }
+
+    /// The cached image for `reference`, pulling it when missing (`--pull missing`).
+    fn resolve_image(&self, store: &ImageStore, reference: &str) -> Result<ImageInfo> {
+        match store.find(reference)? {
+            Some(image) => Ok(image),
+            None => store.pull(reference),
+        }
     }
 
     /// Looks a machine up by name, id or unique id prefix.
