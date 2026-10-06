@@ -12,25 +12,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::registry::{Registry, layer};
-use common::{Env, guestd_path, sh};
+use common::{Env, TarCapture, guestd_path, sh};
 use libclankerd::vmm::LocalProcessVmm;
-use libclankerd::{DiskPopulator, Engine, ErrorKind, HostConfig, ROOT_DISK};
-
-/// "Populates" a disk by storing the tar it was handed, and counts its runs.
-#[derive(Default)]
-struct TarCapture {
-    runs: AtomicUsize,
-}
-
-impl DiskPopulator for TarCapture {
-    fn populate(&self, disk: &Path, size: u64, tar: &mut dyn Read) -> libclankerd::Result<()> {
-        self.runs.fetch_add(1, Ordering::SeqCst);
-        assert!(size >= 1 << 30, "root disks leave headroom: {size}");
-        let mut out = std::fs::File::create(disk)?;
-        std::io::copy(tar, &mut out)?;
-        Ok(())
-    }
-}
+use libclankerd::{Engine, ErrorKind, HostConfig, ROOT_DISK};
 
 struct Fixture {
     env: Env,

@@ -27,8 +27,12 @@ struct Meta {
     xattrs: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
-pub fn unpack<R: Read>(reader: R, target: &Path) -> io::Result<UnpackSummary> {
+/// With `lenient`, operations only root may do (chown to other owners, device
+/// nodes, privileged xattrs) are skipped instead of failing. For development
+/// runs without root; the real population boot never sets it.
+pub fn unpack<R: Read>(reader: R, target: &Path, lenient: bool) -> io::Result<UnpackSummary> {
     let mut u = Unpacker {
+        lenient,
         target: target.to_path_buf(),
         known_dirs: HashSet::new(),
         dir_meta: HashMap::new(),
@@ -48,6 +52,7 @@ pub fn unpack<R: Read>(reader: R, target: &Path) -> io::Result<UnpackSummary> {
 }
 
 struct Unpacker {
+    lenient: bool,
     target: PathBuf,
     /// Relative paths verified (or created by us) to be real directories.
     known_dirs: HashSet<PathBuf>,
@@ -102,7 +107,7 @@ impl Unpacker {
                     .open(&abs)?;
                 self.summary.bytes += io::copy(&mut entry, &mut file)?;
                 drop(file);
-                apply(&abs, &meta, true)?;
+                apply(&abs, &meta, true, self.lenient)?;
             }
             EntryType::Symlink => {
                 let link = entry
@@ -110,7 +115,7 @@ impl Unpacker {
                     .ok_or_else(|| io::Error::other("symlink without target"))?;
                 remove_non_dir(&abs)?;
                 symlink(OsStr::from_bytes(&link), &abs)?;
-                apply(&abs, &meta, false)?;
+                apply(&abs, &meta, false, self.lenient)?;
             }
             EntryType::Link => {
                 let link = entry
@@ -140,8 +145,15 @@ impl Unpacker {
                 };
                 let path = cstr(&abs)?;
                 // SAFETY: valid NUL-terminated path.
-                check(unsafe { libc::mknod(path.as_ptr(), kind | 0o600, dev) })?;
-                apply(&abs, &meta, true)?;
+                let made = check(unsafe { libc::mknod(path.as_ptr(), kind | 0o600, dev) });
+                match made {
+                    Err(e) if self.lenient && e.raw_os_error() == Some(libc::EPERM) => {
+                        self.summary.entries += 1;
+                        return Ok(());
+                    }
+                    other => other?,
+                }
+                apply(&abs, &meta, true, self.lenient)?;
             }
             other => {
                 return Err(io::Error::other(format!(
@@ -197,7 +209,7 @@ impl Unpacker {
         dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
         for rel in dirs {
             let meta = &self.dir_meta[&rel];
-            apply(&self.target.join(&rel), meta, true)
+            apply(&self.target.join(&rel), meta, true, self.lenient)
                 .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", rel.display())))?;
         }
         Ok(())
@@ -282,14 +294,25 @@ fn parse_pax_time(s: &str) -> io::Result<(i64, i64)> {
 
 /// Order matters: chown clears setuid and file capabilities, so it goes first;
 /// xattrs need write access (user.*), so they precede chmod.
-fn apply(path: &Path, meta: &Meta, chmod: bool) -> io::Result<()> {
+fn apply(path: &Path, meta: &Meta, chmod: bool, lenient: bool) -> io::Result<()> {
+    let denied = |e: &io::Error| {
+        lenient
+            && matches!(
+                e.raw_os_error(),
+                Some(libc::EPERM | libc::ENOTSUP | libc::EACCES)
+            )
+    };
     let c = cstr(path)?;
     // SAFETY: valid NUL-terminated path.
-    check(unsafe { libc::lchown(c.as_ptr(), meta.uid, meta.gid) })?;
+    if let Err(e) = check(unsafe { libc::lchown(c.as_ptr(), meta.uid, meta.gid) })
+        && !denied(&e)
+    {
+        return Err(e);
+    }
     for (name, value) in &meta.xattrs {
         let name = CString::new(name.clone()).map_err(io::Error::other)?;
         // SAFETY: valid strings; value pointer and length describe a live slice.
-        check(unsafe {
+        let set = check(unsafe {
             libc::lsetxattr(
                 c.as_ptr(),
                 name.as_ptr(),
@@ -297,13 +320,15 @@ fn apply(path: &Path, meta: &Meta, chmod: bool) -> io::Result<()> {
                 value.len(),
                 0,
             )
-        })
-        .map_err(|e| {
-            io::Error::new(
+        });
+        if let Err(e) = set
+            && !denied(&e)
+        {
+            return Err(io::Error::new(
                 e.kind(),
                 format!("setting xattr {}: {e}", name.to_string_lossy()),
-            )
-        })?;
+            ));
+        }
     }
     if chmod {
         // SAFETY: valid NUL-terminated path.

@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod registry;
+pub mod tarcompare;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -72,4 +73,26 @@ pub fn create(engine: &Engine, name: &str, script: &str) -> Machine {
     engine
         .create(Some(name), sh(script), HostConfig::default())
         .unwrap()
+}
+
+/// Stands in for the population boot: stores the merged tar it is handed in the
+/// "disk" file, and counts its runs.
+#[derive(Default)]
+pub struct TarCapture {
+    pub runs: std::sync::atomic::AtomicUsize,
+}
+
+impl libclankerd::DiskPopulator for TarCapture {
+    fn populate(
+        &self,
+        disk: &Path,
+        size: u64,
+        tar: &mut dyn std::io::Read,
+    ) -> libclankerd::Result<()> {
+        self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        assert!(size >= 1 << 30, "root disks leave headroom: {size}");
+        let mut out = std::fs::File::create(disk)?;
+        std::io::copy(tar, &mut out)?;
+        Ok(())
+    }
 }

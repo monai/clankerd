@@ -45,6 +45,7 @@ fn main() {
     let mut exit_file = None;
     let mut populate = false;
     let mut boot_dir = None;
+    let mut lenient = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -54,6 +55,8 @@ fn main() {
             "--populate" => populate = true,
             // Directory with the static e2fsprogs binaries (default: next to this binary).
             "--boot-dir" => boot_dir = args.next().map(PathBuf::from),
+            // Development without root: skip chown/mknod/privileged xattrs on unpack.
+            "--lenient-ownership" => lenient = true,
             other => die(&format!("unknown argument {other}")),
         }
     }
@@ -66,6 +69,7 @@ fn main() {
     let disk = Arc::new(rootdisk::Ctx {
         boot_dir,
         populate_mode: populate,
+        lenient,
     });
 
     let workload = (!populate).then(|| {

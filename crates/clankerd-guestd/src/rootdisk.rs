@@ -30,6 +30,8 @@ pub struct Ctx {
     pub boot_dir: PathBuf,
     /// Populate boot: power off (exit) after a successful `PopulateDisk`.
     pub populate_mode: bool,
+    /// Development without root: skip what only root may do (see `unpack`).
+    pub lenient: bool,
 }
 
 /// Failure of one method: a protocol-level error name plus a message.
@@ -59,7 +61,7 @@ pub fn handle(
 ) -> bool {
     let result = match call.method.as_str() {
         METHOD_FORMAT_EXT4 => params(call).and_then(|p| format_ext4(ctx, p)),
-        METHOD_UNPACK_TAR => params(call).and_then(|p| unpack_tar(input, p)),
+        METHOD_UNPACK_TAR => params(call).and_then(|p| unpack_tar(ctx, input, p)),
         METHOD_POPULATE_DISK => params(call).and_then(|p| populate_disk(ctx, input, p)),
         _ => return false,
     };
@@ -146,7 +148,11 @@ fn format_device(
     Ok(())
 }
 
-fn unpack_tar(input: &mut BufReader<UnixStream>, p: UnpackTar) -> Result<Value, Failure> {
+fn unpack_tar(
+    ctx: &Ctx,
+    input: &mut BufReader<UnixStream>,
+    p: UnpackTar,
+) -> Result<Value, Failure> {
     let target = Path::new(&p.target);
     if !target.is_dir() {
         return Err(Failure::invalid(format!(
@@ -154,14 +160,15 @@ fn unpack_tar(input: &mut BufReader<UnixStream>, p: UnpackTar) -> Result<Value, 
             target.display()
         )));
     }
-    summary(unpack_stream(input, target)?)
+    summary(unpack_stream(input, target, ctx.lenient)?)
 }
 
 fn unpack_stream(
     input: &mut BufReader<UnixStream>,
     target: &Path,
+    lenient: bool,
 ) -> Result<UnpackSummary, Failure> {
-    let summary = unpack(&mut *input, target)?;
+    let summary = unpack(&mut *input, target, lenient)?;
     // Consume the end-of-archive padding up to the client's half-close.
     io::copy(input, &mut io::sink())?;
     Ok(summary)
@@ -192,7 +199,7 @@ fn populate_disk(
         std::env::temp_dir().join(format!("clankerd-populate-{}", std::process::id()));
     fs::create_dir_all(&mount_point)?;
     mount_ext4(&source, &mount_point)?;
-    let result = unpack_stream(input, &mount_point);
+    let result = unpack_stream(input, &mount_point, false);
     // SAFETY: sync has no preconditions.
     unsafe { libc::sync() };
     let umount = umount(&mount_point);
