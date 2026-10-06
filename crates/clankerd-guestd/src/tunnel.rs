@@ -224,6 +224,7 @@ fn carry<S: Duplex>(sock: S, host_socket: &std::path::Path, target: &Target) {
             method: METHOD_HOST_CONNECT.into(),
             parameters: serde_json::to_value(Connect { target }).unwrap(),
             more: false,
+            upgrade: true,
         };
         if varlink::write(&mut conn, &call).is_err() {
             return;

@@ -106,6 +106,7 @@ fn dial_guest(
             method: METHOD_CONNECT.into(),
             parameters: serde_json::to_value(Connect { target }).unwrap(),
             more: false,
+            upgrade: true,
         },
     )?;
     let out = conn.try_clone()?;
@@ -264,6 +265,7 @@ fn guest_call(socket: &Path, method: &str, parameters: Value) -> Result<Value> {
             method: method.into(),
             parameters,
             more: false,
+            upgrade: false,
         },
     )
     .map_err(io)?;

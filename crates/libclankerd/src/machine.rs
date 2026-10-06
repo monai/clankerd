@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::config::{HostConfig, MachineConfig, PortBinding};
 use crate::engine::Inner;
 use crate::error::{Error, Result};
+use crate::exec::{Exec, ExecConfig};
 use crate::guest::{EventStream, Next};
 use crate::state::{MachineState, Status, WaitResult};
 use crate::tunnel::{GuestBinding, MachineTunnels, PublishedPort, validate_port_binding};
@@ -133,6 +134,18 @@ impl Machine {
         })?;
         spawn_monitor(self.inner.clone(), self.id.clone(), ready);
         Ok(())
+    }
+
+    /// Registers a command to run inside the running machine (Docker's exec create).
+    pub fn exec_create(&self, config: ExecConfig) -> Result<Exec> {
+        let (record, state) = self.inner.store.load(&self.id)?;
+        if state.status != Status::Running {
+            return Err(Error::conflict(format!(
+                "machine {} is not running",
+                record.name
+            )));
+        }
+        Exec::create(self.inner.socket_path(&self.id), config)
     }
 
     fn tunnels(&self) -> Result<Arc<MachineTunnels>> {

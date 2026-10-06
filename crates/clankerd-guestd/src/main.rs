@@ -20,8 +20,15 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use clankerd_proto::guest::{ERROR_METHOD_NOT_FOUND, Event, METHOD_EVENTS, Workload};
+use clankerd_proto::guest::{
+    ERROR_INVALID_PARAMETER, ERROR_METHOD_NOT_FOUND, Event, METHOD_EVENTS, METHOD_EXEC_CREATE,
+    METHOD_EXEC_INSPECT, METHOD_EXEC_KILL, METHOD_EXEC_RESIZE, METHOD_EXEC_START, Workload,
+};
 use clankerd_proto::varlink::{self, Call, Reply};
+use serde_json::Value;
+
+mod exec;
+mod user;
 
 const LISTEN_FD: i32 = 3;
 const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -29,10 +36,10 @@ const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/s
 const LINGER: Duration = Duration::from_millis(300);
 const DRAIN_LIMIT: Duration = Duration::from_secs(5);
 
-#[derive(Default)]
 struct Shared {
     inner: Mutex<Inner>,
     cv: Condvar,
+    execs: exec::Registry,
 }
 
 #[derive(Default)]
@@ -77,7 +84,11 @@ fn main() {
         .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
     let tunnels = Arc::new(tunnel::Tunnels::new(loopback, host_socket));
 
-    let shared = Arc::new(Shared::default());
+    let shared = Arc::new(Shared {
+        inner: Mutex::default(),
+        cv: Condvar::new(),
+        execs: exec::Registry::new(workload.env.clone(), workload.working_dir.clone()),
+    });
     let child = spawn_workload(&workload);
     {
         let shared = shared.clone();
@@ -164,21 +175,80 @@ fn serve(conn: UnixStream, shared: Arc<Shared>, tunnels: Arc<tunnel::Tunnels>) {
         tunnels.handle(call, input, out);
         return;
     }
-    if call.method != METHOD_EVENTS {
-        let _ = varlink::write(
-            &mut out,
-            &Reply {
-                parameters: serde_json::Value::Null,
-                continues: false,
-                error: Some(ERROR_METHOD_NOT_FOUND.into()),
-            },
-        );
-        return;
+    match call.method.as_str() {
+        METHOD_EVENTS => {
+            shared.inner.lock().unwrap().streams += 1;
+            let _ = events(&mut out, &shared);
+            end_stream(&shared);
+        }
+        METHOD_EXEC_START => exec_start(input, out, call.parameters, &shared),
+        METHOD_EXEC_CREATE | METHOD_EXEC_RESIZE | METHOD_EXEC_KILL | METHOD_EXEC_INSPECT => {
+            let result = exec_call(&call, &shared.execs);
+            let _ = reply(&mut out, result);
+        }
+        _ => {
+            let _ = reply(&mut out, Err((ERROR_METHOD_NOT_FOUND, String::new())));
+        }
     }
-    shared.inner.lock().unwrap().streams += 1;
-    let _ = events(&mut out, &shared);
+}
+
+fn end_stream(shared: &Shared) {
     shared.inner.lock().unwrap().streams -= 1;
     shared.cv.notify_all();
+}
+
+fn reply(out: &mut UnixStream, result: Result<Value, exec::Failure>) -> std::io::Result<()> {
+    let reply = match result {
+        Ok(parameters) => Reply {
+            parameters,
+            continues: false,
+            error: None,
+        },
+        Err((name, message)) => Reply {
+            parameters: serde_json::json!({ "message": message }),
+            continues: false,
+            error: Some(name.into()),
+        },
+    };
+    varlink::write(out, &reply)
+}
+
+fn params<T: serde::de::DeserializeOwned>(call: &Call) -> Result<T, exec::Failure> {
+    serde_json::from_value(call.parameters.clone())
+        .map_err(|e| (ERROR_INVALID_PARAMETER, e.to_string()))
+}
+
+fn exec_call(call: &Call, execs: &exec::Registry) -> Result<Value, exec::Failure> {
+    fn json<T: serde::Serialize>(v: &T) -> Value {
+        serde_json::to_value(v).unwrap()
+    }
+    let empty = || serde_json::json!({});
+    match call.method.as_str() {
+        METHOD_EXEC_CREATE => Ok(json(&execs.create(params(call)?)?)),
+        METHOD_EXEC_RESIZE => execs.resize(&params(call)?).map(|()| empty()),
+        METHOD_EXEC_KILL => execs.kill(&params(call)?).map(|()| empty()),
+        _ => Ok(json(&execs.inspect(&params(call)?)?)),
+    }
+}
+
+/// Upgrades the connection and runs the exec as a framed stream.
+fn exec_start(input: BufReader<UnixStream>, mut out: UnixStream, p: Value, shared: &Arc<Shared>) {
+    let handle = serde_json::from_value::<clankerd_proto::guest::ExecRef>(p)
+        .map_err(|e| (ERROR_INVALID_PARAMETER, e.to_string()))
+        .and_then(|r| shared.execs.claim(&r.id));
+    match handle {
+        Err(e) => {
+            let _ = reply(&mut out, Err(e));
+        }
+        Ok(handle) => {
+            if reply(&mut out, Ok(serde_json::json!({}))).is_err() {
+                return;
+            }
+            shared.inner.lock().unwrap().streams += 1;
+            handle.run(input, out);
+            end_stream(shared);
+        }
+    }
 }
 
 fn events(out: &mut UnixStream, shared: &Shared) -> std::io::Result<()> {

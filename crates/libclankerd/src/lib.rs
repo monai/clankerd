@@ -12,6 +12,7 @@
 //! * `config`: [`MachineConfig`] (what runs) and [`HostConfig`] (how it is hosted).
 //! * `state`: [`MachineState`], [`Status`], [`WaitResult`].
 //! * `store`: atomic on-disk persistence of config and state (private).
+//! * `exec`: [`Exec`] lifecycle (create, start, resize, kill, inspect) and its streams.
 //! * `guest`: host-side varlink client for clankerd-guestd (private).
 //! * [`vmm`]: the [`Vmm`] trait and its implementations; the only seam tests fake.
 //! * `tunnel`: published ports, host-gateway ports and socket bindings.
@@ -23,6 +24,7 @@
 mod config;
 mod engine;
 mod error;
+mod exec;
 mod guest;
 mod machine;
 mod state;
@@ -33,6 +35,7 @@ pub mod vmm;
 pub use config::{HostConfig, MachineConfig, PortBinding, SocketBinding};
 pub use engine::{Engine, EngineConfig};
 pub use error::{Error, ErrorKind, Result};
+pub use exec::{Exec, ExecConfig, ExecInfo, ExecOutput, ExecStatus, ExecStdin, ExecStreams};
 pub use machine::{Machine, MachineInfo};
 pub use state::{MachineState, Status, WaitResult};
 pub use tunnel::{GuestBinding, PublishedPort};

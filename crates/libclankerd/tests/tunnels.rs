@@ -282,6 +282,7 @@ fn the_guest_can_only_reach_targets_the_host_exposed() {
             })
             .unwrap(),
             more: false,
+            upgrade: true,
         },
     )
     .unwrap();
