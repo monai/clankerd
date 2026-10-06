@@ -127,7 +127,7 @@ fn format_device(
     let mut cmd = Command::new(&mke2fs);
     // Ignore any mke2fs.conf of the environment: built-in ext4 defaults only.
     cmd.env("MKE2FS_CONFIG", "/nonexistent/mke2fs.conf")
-        .args(["-t", "ext4", "-F", "-q", "-m", "0"])
+        .args(["-t", "ext4", "-F", "-q", "-m", "0", "-b", "4096"])
         .args(["-E", "lazy_itable_init=1,nodiscard,root_owner=0:0"]);
     if let Some(label) = label {
         cmd.args(["-L", label]);
