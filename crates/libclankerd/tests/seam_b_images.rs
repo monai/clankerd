@@ -81,10 +81,13 @@ fn guestd_unpack(tar: &Path, target: &Path, lenient: bool) -> UnpackSummary {
     serde_json::from_value(reply.parameters).unwrap()
 }
 
-fn cache_dir(env: &Env) -> PathBuf {
+/// Image cache for a test. `purpose` keeps the "capture" bases (merged tars
+/// standing in for disks) apart from really populated ones.
+fn cache_dir(env: &Env, purpose: &str) -> PathBuf {
     std::env::var_os("CLANKERD_TEST_CACHE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| env.root().join("cache"))
+        .join(purpose)
 }
 
 fn check_real_image(reference: &str) {
@@ -97,7 +100,7 @@ fn check_real_image(reference: &str) {
     let env = Env::new();
     let populator = Arc::new(TarCapture::default());
     let mut cfg = env.config(Arc::new(LocalProcessVmm::new(guestd_path())));
-    cfg.cache_dir = Some(cache_dir(&env));
+    cfg.cache_dir = Some(cache_dir(&env, "capture"));
     cfg.populator = Some(populator.clone());
     let engine = Engine::new(cfg).unwrap();
 
@@ -172,7 +175,7 @@ fn clankers_slim_populates_a_clean_ext4_disk() {
     let env = Env::new();
     let boot = boot_dir_with_mke2fs();
     let mut cfg = env.config(Arc::new(LocalProcessVmm::new(guestd_path())));
-    cfg.cache_dir = Some(cache_dir(&env));
+    cfg.cache_dir = Some(cache_dir(&env, "real"));
     cfg.populator = Some(Arc::new(LocalGuestdPopulator::new(
         guestd_path(),
         boot.path(),
