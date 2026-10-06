@@ -37,6 +37,18 @@ mise install && mise exec -- make build   # build/{darwin,linux}-arm64/{clankerd
 mise exec -- make test
 ```
 
+### Rust workspace (libclankerd, vmctl)
+
+`mise install` pins Rust, zig, cargo-zigbuild and rcodesign. One command builds everything on Linux or macOS:
+
+```sh
+mise exec -- make rust   # cross-build, sign, verify -> build/rust/{darwin-arm64/{vmctl,clankerd-vmspawn},linux-arm64/clankerd-guestd}
+```
+
+`make rust-lint` and `make rust-test` run clippy/rustfmt and the tests. `clankerd-vmspawn` is ad-hoc signed with the
+hypervisor entitlement (`crates/clankerd-vmspawn/entitlements.plist`) and `clankerd-guestd` is a static aarch64 musl
+binary; `scripts/rust-verify.sh` checks both.
+
 `scripts/dev-install` builds `linux-arm64/guestctl` and installs it as `/usr/local/bin/guestctl` in the running VM
 (the same place the image bakes it). Rerun it after each rebuild; it ends by printing the VM's `guestctl version`.
 
