@@ -41,6 +41,9 @@ pub fn init(workload: &Workload) -> Result<(), String> {
         eprintln!("clankerd-guestd: setting the clock: {e}");
     }
     write_marker(Path::new("/")).map_err(|e| format!("writing /{MARKER}: {e}"))?;
+    // Volume and bind mounts; a failure here must not hand the workload a
+    // missing data directory, so it fails the boot.
+    crate::volume::setup_all(Path::new(GUEST_BOOT_MOUNT), &workload.mounts)?;
     crate::power::start_reaper();
     Ok(())
 }
@@ -86,7 +89,7 @@ fn cstr(p: &Path) -> io::Result<CString> {
     CString::new(p.as_os_str().as_bytes()).map_err(io::Error::other)
 }
 
-fn mount(
+pub(crate) fn mount(
     src: &str,
     target: &str,
     fstype: &str,

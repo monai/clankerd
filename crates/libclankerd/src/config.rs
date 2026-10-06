@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::mount::Mount;
+
 /// What runs: the image and how its main process is invoked.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -21,13 +23,15 @@ pub struct MachineConfig {
 }
 
 /// How the machine is hosted: resources, mounts, ports, policies.
-/// Mounts, port bindings, restart and pull policy arrive with later tickets.
+/// Restart and pull policy arrive with later tickets.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HostConfig {
     pub cpus: Option<u32>,
     /// Bytes.
     pub memory: Option<u64>,
+    /// Bind mounts and the machine's (at most one) named volume.
+    pub mounts: Vec<Mount>,
     /// Guest ports published on host loopback, fixed for the machine's life.
     pub port_bindings: Vec<PortBinding>,
     /// Host loopback ports reachable at the same port on the guest's loopback.

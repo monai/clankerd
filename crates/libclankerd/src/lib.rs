@@ -33,14 +33,18 @@ mod image_config;
 mod images;
 mod machine;
 mod merge;
+mod mount;
 mod rootdisk;
 mod state;
 mod store;
 mod tunnel;
+mod volumes;
 pub mod vmm;
 mod vmspawn_populator;
 
 pub use config::{HostConfig, MachineConfig, PortBinding, SocketBinding};
+pub use mount::{Mount, parse_size};
+pub use volumes::{DEFAULT_SIZE as DEFAULT_VOLUME_SIZE, VolumeInfo};
 pub use engine::{Engine, EngineConfig, ROOT_DISK};
 pub use error::{Error, ErrorKind, Result};
 pub use exec::{Exec, ExecConfig, ExecInfo, ExecOutput, ExecStatus, ExecStdin, ExecStreams};

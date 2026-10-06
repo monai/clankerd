@@ -14,6 +14,7 @@ pub(crate) use vmspawn::{explain_exit, spawn_helper};
 use std::path::PathBuf;
 
 use clankerd_proto::guest::Workload;
+pub use clankerd_proto::spawn::Share;
 
 use crate::error::Result;
 
@@ -39,6 +40,13 @@ pub struct BootSpec {
     pub root_disk: Option<PathBuf>,
     pub cpus: Option<u32>,
     pub memory: Option<u64>,
+    /// The machine's volume image (sparse raw ext4), attached as the block
+    /// device after the root disk. guestd formats, grows and mounts it per
+    /// `workload.mounts`; the local stand-in ignores it.
+    pub volume_disk: Option<PathBuf>,
+    /// Host directories to share over virtio-fs, mounted by tag per
+    /// `workload.mounts`; the local stand-in ignores them.
+    pub shares: Vec<Share>,
 }
 
 /// A booted machine. The VMM process must outlive the library process.

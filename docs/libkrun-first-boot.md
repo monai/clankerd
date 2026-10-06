@@ -41,7 +41,7 @@ scripts/m2-boot-check.sh boot      # ticket 03 only; no network, no image
 
 Expected: `vmctl exit code: 2`, console output containing the guestd error
 `unknown argument --nope`, final `PASS`. (`scripts/m2-boot-check.sh` with no
-argument also runs the ticket 05 checks, see section 7.) By hand:
+argument also runs the ticket 05 and 09 checks, see sections 7 and 8.) By hand:
 
 ```sh
 export CLANKERD_VMSPAWN=$PWD/build/rust/darwin-arm64/clankerd-vmspawn
@@ -211,4 +211,95 @@ shutdown steps (`stopping processes`, `syncing and unmounting`, `powering off`).
 - [ ] `/.clankerdenv` exists in the machine
 - [ ] `cgroup.subtree_control` of the root cgroup lists the delegated controllers
 - [ ] A second `create` from the cached image is near-instant (no population boot)
+- [ ] Items above confirmed or corrected
+
+## 8. Named volume and bind mounts (M2 hand-off for ticket 09)
+
+Built and tested on Linux only (seam A with the local-process stand-in, plus
+unit tests of guestd's format/grow logic on regular files; the mount tests
+need root and run in CI's root step). Nothing below has run in a VM.
+
+What changed: `vmctl run/create -v data:/storage[:size=20G]` (or
+`--volume-size 20G`) gives a machine one named volume. The library creates
+`<state>/volumes/data/data.ext4` as a *sparse* file (default 16G); no ext4 work
+happens on the Mac. `clankerd-vmspawn` attaches it as the second virtio-blk
+device (`/dev/vdb`, after the root disk). guestd (`--boot`) formats it with the
+static `mke2fs` when its first 64 KiB are blank (anything else that is not
+ext4 is refused, never overwritten), mounts it at the target and, when the
+requested size exceeds the filesystem, grows it online with the static
+`resize2fs`. The host extends the sparse file at start when the size
+increased; volumes never shrink. `vmctl rm` keeps the volume; `vmctl rm -v`
+deletes it. `vmctl volume ls|create|inspect|rm` is the minimal management
+surface. A volume can be mounted by one running machine at a time.
+`-v ./dir:/path[:ro]` shares a host directory over virtio-fs (tag `bindN`),
+mounted by guestd with `mount -t virtiofs`. `mke2fs` and `resize2fs` are
+hard-linked from next to guestd into the machine's boot directory when a
+volume is configured.
+
+### Run it
+
+```sh
+make rust
+scripts/m2-boot-check.sh volume     # only the ticket 09 checks (pulls the image)
+```
+
+By hand:
+
+```sh
+export CLANKERD_VMSPAWN=$PWD/build/rust/darwin-arm64/clankerd-vmspawn
+export CLANKERD_GUESTD=$PWD/build/rust/linux-arm64/clankerd-guestd
+vmctl=build/rust/darwin-arm64/vmctl; img=ghcr.io/monai/clankers:slim
+vol="$HOME/Library/Application Support/clankerd/volumes/data/data.ext4"
+
+$vmctl run -d --name v1 -v data:/storage --volume-size 1G $img sleep infinity
+ls -ls "$vol"                                   # 1 GiB apparent, little allocated
+$vmctl exec v1 sh -c 'grep storage /proc/mounts; df -h /storage; echo hi > /storage/f; sync'
+$vmctl logs v1 | grep 'formatted new volume'
+$vmctl stop v1; $vmctl start v1; $vmctl exec v1 cat /storage/f          # hi
+$vmctl stop v1; $vmctl rm v1; $vmctl volume ls                           # data still there
+$vmctl run -d --name v2 -v data:/storage:size=2G $img sleep infinity     # grows at start
+$vmctl exec v2 sh -c 'df -h /storage; cat /storage/f'                    # ~2G, hi
+$vmctl logs v2 | grep 'grew volume'
+$vmctl rm -f -v v2; $vmctl volume ls                                     # gone
+
+mkdir -p /tmp/shared; echo a > /tmp/shared/a
+$vmctl run -d --name b -v /tmp/shared:/shared $img sleep infinity
+$vmctl exec b sh -c 'cat /shared/a; echo b > /shared/b'; cat /tmp/shared/b
+$vmctl rm -f b
+```
+
+### Unverified (look here first if the boot fails)
+
+1. **`krun_add_virtiofs` signature.** Declared as `(ctx, tag, path)` in
+   `crates/libkrun-sys/src/ffi.rs`, from the header notes in
+   `memory/research-libkrun.md`, and `_krun_add_virtiofs` added to
+   `stubs/libkrun.tbd`. If linking or the call fails, compare with
+   `libkrun.h` (there are also `krun_add_virtiofs2/3/4` with shm size and
+   read-only flags; read-only is enforced by guestd's `MS_RDONLY` instead).
+2. **Second disk is `/dev/vdb`.** Assumes virtio-blk devices are numbered in
+   `krun_add_disk2` call order (root first, volume second). guestd waits up to
+   10 s for the device; the error says the volume did not appear.
+3. **Online `resize2fs`.** guestd mounts first, then runs
+   `resize2fs /dev/vdb` (online resize needs no fsck). It needs online resize
+   support in the stock kernel and a device at least as large as the
+   filesystem (the host extends the file before boot).
+4. **virtio-fs mount and ownership.** `mount -t virtiofs bind0 /target` needs
+   virtiofs in the stock kernel (already used for the boot directory). File
+   ownership seen in the guest comes from the Mac user (probably 501): check
+   `ls -ln /shared` and whether the workload user can write.
+5. **Several virtio-fs devices.** libkrun already serves the root as one
+   virtio-fs device; extra tags should coexist but are untested.
+6. **Sparse files on APFS.** `set_len` leaves holes; `du` should show little
+   allocated after formatting (`lazy_itable_init`).
+7. **Clean unmount.** The shutdown path already unmounts every non-pseudo
+   mount (including the volume) before powering off; confirm there is no fsck
+   on the next start after `vmctl stop`.
+
+### Ticket 09 checklist for you
+
+- [ ] A new volume is created sparse, formatted in the guest, and mounted at the configured path (`scripts/m2-boot-check.sh volume`)
+- [ ] Data written to the volume survives stop/start and `vmctl rm` (no `-v`) followed by a new machine using the same volume
+- [ ] Increasing the size (`size=2G`) takes effect at the next start (`df` and the log line `grew volume`)
+- [ ] `vmctl rm -v` deletes the volume
+- [ ] A host directory bind mount is readable and writable from both sides
 - [ ] Items above confirmed or corrected

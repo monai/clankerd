@@ -20,6 +20,8 @@ pub const BOOT_WORKLOAD: &str = "workload.json";
 pub const ROOT_DEVICE: &str = "/dev/vda";
 /// Where guestd keeps the boot directory inside the machine after it pivoted
 /// into the root disk (it holds the static e2fsprogs binaries).
+/// Where the machine's volume shows up: the block device after the root disk.
+pub const VOLUME_DEVICE: &str = "/dev/vdb";
 pub const GUEST_BOOT_MOUNT: &str = "/run/clankerd/boot";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,4 +50,17 @@ pub struct SpawnSpec {
     /// root-disk methods, then powers off.
     #[serde(default)]
     pub populate: bool,
+    /// Raw ext4 volume attached as the block device after the root disk.
+    #[serde(default)]
+    pub volume_disk: Option<PathBuf>,
+    /// Host directories shared into the guest over virtio-fs.
+    #[serde(default)]
+    pub shares: Vec<Share>,
+}
+
+/// A host directory shared over virtio-fs; the guest mounts it by `tag`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Share {
+    pub tag: String,
+    pub path: PathBuf,
 }

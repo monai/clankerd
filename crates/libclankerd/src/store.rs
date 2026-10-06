@@ -34,13 +34,22 @@ pub struct Record {
 #[derive(Debug, Clone)]
 pub struct Store {
     machines: PathBuf,
+    volumes: PathBuf,
 }
 
 impl Store {
     pub fn open(state_dir: &Path) -> Result<Self> {
         let machines = state_dir.join("machines");
         fs::create_dir_all(&machines)?;
-        Ok(Store { machines })
+        Ok(Store {
+            machines,
+            volumes: state_dir.join("volumes"),
+        })
+    }
+
+    /// `<state>/volumes`, holding one directory per named volume.
+    pub fn volumes_dir(&self) -> &Path {
+        &self.volumes
     }
 
     pub fn machine_dir(&self, id: &str) -> PathBuf {
