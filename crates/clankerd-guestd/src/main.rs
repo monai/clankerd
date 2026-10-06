@@ -2,14 +2,25 @@
 //! and serves `io.clankerd.Guest.Events` on a socket inherited via `LISTEN_FDS`
 //! (a unix socket standing in for vsock). Boot-level setup (pivot, mounts) comes later.
 //!
-//! Usage: `clankerd-guestd --config WORKLOAD.json --exit-file PATH [--host-socket PATH] [--loopback ADDR]`
-//! (`--host-socket` is the host tunnel endpoint; `--loopback` shifts the guest
-//! loopback address for the local stand-in VMM.)
+//! Usage: `clankerd-guestd --config WORKLOAD.json [--exit-file PATH]
+//! [--vsock-port N] [--host-socket PATH | --host-vsock-port N] [--loopback ADDR]`
 //!
-//! The exit file receives the workload's exit code so the result survives the
-//! death of whoever was subscribed (a real VMM helper records it the same way).
+//! The listening socket is either inherited via `LISTEN_FDS` (local-process
+//! stand-in) or an `AF_VSOCK` listener on `--vsock-port` (real VM). The host
+//! tunnel endpoint is a unix socket (`--host-socket`) or a vsock port on the
+//! host (`--host-vsock-port`). `--loopback` shifts the guest loopback address
+//! for the local stand-in VMM.
+//!
+//! The optional exit file receives the workload's exit code so the result
+//! survives the death of whoever was subscribed. Inside a VM the boot directory
+//! is read-only by convention, so the host side (clankerd-vmspawn) records it
+//! from the `Exited` event instead.
+//!
+//! As PID 1 (booted by libkrun's init.krun) guestd powers the machine off once
+//! the workload has ended and subscribers have seen the result.
 
 mod tunnel;
+mod vsock;
 
 use std::io::BufReader;
 use std::os::fd::FromRawFd;
@@ -52,6 +63,8 @@ fn main() {
     let mut config = None;
     let mut exit_file = None;
     let mut host_socket = None;
+    let mut host_vsock_port = None;
+    let mut vsock_port = None;
     let mut loopback = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -59,22 +72,36 @@ fn main() {
             "--config" => config = args.next().map(PathBuf::from),
             "--exit-file" => exit_file = args.next().map(PathBuf::from),
             "--host-socket" => host_socket = args.next().map(PathBuf::from),
+            "--host-vsock-port" => {
+                host_vsock_port = Some(port_arg(args.next(), "--host-vsock-port"))
+            }
+            "--vsock-port" => vsock_port = Some(port_arg(args.next(), "--vsock-port")),
             "--loopback" => loopback = args.next(),
             other => die(&format!("unknown argument {other}")),
         }
     }
     let config = config.unwrap_or_else(|| die("--config is required"));
-    let exit_file = exit_file.unwrap_or_else(|| die("--exit-file is required"));
     let workload: Workload = std::fs::read(&config)
         .map_err(|e| e.to_string())
         .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
         .unwrap_or_else(|e| die(&format!("reading {}: {e}", config.display())));
 
-    if std::env::var("LISTEN_FDS").ok().as_deref() != Some("1") {
-        die("expected one socket via LISTEN_FDS");
-    }
-    // SAFETY: fd 3 is the listening socket handed to us by our parent.
-    let listener = unsafe { UnixListener::from_raw_fd(LISTEN_FD) };
+    let listener = if std::env::var("LISTEN_FDS").ok().as_deref() == Some("1") {
+        // SAFETY: fd 3 is the listening socket handed to us by our parent.
+        Listener::Unix(unsafe { UnixListener::from_raw_fd(LISTEN_FD) })
+    } else if let Some(port) = vsock_port {
+        Listener::Vsock(
+            vsock::listen(port)
+                .unwrap_or_else(|e| die(&format!("cannot listen on vsock port {port}: {e}"))),
+        )
+    } else {
+        die("no socket to listen on: set LISTEN_FDS=1 with a socket on fd 3, or pass --vsock-port")
+    };
+    let host = match (host_socket, host_vsock_port) {
+        (Some(path), _) => Some(tunnel::HostEndpoint::Unix(path)),
+        (None, Some(port)) => Some(tunnel::HostEndpoint::Vsock(port)),
+        (None, None) => None,
+    };
 
     let loopback = loopback
         .map(|l| {
@@ -82,7 +109,7 @@ fn main() {
                 .unwrap_or_else(|_| die("invalid --loopback address"))
         })
         .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
-    let tunnels = Arc::new(tunnel::Tunnels::new(loopback, host_socket));
+    let tunnels = Arc::new(tunnel::Tunnels::new(loopback, host));
 
     let shared = Arc::new(Shared {
         inner: Mutex::default(),
@@ -95,10 +122,40 @@ fn main() {
         std::thread::spawn(move || supervise(child, shared, exit_file));
     }
 
-    for conn in listener.incoming().flatten() {
+    loop {
+        let Some(conn) = listener.accept() else {
+            continue;
+        };
         let shared = shared.clone();
         let tunnels = tunnels.clone();
         std::thread::spawn(move || serve(conn, shared, tunnels));
+    }
+}
+
+fn port_arg(value: Option<String>, flag: &str) -> u32 {
+    value
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| die(&format!("{flag} needs a port number")))
+}
+
+/// The listening socket; connections are served identically either way.
+enum Listener {
+    Unix(UnixListener),
+    Vsock(std::os::fd::OwnedFd),
+}
+
+impl Listener {
+    fn accept(&self) -> Option<UnixStream> {
+        match self {
+            Listener::Unix(l) => l.accept().ok().map(|(s, _)| s),
+            Listener::Vsock(fd) => {
+                let conn = vsock::accept(fd);
+                if conn.is_none() {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                conn
+            }
+        }
     }
 }
 
@@ -135,7 +192,11 @@ fn spawn_workload(w: &Workload) -> Result<std::process::Child, i32> {
 }
 
 /// Waits for the workload, records its result, then exits once subscribers have seen it.
-fn supervise(child: Result<std::process::Child, i32>, shared: Arc<Shared>, exit_file: PathBuf) {
+fn supervise(
+    child: Result<std::process::Child, i32>,
+    shared: Arc<Shared>,
+    exit_file: Option<PathBuf>,
+) {
     let code = match child {
         Ok(mut c) => match c.wait() {
             Ok(s) => s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0)),
@@ -143,9 +204,11 @@ fn supervise(child: Result<std::process::Child, i32>, shared: Arc<Shared>, exit_
         },
         Err(code) => code,
     };
-    let tmp = exit_file.with_extension("tmp");
-    if std::fs::write(&tmp, code.to_string()).is_ok() {
-        let _ = std::fs::rename(&tmp, &exit_file);
+    if let Some(exit_file) = exit_file {
+        let tmp = exit_file.with_extension("tmp");
+        if std::fs::write(&tmp, code.to_string()).is_ok() {
+            let _ = std::fs::rename(&tmp, &exit_file);
+        }
     }
     shared.inner.lock().unwrap().exit_code = Some(code);
     shared.cv.notify_all();
@@ -160,7 +223,24 @@ fn supervise(child: Result<std::process::Child, i32>, shared: Arc<Shared>, exit_
             .unwrap()
             .0;
     }
+    drop(g);
+    if std::process::id() == 1 {
+        power_off();
+    }
     std::process::exit(0);
+}
+
+/// Flushes and powers the VM off; as PID 1 returning would panic the kernel.
+fn power_off() -> ! {
+    // SAFETY: sync and reboot take no pointers.
+    unsafe {
+        libc::sync();
+        libc::reboot(libc::RB_POWER_OFF);
+    }
+    // reboot only returns on failure; PID 1 must not exit.
+    loop {
+        std::thread::sleep(Duration::from_secs(3600));
+    }
 }
 
 fn serve(conn: UnixStream, shared: Arc<Shared>, tunnels: Arc<tunnel::Tunnels>) {

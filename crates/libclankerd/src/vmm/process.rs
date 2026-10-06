@@ -36,7 +36,7 @@ impl Vmm for LocalProcessVmm {
         let console = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(spec.dir.join("console.log"))?;
+            .open(spec.dir.join(crate::machine::CONSOLE_LOG))?;
 
         let _ = fs::remove_file(&spec.guest_socket);
         let listener = UnixListener::bind(&spec.guest_socket)

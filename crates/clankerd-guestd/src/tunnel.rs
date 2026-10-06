@@ -25,7 +25,7 @@ pub struct Tunnels {
     /// The guest's loopback address (127.0.0.1; the stand-in VMM shifts it).
     loopback: IpAddr,
     /// Endpoint of the host's tunnel server (vsock in production).
-    host_socket: Option<PathBuf>,
+    host: Option<HostEndpoint>,
     next_id: AtomicU64,
     listeners: Mutex<HashMap<u64, ListenerHandle>>,
 }
@@ -50,11 +50,29 @@ fn reply(out: &mut UnixStream, parameters: Value, error: Option<&str>) -> std::i
     )
 }
 
+/// Where the host's tunnel server listens, from the guest's point of view.
+#[derive(Debug, Clone)]
+pub enum HostEndpoint {
+    /// A unix socket (local-process stand-in).
+    Unix(PathBuf),
+    /// A vsock port on the host (CID 2).
+    Vsock(u32),
+}
+
+impl HostEndpoint {
+    fn connect(&self) -> std::io::Result<UnixStream> {
+        match self {
+            HostEndpoint::Unix(path) => UnixStream::connect(path),
+            HostEndpoint::Vsock(port) => crate::vsock::connect_host(*port),
+        }
+    }
+}
+
 impl Tunnels {
-    pub fn new(loopback: IpAddr, host_socket: Option<PathBuf>) -> Self {
+    pub fn new(loopback: IpAddr, host: Option<HostEndpoint>) -> Self {
         Tunnels {
             loopback,
-            host_socket,
+            host,
             next_id: AtomicU64::new(1),
             listeners: Mutex::default(),
         }
@@ -123,7 +141,7 @@ impl Tunnels {
                 Some("org.varlink.service.InvalidParameter"),
             );
         };
-        let Some(host_socket) = self.host_socket.clone() else {
+        let Some(host_socket) = self.host.clone() else {
             return reply(
                 out,
                 json!({"message": "no host endpoint configured"}),
@@ -153,7 +171,7 @@ impl Tunnels {
         &self,
         listen: &Target,
         target: Target,
-        host_socket: PathBuf,
+        host_socket: HostEndpoint,
         stop: Arc<AtomicBool>,
     ) -> std::io::Result<std::thread::JoinHandle<()>> {
         match listen {
@@ -213,11 +231,11 @@ impl Tunnels {
 }
 
 /// Carries one guest connection to `target` on the host.
-fn carry<S: Duplex>(sock: S, host_socket: &std::path::Path, target: &Target) {
-    let host_socket = host_socket.to_owned();
+fn carry<S: Duplex>(sock: S, host_socket: &HostEndpoint, target: &Target) {
+    let host_socket = host_socket.clone();
     let target = target.clone();
     std::thread::spawn(move || {
-        let Ok(mut conn) = UnixStream::connect(&host_socket) else {
+        let Ok(mut conn) = host_socket.connect() else {
             return;
         };
         let call = Call {

@@ -72,6 +72,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -88,7 +89,9 @@ name = "clankerd-vmspawn"
 version = "0.1.0"
 dependencies = [
  "clankerd-proto",
+ "libc",
  "libkrun-sys",
+ "serde_json",
 ]
 
 [[package]]
@@ -202,6 +205,9 @@ dependencies = [
 [[package]]
 name = "libkrun-sys"
 version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "linux-raw-sys"

@@ -1,5 +1,6 @@
 //! vmctl: Docker-style CLI over libclankerd.
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -7,7 +8,7 @@ use std::sync::Arc;
 mod exec;
 
 use clap::{Args, Parser, Subcommand};
-use libclankerd::vmm::LocalProcessVmm;
+use libclankerd::vmm::{LocalProcessVmm, VmspawnVmm};
 use libclankerd::{
     Engine, EngineConfig, Error, HostConfig, MachineConfig, MachineInfo, PortBinding, Status,
 };
@@ -25,6 +26,13 @@ struct Cli {
     /// instead of booting a VM (no libkrun backend is wired up yet).
     #[arg(long, global = true, env = "CLANKERD_DEV_GUESTD", hide = true)]
     dev_guestd: Option<PathBuf>,
+    /// clankerd-vmspawn helper binary (default: next to vmctl).
+    #[arg(long, global = true, env = "CLANKERD_VMSPAWN")]
+    vmspawn: Option<PathBuf>,
+    /// Static aarch64 Linux clankerd-guestd placed in the guest's boot
+    /// directory (default: next to vmctl, or ../linux-arm64/ as in build/rust).
+    #[arg(long, global = true, env = "CLANKERD_GUESTD")]
+    guestd: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -45,6 +53,8 @@ enum Command {
     },
     /// Show machine configuration and state as JSON.
     Inspect { machines: Vec<String> },
+    /// Print the console output (kernel, guestd and workload) of a machine.
+    Logs { machine: String },
     /// Run a command in a running machine.
     Exec(exec::ExecArgs),
     /// Remove machines.
@@ -97,8 +107,39 @@ fn engine(cli: &Cli) -> Result<Engine, Error> {
     );
     if let Some(guestd) = &cli.dev_guestd {
         cfg.vmm = Arc::new(LocalProcessVmm::new(guestd));
+    } else if cfg!(target_os = "macos") || cli.vmspawn.is_some() {
+        let vmspawn = cli
+            .vmspawn
+            .clone()
+            .unwrap_or_else(|| sibling("clankerd-vmspawn", &["."]));
+        let guestd = cli
+            .guestd
+            .clone()
+            .unwrap_or_else(|| sibling("clankerd-guestd", &[".", "../linux-arm64"]));
+        let mut vmm = VmspawnVmm::new(vmspawn, guestd);
+        // Development: CLANKERD_VMSPAWN_DEV_LOCAL=1 runs guestd as a local process, not a VM.
+        if std::env::var_os("CLANKERD_VMSPAWN_DEV_LOCAL").is_some_and(|v| v == "1") {
+            vmm = vmm.dev_local();
+        }
+        cfg.vmm = Arc::new(vmm);
     }
     Engine::new(cfg)
+}
+
+/// Looks for `name` in directories relative to this executable; returns the
+/// first candidate path (existing or not) so errors name a concrete path.
+fn sibling(name: &str, dirs: &[&str]) -> PathBuf {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(PathBuf::from))
+        .unwrap_or_default();
+    let candidates: Vec<PathBuf> = dirs.iter().map(|d| exe_dir.join(d).join(name)).collect();
+    candidates
+        .iter()
+        .find(|p| p.exists())
+        .or(candidates.first())
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from(name))
 }
 
 fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error> {
@@ -197,6 +238,11 @@ fn run(cli: Cli) -> Result<u8, Error> {
             }
             println!("{}", serde_json::to_string_pretty(&infos).unwrap());
             Ok(code)
+        }
+        Command::Logs { machine } => {
+            let bytes = engine.get(&machine)?.logs()?;
+            std::io::stdout().write_all(&bytes).map_err(Error::from)?;
+            Ok(0)
         }
         Command::Rm { force, machines } => Ok(each(&machines, |n| {
             engine.get(n)?.remove(force)?;

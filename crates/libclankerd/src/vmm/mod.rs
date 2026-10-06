@@ -1,12 +1,14 @@
 //! The `Vmm` extension point: whatever boots a machine and runs clankerd-guestd in it.
 //!
-//! libkrun (via clankerd-vmspawn) is the production implementation (later ticket);
-//! [`LocalProcessVmm`] runs guestd as a local process and is the stand-in used
+//! [`VmspawnVmm`] (the clankerd-vmspawn helper, running libkrun) is the
+//! production implementation; [`LocalProcessVmm`] runs guestd as a local process and is the stand-in used
 //! by seam A tests and development.
 
 mod process;
+mod vmspawn;
 
 pub use process::LocalProcessVmm;
+pub use vmspawn::VmspawnVmm;
 
 use std::path::PathBuf;
 
@@ -44,6 +46,13 @@ pub struct BootHandle {
 pub trait Vmm: Send + Sync {
     /// Starts the machine and returns without waiting for guest readiness.
     fn boot(&self, spec: &BootSpec) -> Result<BootHandle>;
+
+    /// Polled while waiting for the guest to become ready: fail fast, with the
+    /// reason, if the VMM is known to have died. Implementations without a
+    /// way to tell keep the default and rely on the start timeout.
+    fn check_alive(&self, _spec: &BootSpec, _handle: &BootHandle) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Used when no VMM is configured: every boot fails with a clear error.
@@ -53,7 +62,7 @@ pub struct UnavailableVmm;
 impl Vmm for UnavailableVmm {
     fn boot(&self, _spec: &BootSpec) -> Result<BootHandle> {
         Err(crate::Error::unavailable(
-            "no VMM backend configured (libkrun support is not wired up yet)",
+            "no VMM backend configured (vmctl selects libkrun on macOS only)",
         ))
     }
 }

@@ -28,6 +28,9 @@ pub struct MachineInfo {
     pub state: MachineState,
 }
 
+/// File in the machine directory that receives the console output.
+pub const CONSOLE_LOG: &str = "console.log";
+
 /// A handle on a machine. Cheap to clone; dropping it never stops the machine.
 #[derive(Clone)]
 pub struct Machine {
@@ -107,7 +110,8 @@ impl Machine {
             err
         };
         let handle = self.inner.vmm.boot(&spec).map_err(fail)?;
-        let ready = match wait_ready(&socket, &exit_file, self.inner.start_timeout) {
+        let alive = || self.inner.vmm.check_alive(&spec, &handle);
+        let ready = match wait_ready(&socket, &exit_file, self.inner.start_timeout, &alive) {
             Ok(r) => r,
             Err(err) => {
                 kill_group(handle.pid);
@@ -208,6 +212,18 @@ impl Machine {
         }
     }
 
+    /// Everything the machine printed on its console (kernel, guestd and
+    /// workload output) since it was created. Empty before the first start.
+    pub fn logs(&self) -> Result<Vec<u8>> {
+        // Existence check first so unknown ids report NotFound.
+        self.inspect()?;
+        match fs::read(self.inner.store.machine_dir(&self.id).join(CONSOLE_LOG)) {
+            Ok(bytes) => Ok(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Deletes the machine and its state. A running machine needs `force`.
     pub fn remove(&self, force: bool) -> Result<()> {
         let mut starting = self.inner.lock();
@@ -249,7 +265,12 @@ fn read_exit_file(path: &Path) -> Option<i32> {
     fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
-fn wait_ready(socket: &Path, exit_file: &Path, timeout: Duration) -> Result<Ready> {
+fn wait_ready(
+    socket: &Path,
+    exit_file: &Path,
+    timeout: Duration,
+    alive: &dyn Fn() -> Result<()>,
+) -> Result<Ready> {
     let deadline = Instant::now() + timeout;
     let timed_out = || {
         Error::unavailable(format!(
@@ -268,6 +289,7 @@ fn wait_ready(socket: &Path, exit_file: &Path, timeout: Duration) -> Result<Read
         if let Some(code) = read_exit_file(exit_file) {
             return Ok(Ready::Exited(code));
         }
+        alive()?;
         if Instant::now() >= deadline {
             return Err(timed_out());
         }
