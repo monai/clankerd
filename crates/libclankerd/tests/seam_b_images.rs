@@ -20,9 +20,9 @@ use std::sync::atomic::Ordering;
 use clankerd_proto::rootdisk::{METHOD_UNPACK_TAR, UnpackSummary, UnpackTar};
 use clankerd_proto::varlink::{self, Call, Reply};
 use common::tarcompare::compare;
-use common::{Env, TarCapture, guestd_path};
+use common::{Env, TarCapture, boot_dir_with_mke2fs, debugfs, e2fsck_clean, guestd_path};
 use libclankerd::vmm::LocalProcessVmm;
-use libclankerd::{Engine, HostConfig, MachineConfig, ROOT_DISK};
+use libclankerd::{Engine, HostConfig, LocalGuestdPopulator, MachineConfig, ROOT_DISK};
 
 fn is_root() -> bool {
     // SAFETY: no preconditions.
@@ -156,4 +156,43 @@ fn debian_trixie_slim_unpacks_exactly() {
 #[test]
 fn clankers_slim_unpacks_exactly() {
     check_real_image("ghcr.io/monai/clankers:slim");
+}
+
+/// Root + network: the full population of a real image, formatted by mke2fs
+/// and unpacked on a mounted ext4, passes `e2fsck -fn`.
+#[test]
+fn clankers_slim_populates_a_clean_ext4_disk() {
+    if std::env::var_os("CLANKERD_TEST_NETWORK").is_none() || !is_root() {
+        eprintln!(
+            "SKIPPED clankers_slim_populates_a_clean_ext4_disk: needs root and CLANKERD_TEST_NETWORK=1"
+        );
+        return;
+    }
+    let env = Env::new();
+    let boot = boot_dir_with_mke2fs();
+    let mut cfg = env.config(Arc::new(LocalProcessVmm::new(guestd_path())));
+    cfg.cache_dir = Some(cache_dir(&env));
+    cfg.populator = Some(Arc::new(LocalGuestdPopulator::new(
+        guestd_path(),
+        boot.path(),
+    )));
+    let engine = Engine::new(cfg).unwrap();
+    let machine = engine
+        .create(
+            Some("real"),
+            MachineConfig {
+                image: "ghcr.io/monai/clankers:slim".into(),
+                cmd: vec!["true".into()],
+                ..Default::default()
+            },
+            HostConfig::default(),
+        )
+        .unwrap();
+    let disk = env
+        .root()
+        .join("state/machines")
+        .join(machine.id())
+        .join(ROOT_DISK);
+    e2fsck_clean(&disk);
+    assert!(debugfs(&disk, "stat /etc/os-release").contains("Type: regular"));
 }

@@ -9,12 +9,14 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 
 use common::registry::{Registry, layer};
-use common::{Env, TarCapture, guestd_path, sh};
+use common::{
+    Env, TarCapture, boot_dir_with_mke2fs, debugfs, e2fsck_clean, guestd_path, is_root, sh,
+};
 use libclankerd::vmm::LocalProcessVmm;
-use libclankerd::{Engine, ErrorKind, HostConfig, ROOT_DISK};
+use libclankerd::{Engine, ErrorKind, HostConfig, LocalGuestdPopulator, ROOT_DISK};
 
 struct Fixture {
     env: Env,
@@ -218,4 +220,58 @@ fn image_config(reference: &str) -> libclankerd::MachineConfig {
     let mut c = sh("true");
     c.image = reference.to_owned();
     c
+}
+
+/// Seam B end to end: the real population (guestd formats, mounts and unpacks)
+/// behind `Engine::create`, then the clone every machine boots from.
+#[test]
+fn root_disk_of_a_machine_is_a_clean_ext4_holding_the_image() {
+    if !is_root() {
+        eprintln!(
+            "SKIPPED root_disk_of_a_machine_is_a_clean_ext4_holding_the_image: needs root \
+             (run: sudo -E cargo test -p libclankerd --test images)"
+        );
+        return;
+    }
+    let env = Env::new();
+    let registry = Registry::start();
+    registry.push(
+        "test/app",
+        "v1",
+        &[layer(&[
+            ("etc/motd", b"hello\n"),
+            ("usr/bin/tool", b"#!/bin/sh\n"),
+        ])],
+    );
+    let boot = boot_dir_with_mke2fs();
+    let mut cfg = env.config(Arc::new(LocalProcessVmm::new(guestd_path())));
+    cfg.cache_dir = Some(env.root().join("cache"));
+    cfg.populator = Some(Arc::new(LocalGuestdPopulator::new(
+        guestd_path(),
+        boot.path(),
+    )));
+    cfg.insecure_registries = vec![registry.addr.clone()];
+    let engine = Engine::new(cfg).unwrap();
+
+    let reference = format!("{}/test/app:v1", registry.addr);
+    let a = engine
+        .create(Some("a"), image_config(&reference), HostConfig::default())
+        .unwrap();
+    let b = engine
+        .create(Some("b"), image_config(&reference), HostConfig::default())
+        .unwrap();
+
+    let state = env.root().join("state/machines");
+    for m in [&a, &b] {
+        let disk = state.join(m.id()).join(ROOT_DISK);
+        e2fsck_clean(&disk);
+        let stat = debugfs(&disk, "stat /etc/motd");
+        assert!(stat.contains("Size: 6"), "{stat}");
+        assert!(stat.contains("User:     0   Group:     0"), "{stat}");
+    }
+    // One cached base, cloned twice.
+    let bases: Vec<_> = std::fs::read_dir(env.root().join("cache/bases"))
+        .unwrap()
+        .collect();
+    assert_eq!(bases.len(), 1);
 }
