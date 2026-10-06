@@ -9,3 +9,5 @@ publish.workspace = true
 [dependencies]
 clankerd-proto.workspace = true
 libkrun-sys.workspace = true
+libc = "0.2.190"
+serde_json = "1.0.151"

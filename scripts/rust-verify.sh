@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Verifies the artifacts produced by `make rust-build` (run on Linux).
 #   - darwin binaries are arm64 Mach-O
-#   - clankerd-vmspawn carries the hypervisor entitlement in its code signature
+#   - clankerd-vmspawn links Homebrew's libkrun and carries the hypervisor entitlement in its code signature
 #   - clankerd-guestd is a static aarch64 musl ELF
 set -euo pipefail
 
@@ -29,6 +29,8 @@ for b in vmctl clankerd-vmspawn; do
 done
 check "darwin-arm64/clankerd-vmspawn has hypervisor entitlement" \
   has_entitlement "$out/darwin-arm64/clankerd-vmspawn"
+check "darwin-arm64/clankerd-vmspawn links /opt/homebrew/lib/libkrun.1.dylib" \
+  grep -aq '/opt/homebrew/lib/libkrun.1.dylib' "$out/darwin-arm64/clankerd-vmspawn"
 check "linux-arm64/clankerd-guestd is static aarch64 ELF" \
   static_aarch64_elf "$out/linux-arm64/clankerd-guestd"
 

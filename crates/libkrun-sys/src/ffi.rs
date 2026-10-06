@@ -6,7 +6,6 @@ use std::ffi::c_char;
 unsafe extern "C" {
     pub fn krun_set_log_level(level: u32) -> i32;
     pub fn krun_create_ctx() -> i32;
-    pub fn krun_free_ctx(ctx_id: u32) -> i32;
     pub fn krun_set_vm_config(ctx_id: u32, num_vcpus: u8, ram_mib: u32) -> i32;
     /// Root of the guest: a host directory shared over virtio-fs.
     pub fn krun_set_root(ctx_id: u32, root_path: *const c_char) -> i32;

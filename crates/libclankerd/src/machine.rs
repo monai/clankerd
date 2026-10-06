@@ -107,7 +107,8 @@ impl Machine {
             err
         };
         let handle = self.inner.vmm.boot(&spec).map_err(fail)?;
-        let ready = match wait_ready(&socket, &exit_file, self.inner.start_timeout) {
+        let alive = || self.inner.vmm.check_alive(&spec, &handle);
+        let ready = match wait_ready(&socket, &exit_file, self.inner.start_timeout, &alive) {
             Ok(r) => r,
             Err(err) => {
                 kill_group(handle.pid);
@@ -200,7 +201,12 @@ fn read_exit_file(path: &Path) -> Option<i32> {
     fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
-fn wait_ready(socket: &Path, exit_file: &Path, timeout: Duration) -> Result<Ready> {
+fn wait_ready(
+    socket: &Path,
+    exit_file: &Path,
+    timeout: Duration,
+    alive: &dyn Fn() -> Result<()>,
+) -> Result<Ready> {
     let deadline = Instant::now() + timeout;
     let timed_out = || {
         Error::unavailable(format!(
@@ -219,6 +225,7 @@ fn wait_ready(socket: &Path, exit_file: &Path, timeout: Duration) -> Result<Read
         if let Some(code) = read_exit_file(exit_file) {
             return Ok(Ready::Exited(code));
         }
+        alive()?;
         if Instant::now() >= deadline {
             return Err(timed_out());
         }

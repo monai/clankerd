@@ -87,7 +87,9 @@ name = "clankerd-vmspawn"
 version = "0.1.0"
 dependencies = [
  "clankerd-proto",
+ "libc",
  "libkrun-sys",
+ "serde_json",
 ]
 
 [[package]]
