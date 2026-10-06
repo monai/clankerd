@@ -8,7 +8,9 @@ mod exec;
 
 use clap::{Args, Parser, Subcommand};
 use libclankerd::vmm::LocalProcessVmm;
-use libclankerd::{Engine, EngineConfig, Error, HostConfig, MachineConfig, MachineInfo, Status};
+use libclankerd::{
+    Engine, EngineConfig, Error, HostConfig, MachineConfig, MachineInfo, PortBinding, Status,
+};
 
 #[derive(Parser)]
 #[command(name = "vmctl", version, about = "Run Linux machines from OCI images")]
@@ -67,6 +69,9 @@ struct CreateArgs {
     workdir: Option<String>,
     #[arg(long)]
     entrypoint: Option<String>,
+    /// Publish a guest port on host loopback: [IP:]HOST_PORT:GUEST_PORT.
+    #[arg(short = 'p', long = "publish", value_parser = parse_publish)]
+    publish: Vec<PortBinding>,
     image: String,
     /// Command and arguments.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -106,7 +111,29 @@ fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error>
         working_dir: a.workdir.unwrap_or_default(),
         ..Default::default()
     };
-    engine.create(a.name.as_deref(), config, HostConfig::default())
+    let host_config = HostConfig {
+        port_bindings: a.publish,
+        ..Default::default()
+    };
+    engine.create(a.name.as_deref(), config, host_config)
+}
+
+/// Parses `[IP:]HOST_PORT:GUEST_PORT`. The library rejects non-loopback IPs.
+fn parse_publish(s: &str) -> Result<PortBinding, String> {
+    let port = |p: &str| {
+        p.parse::<u16>()
+            .map_err(|_| format!("invalid port \"{p}\""))
+    };
+    let parts: Vec<&str> = s.rsplitn(3, ':').collect();
+    match parts.as_slice() {
+        [guest, host] => Ok(PortBinding::loopback(port(host)?, port(guest)?)),
+        [guest, host, ip] => Ok(PortBinding {
+            host_ip: Some(ip.parse().map_err(|_| format!("invalid IP \"{ip}\""))?),
+            host_port: port(host)?,
+            guest_port: port(guest)?,
+        }),
+        _ => Err("expected [IP:]HOST_PORT:GUEST_PORT".into()),
+    }
 }
 
 /// Runs `f` over every name, printing each success via `ok` and each error;

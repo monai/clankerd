@@ -2,10 +2,14 @@
 //! and serves `io.clankerd.Guest.Events` on a socket inherited via `LISTEN_FDS`
 //! (a unix socket standing in for vsock). Boot-level setup (pivot, mounts) comes later.
 //!
-//! Usage: `clankerd-guestd --config WORKLOAD.json --exit-file PATH`
+//! Usage: `clankerd-guestd --config WORKLOAD.json --exit-file PATH [--host-socket PATH] [--loopback ADDR]`
+//! (`--host-socket` is the host tunnel endpoint; `--loopback` shifts the guest
+//! loopback address for the local stand-in VMM.)
 //!
 //! The exit file receives the workload's exit code so the result survives the
 //! death of whoever was subscribed (a real VMM helper records it the same way).
+
+mod tunnel;
 
 use std::io::BufReader;
 use std::os::fd::FromRawFd;
@@ -47,11 +51,15 @@ struct Inner {
 fn main() {
     let mut config = None;
     let mut exit_file = None;
+    let mut host_socket = None;
+    let mut loopback = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--config" => config = args.next().map(PathBuf::from),
             "--exit-file" => exit_file = args.next().map(PathBuf::from),
+            "--host-socket" => host_socket = args.next().map(PathBuf::from),
+            "--loopback" => loopback = args.next(),
             other => die(&format!("unknown argument {other}")),
         }
     }
@@ -68,6 +76,14 @@ fn main() {
     // SAFETY: fd 3 is the listening socket handed to us by our parent.
     let listener = unsafe { UnixListener::from_raw_fd(LISTEN_FD) };
 
+    let loopback = loopback
+        .map(|l| {
+            l.parse()
+                .unwrap_or_else(|_| die("invalid --loopback address"))
+        })
+        .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
+    let tunnels = Arc::new(tunnel::Tunnels::new(loopback, host_socket));
+
     let shared = Arc::new(Shared {
         inner: Mutex::default(),
         cv: Condvar::new(),
@@ -81,7 +97,8 @@ fn main() {
 
     for conn in listener.incoming().flatten() {
         let shared = shared.clone();
-        std::thread::spawn(move || serve(conn, shared));
+        let tunnels = tunnels.clone();
+        std::thread::spawn(move || serve(conn, shared, tunnels));
     }
 }
 
@@ -146,7 +163,7 @@ fn supervise(child: Result<std::process::Child, i32>, shared: Arc<Shared>, exit_
     std::process::exit(0);
 }
 
-fn serve(conn: UnixStream, shared: Arc<Shared>) {
+fn serve(conn: UnixStream, shared: Arc<Shared>, tunnels: Arc<tunnel::Tunnels>) {
     let Ok(mut out) = conn.try_clone() else {
         return;
     };
@@ -154,6 +171,10 @@ fn serve(conn: UnixStream, shared: Arc<Shared>) {
     let Ok(Some(call)) = varlink::read::<Call, _>(&mut input) else {
         return;
     };
+    if tunnel::handles(&call.method) {
+        tunnels.handle(call, input, out);
+        return;
+    }
     match call.method.as_str() {
         METHOD_EVENTS => {
             shared.inner.lock().unwrap().streams += 1;
