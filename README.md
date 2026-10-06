@@ -21,6 +21,15 @@ guestctl browser start shop                                 # host Chrome, CDP a
 guestctl lease show shop | browser stop shop
 ```
 
+## Agent skill
+
+The repo is also a Claude Code plugin marketplace (`clankers`) holding the `clankerd` skill, which teaches a coding agent in the VM to use `guestctl`:
+
+```sh
+claude plugin marketplace add monai/clankers
+claude plugin install clankerd@clankers
+```
+
 ## Build
 
 ```sh

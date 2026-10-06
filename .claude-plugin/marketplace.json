@@ -1,0 +1,14 @@
+{
+  "name": "clankers",
+  "description": "Plugins for coding agents running in clankers VMs",
+  "owner": {
+    "name": "monai"
+  },
+  "plugins": [
+    {
+      "name": "clankerd",
+      "source": "./plugins/clankerd",
+      "description": "Teaches coding agents in a smolvm VM to use guestctl for leased ports, .local names and host Chrome"
+    }
+  ]
+}
