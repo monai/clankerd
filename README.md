@@ -26,7 +26,7 @@ guestctl lease show shop | release shop | browser stop shop
 The repo is also a Claude Code plugin marketplace (`clankers`) holding the `clankerd` skill, which teaches a coding agent in the VM to use `guestctl`:
 
 ```sh
-claude plugin marketplace add monai/clankers
+claude plugin marketplace add monai/clankerd
 claude plugin install clankerd@clankers
 ```
 
