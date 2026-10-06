@@ -145,3 +145,67 @@ fn a_missing_helper_binary_is_reported_by_path() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("/no/such/clankerd-vmspawn"), "{err}");
 }
+
+#[test]
+fn run_dash_p_publishes_a_guest_port_on_host_loopback() {
+    use std::io::{Read, Write};
+    use std::net::{Shutdown, TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+
+    let dir = tempfile::Builder::new().prefix("vm").tempdir().unwrap();
+    let guestd = guestd();
+
+    // The stand-in guest's loopback is 127.0.0.2.
+    let service = TcpListener::bind("127.0.0.2:0").unwrap();
+    let guest_port = service.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for mut c in service.incoming().flatten() {
+            let mut seen = String::new();
+            c.read_to_string(&mut seen).unwrap();
+            write!(c, "guest saw {seen}").unwrap();
+        }
+    });
+    let host_port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+
+    let mut run = Command::new(env!("CARGO_BIN_EXE_vmctl"))
+        .args(["run", "-p", &format!("{host_port}:{guest_port}")])
+        .args(["img", "sleep", "3"])
+        .env("CLANKERD_STATE_DIR", dir.path().join("state"))
+        .env("CLANKERD_RUNTIME_DIR", dir.path().join("run"))
+        .env("CLANKERD_DEV_GUESTD", &guestd)
+        .spawn()
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut conn = loop {
+        match TcpStream::connect(("127.0.0.1", host_port)) {
+            Ok(c) => break c,
+            Err(e) => {
+                assert!(Instant::now() < deadline, "never published: {e}");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    };
+    conn.write_all(b"ping").unwrap();
+    conn.shutdown(Shutdown::Write).unwrap();
+    let mut out = String::new();
+    conn.read_to_string(&mut out).unwrap();
+    assert_eq!(out, "guest saw ping");
+    run.wait().unwrap();
+}
+
+#[test]
+fn run_dash_p_refuses_non_loopback_addresses() {
+    let dir = tempfile::Builder::new().prefix("vm").tempdir().unwrap();
+    let out = vmctl(
+        dir.path(),
+        &guestd(),
+        &["run", "-p", "0.0.0.0:8080:80", "img", "true"],
+    );
+    assert_eq!(out.status.code(), Some(125));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("loopback"));
+}

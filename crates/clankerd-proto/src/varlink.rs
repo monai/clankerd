@@ -15,6 +15,10 @@ pub struct Call {
     /// Caller accepts several replies (a stream).
     #[serde(default, skip_serializing_if = "is_false")]
     pub more: bool,
+    /// Caller asks to switch the connection to a raw stream (see
+    /// [`crate::frame`]) after the reply.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub upgrade: bool,
 }
 
 /// A method reply. `continues` is set on every reply of a stream but the last.
@@ -68,6 +72,7 @@ mod tests {
                 method: "a.b.C".into(),
                 parameters: Value::Null,
                 more: true,
+                upgrade: false,
             },
         )
         .unwrap();

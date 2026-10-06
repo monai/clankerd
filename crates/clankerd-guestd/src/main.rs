@@ -2,18 +2,25 @@
 //! and serves `io.clankerd.Guest.Events` on a socket inherited via `LISTEN_FDS`
 //! (a unix socket standing in for vsock). Boot-level setup (pivot, mounts) comes later.
 //!
-//! Usage: `clankerd-guestd --config WORKLOAD.json [--exit-file PATH] [--vsock-port N]`
+//! Usage: `clankerd-guestd --config WORKLOAD.json [--exit-file PATH]
+//! [--vsock-port N] [--host-socket PATH | --host-vsock-port N] [--loopback ADDR]`
 //!
 //! The listening socket is either inherited via `LISTEN_FDS` (local-process
-//! stand-in) or an `AF_VSOCK` listener on `--vsock-port` (real VM).
+//! stand-in) or an `AF_VSOCK` listener on `--vsock-port` (real VM). The host
+//! tunnel endpoint is a unix socket (`--host-socket`) or a vsock port on the
+//! host (`--host-vsock-port`). `--loopback` shifts the guest loopback address
+//! for the local stand-in VMM.
 //!
 //! The optional exit file receives the workload's exit code so the result
 //! survives the death of whoever was subscribed. Inside a VM the boot directory
-//! is read-only, so the host side (clankerd-vmspawn) records it from the
-//! `Exited` event instead.
+//! is read-only by convention, so the host side (clankerd-vmspawn) records it
+//! from the `Exited` event instead.
 //!
 //! As PID 1 (booted by libkrun's init.krun) guestd powers the machine off once
 //! the workload has ended and subscribers have seen the result.
+
+mod tunnel;
+mod vsock;
 
 use std::io::BufReader;
 use std::os::fd::FromRawFd;
@@ -24,8 +31,15 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use clankerd_proto::guest::{ERROR_METHOD_NOT_FOUND, Event, METHOD_EVENTS, Workload};
+use clankerd_proto::guest::{
+    ERROR_INVALID_PARAMETER, ERROR_METHOD_NOT_FOUND, Event, METHOD_EVENTS, METHOD_EXEC_CREATE,
+    METHOD_EXEC_INSPECT, METHOD_EXEC_KILL, METHOD_EXEC_RESIZE, METHOD_EXEC_START, Workload,
+};
 use clankerd_proto::varlink::{self, Call, Reply};
+use serde_json::Value;
+
+mod exec;
+mod user;
 
 const LISTEN_FD: i32 = 3;
 const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -33,10 +47,10 @@ const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/s
 const LINGER: Duration = Duration::from_millis(300);
 const DRAIN_LIMIT: Duration = Duration::from_secs(5);
 
-#[derive(Default)]
 struct Shared {
     inner: Mutex<Inner>,
     cv: Condvar,
+    execs: exec::Registry,
 }
 
 #[derive(Default)]
@@ -48,18 +62,21 @@ struct Inner {
 fn main() {
     let mut config = None;
     let mut exit_file = None;
+    let mut host_socket = None;
+    let mut host_vsock_port = None;
     let mut vsock_port = None;
+    let mut loopback = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--config" => config = args.next().map(PathBuf::from),
             "--exit-file" => exit_file = args.next().map(PathBuf::from),
-            "--vsock-port" => {
-                vsock_port = args
-                    .next()
-                    .and_then(|p| p.parse::<u32>().ok())
-                    .or_else(|| die("--vsock-port needs a port number"));
+            "--host-socket" => host_socket = args.next().map(PathBuf::from),
+            "--host-vsock-port" => {
+                host_vsock_port = Some(port_arg(args.next(), "--host-vsock-port"))
             }
+            "--vsock-port" => vsock_port = Some(port_arg(args.next(), "--vsock-port")),
+            "--loopback" => loopback = args.next(),
             other => die(&format!("unknown argument {other}")),
         }
     }
@@ -80,8 +97,25 @@ fn main() {
     } else {
         die("no socket to listen on: set LISTEN_FDS=1 with a socket on fd 3, or pass --vsock-port")
     };
+    let host = match (host_socket, host_vsock_port) {
+        (Some(path), _) => Some(tunnel::HostEndpoint::Unix(path)),
+        (None, Some(port)) => Some(tunnel::HostEndpoint::Vsock(port)),
+        (None, None) => None,
+    };
 
-    let shared = Arc::new(Shared::default());
+    let loopback = loopback
+        .map(|l| {
+            l.parse()
+                .unwrap_or_else(|_| die("invalid --loopback address"))
+        })
+        .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
+    let tunnels = Arc::new(tunnel::Tunnels::new(loopback, host));
+
+    let shared = Arc::new(Shared {
+        inner: Mutex::default(),
+        cv: Condvar::new(),
+        execs: exec::Registry::new(workload.env.clone(), workload.working_dir.clone()),
+    });
     let child = spawn_workload(&workload);
     {
         let shared = shared.clone();
@@ -93,8 +127,15 @@ fn main() {
             continue;
         };
         let shared = shared.clone();
-        std::thread::spawn(move || serve(conn, shared));
+        let tunnels = tunnels.clone();
+        std::thread::spawn(move || serve(conn, shared, tunnels));
     }
+}
+
+fn port_arg(value: Option<String>, flag: &str) -> u32 {
+    value
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| die(&format!("{flag} needs a port number")))
 }
 
 /// The listening socket; connections are served identically either way.
@@ -104,71 +145,21 @@ enum Listener {
 }
 
 impl Listener {
-    fn accept(&self) -> Option<Conn> {
+    fn accept(&self) -> Option<UnixStream> {
         match self {
-            Listener::Unix(l) => l.accept().ok().map(|(s, _)| Conn::Unix(s)),
+            Listener::Unix(l) => l.accept().ok().map(|(s, _)| s),
             Listener::Vsock(fd) => {
-                use std::os::fd::AsRawFd;
-                // SAFETY: accept on a valid listening fd; peer address not needed.
-                let c = unsafe {
-                    libc::accept(fd.as_raw_fd(), std::ptr::null_mut(), std::ptr::null_mut())
-                };
-                if c < 0 {
+                let conn = vsock::accept(fd);
+                if conn.is_none() {
                     std::thread::sleep(Duration::from_millis(10));
-                    return None;
                 }
-                // SAFETY: c is a fresh fd we own.
-                Some(Conn::Vsock(unsafe { std::os::fd::OwnedFd::from_raw_fd(c) }))
+                conn
             }
         }
     }
 }
 
-/// An accepted connection as a readable and writable file.
-enum Conn {
-    Unix(UnixStream),
-    Vsock(std::os::fd::OwnedFd),
-}
-
-impl Conn {
-    fn into_file(self) -> std::fs::File {
-        match self {
-            Conn::Unix(s) => std::fs::File::from(std::os::fd::OwnedFd::from(s)),
-            Conn::Vsock(fd) => std::fs::File::from(fd),
-        }
-    }
-}
-
-mod vsock {
-    use std::os::fd::{FromRawFd, OwnedFd};
-
-    /// Listens on `port` for any CID.
-    pub fn listen(port: u32) -> std::io::Result<OwnedFd> {
-        // SAFETY: plain socket calls; the fd is wrapped immediately.
-        unsafe {
-            let fd = libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
-            if fd < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            let fd = OwnedFd::from_raw_fd(fd);
-            let mut addr: libc::sockaddr_vm = std::mem::zeroed();
-            addr.svm_family = libc::AF_VSOCK as libc::sa_family_t;
-            addr.svm_cid = libc::VMADDR_CID_ANY;
-            addr.svm_port = port;
-            let rc = libc::bind(
-                std::os::fd::AsRawFd::as_raw_fd(&fd),
-                (&raw const addr).cast(),
-                std::mem::size_of::<libc::sockaddr_vm>() as libc::socklen_t,
-            );
-            if rc < 0 || libc::listen(std::os::fd::AsRawFd::as_raw_fd(&fd), 16) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(fd)
-        }
-    }
-}
-
-fn die<T>(msg: &str) -> T {
+fn die(msg: &str) -> ! {
     eprintln!("clankerd-guestd: {msg}");
     std::process::exit(2)
 }
@@ -252,8 +243,7 @@ fn power_off() -> ! {
     }
 }
 
-fn serve(conn: Conn, shared: Arc<Shared>) {
-    let conn = conn.into_file();
+fn serve(conn: UnixStream, shared: Arc<Shared>, tunnels: Arc<tunnel::Tunnels>) {
     let Ok(mut out) = conn.try_clone() else {
         return;
     };
@@ -261,24 +251,87 @@ fn serve(conn: Conn, shared: Arc<Shared>) {
     let Ok(Some(call)) = varlink::read::<Call, _>(&mut input) else {
         return;
     };
-    if call.method != METHOD_EVENTS {
-        let _ = varlink::write(
-            &mut out,
-            &Reply {
-                parameters: serde_json::Value::Null,
-                continues: false,
-                error: Some(ERROR_METHOD_NOT_FOUND.into()),
-            },
-        );
+    if tunnel::handles(&call.method) {
+        tunnels.handle(call, input, out);
         return;
     }
-    shared.inner.lock().unwrap().streams += 1;
-    let _ = events(&mut out, &shared);
+    match call.method.as_str() {
+        METHOD_EVENTS => {
+            shared.inner.lock().unwrap().streams += 1;
+            let _ = events(&mut out, &shared);
+            end_stream(&shared);
+        }
+        METHOD_EXEC_START => exec_start(input, out, call.parameters, &shared),
+        METHOD_EXEC_CREATE | METHOD_EXEC_RESIZE | METHOD_EXEC_KILL | METHOD_EXEC_INSPECT => {
+            let result = exec_call(&call, &shared.execs);
+            let _ = reply(&mut out, result);
+        }
+        _ => {
+            let _ = reply(&mut out, Err((ERROR_METHOD_NOT_FOUND, String::new())));
+        }
+    }
+}
+
+fn end_stream(shared: &Shared) {
     shared.inner.lock().unwrap().streams -= 1;
     shared.cv.notify_all();
 }
 
-fn events(out: &mut std::fs::File, shared: &Shared) -> std::io::Result<()> {
+fn reply(out: &mut UnixStream, result: Result<Value, exec::Failure>) -> std::io::Result<()> {
+    let reply = match result {
+        Ok(parameters) => Reply {
+            parameters,
+            continues: false,
+            error: None,
+        },
+        Err((name, message)) => Reply {
+            parameters: serde_json::json!({ "message": message }),
+            continues: false,
+            error: Some(name.into()),
+        },
+    };
+    varlink::write(out, &reply)
+}
+
+fn params<T: serde::de::DeserializeOwned>(call: &Call) -> Result<T, exec::Failure> {
+    serde_json::from_value(call.parameters.clone())
+        .map_err(|e| (ERROR_INVALID_PARAMETER, e.to_string()))
+}
+
+fn exec_call(call: &Call, execs: &exec::Registry) -> Result<Value, exec::Failure> {
+    fn json<T: serde::Serialize>(v: &T) -> Value {
+        serde_json::to_value(v).unwrap()
+    }
+    let empty = || serde_json::json!({});
+    match call.method.as_str() {
+        METHOD_EXEC_CREATE => Ok(json(&execs.create(params(call)?)?)),
+        METHOD_EXEC_RESIZE => execs.resize(&params(call)?).map(|()| empty()),
+        METHOD_EXEC_KILL => execs.kill(&params(call)?).map(|()| empty()),
+        _ => Ok(json(&execs.inspect(&params(call)?)?)),
+    }
+}
+
+/// Upgrades the connection and runs the exec as a framed stream.
+fn exec_start(input: BufReader<UnixStream>, mut out: UnixStream, p: Value, shared: &Arc<Shared>) {
+    let handle = serde_json::from_value::<clankerd_proto::guest::ExecRef>(p)
+        .map_err(|e| (ERROR_INVALID_PARAMETER, e.to_string()))
+        .and_then(|r| shared.execs.claim(&r.id));
+    match handle {
+        Err(e) => {
+            let _ = reply(&mut out, Err(e));
+        }
+        Ok(handle) => {
+            if reply(&mut out, Ok(serde_json::json!({}))).is_err() {
+                return;
+            }
+            shared.inner.lock().unwrap().streams += 1;
+            handle.run(input, out);
+            end_stream(shared);
+        }
+    }
+}
+
+fn events(out: &mut UnixStream, shared: &Shared) -> std::io::Result<()> {
     let reply = |event: &Event, continues| Reply {
         parameters: serde_json::to_value(event).unwrap(),
         continues,

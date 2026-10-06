@@ -50,6 +50,7 @@ fn runs_without_an_exit_file_and_reports_exit_over_events() {
             method: METHOD_EVENTS.into(),
             parameters: serde_json::Value::Null,
             more: true,
+            upgrade: false,
         },
     )
     .unwrap();

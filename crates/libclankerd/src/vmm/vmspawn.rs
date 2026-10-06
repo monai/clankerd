@@ -78,6 +78,7 @@ impl Vmm for VmspawnVmm {
             console_log: spec.dir.join(crate::machine::CONSOLE_LOG),
             exit_file: spec.exit_file.clone(),
             vsock_socket: spec.guest_socket.with_extension("vsock"),
+            host_socket: spec.host_socket.clone(),
             cpus: spec.cpus.unwrap_or(DEFAULT_CPUS).min(255) as u8,
             memory_mib: (spec.memory.unwrap_or(DEFAULT_MEMORY) / (1024 * 1024)).max(128) as u32,
         };

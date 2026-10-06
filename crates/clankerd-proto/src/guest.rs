@@ -29,6 +29,87 @@ pub enum Event {
     Exited { exit_code: i32 },
 }
 
+/// Exec lifecycle (Docker naming). `ExecStart` is called with `upgrade`: after
+/// its reply the connection carries frames (see [`crate::frame`]).
+pub const METHOD_EXEC_CREATE: &str = "io.clankerd.Guest.ExecCreate";
+pub const METHOD_EXEC_START: &str = "io.clankerd.Guest.ExecStart";
+pub const METHOD_EXEC_RESIZE: &str = "io.clankerd.Guest.ExecResize";
+pub const METHOD_EXEC_KILL: &str = "io.clankerd.Guest.ExecKill";
+pub const METHOD_EXEC_INSPECT: &str = "io.clankerd.Guest.ExecInspect";
+
+pub const ERROR_NO_SUCH_EXEC: &str = "io.clankerd.Guest.NoSuchExec";
+pub const ERROR_INVALID_PARAMETER: &str = "io.clankerd.Guest.InvalidParameter";
+pub const ERROR_CONFLICT: &str = "io.clankerd.Guest.Conflict";
+
+/// Parameters of `ExecCreate`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExecSpec {
+    pub argv: Vec<String>,
+    /// `KEY=value` entries, layered over the machine's environment.
+    #[serde(default)]
+    pub env: Vec<String>,
+    #[serde(default)]
+    pub working_dir: String,
+    /// Docker `user[:group]` spec; empty means the machine's user (root).
+    #[serde(default)]
+    pub user: String,
+    #[serde(default)]
+    pub tty: bool,
+    #[serde(default)]
+    pub attach_stdin: bool,
+    /// Initial terminal size (tty only).
+    #[serde(default)]
+    pub size: Option<ResizeParams>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecCreated {
+    pub id: String,
+}
+
+/// Parameters of `ExecStart`, `ExecInspect`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecRef {
+    pub id: String,
+}
+
+/// Parameters of `ExecResize` and payload of the resize channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResizeParams {
+    #[serde(default)]
+    pub id: String,
+    pub rows: u16,
+    pub cols: u16,
+}
+
+/// Parameters of `ExecKill` and payload of the signal channel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalParams {
+    #[serde(default)]
+    pub id: String,
+    pub signal: i32,
+}
+
+/// Reply of `ExecInspect`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecState {
+    pub running: bool,
+    /// `None` until the process exited.
+    pub exit_code: Option<i32>,
+    /// Set when the process died from a signal (exit code is then 128+signal).
+    pub signal: Option<i32>,
+    pub pid: Option<i32>,
+}
+
+/// Payload of the status channel, the last frame before the stream closes.
+/// Always sent after all output frames.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecStatus {
+    pub exit_code: i32,
+    #[serde(default)]
+    pub signal: Option<i32>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -124,12 +124,15 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// A vsock port the guest listens on, reachable through a unix socket that
-/// libkrun creates on the host.
+/// A vsock port bridged to a unix socket on the host.
 #[derive(Debug, Clone)]
 pub struct VsockPort {
     pub port: u32,
     pub host_socket: PathBuf,
+    /// `true`: libkrun creates the socket and forwards host connections to the
+    /// guest's listener on `port`. `false`: the guest dials `port` and libkrun
+    /// connects to the host process listening on the socket.
+    pub listen: bool,
 }
 
 /// Everything libkrun needs to boot one guest.
@@ -239,7 +242,7 @@ pub fn boot(config: &BootConfig) -> Result<std::convert::Infallible, Error> {
             let sock = path(&p.host_socket, "vsock socket path")?;
             check(
                 "krun_add_vsock_port2",
-                ffi::krun_add_vsock_port2(ctx, p.port, sock.as_ptr(), true),
+                ffi::krun_add_vsock_port2(ctx, p.port, sock.as_ptr(), p.listen),
             )?;
         }
         check(

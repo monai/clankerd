@@ -25,6 +25,9 @@ pub struct BootSpec {
     /// Unix socket path the VMM must make reachable as the guest's varlink
     /// endpoint (stands in for vsock).
     pub guest_socket: PathBuf,
+    /// Unix socket path the VMM must make reachable to the guest as the host's
+    /// tunnel endpoint (stands in for a vsock port the guest dials).
+    pub host_socket: PathBuf,
     /// File the VMM must create with the workload's exit code once it ended,
     /// so the result survives the death of the library process.
     pub exit_file: PathBuf,

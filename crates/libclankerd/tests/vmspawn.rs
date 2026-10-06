@@ -146,3 +146,35 @@ fn the_real_helper_off_macos_explains_it_cannot_boot() {
     assert_eq!(err.kind(), ErrorKind::Unavailable);
     assert!(err.message().contains("only supported on macOS"), "{err}");
 }
+
+#[test]
+fn published_ports_work_through_the_helper_proxy() {
+    use libclankerd::PortBinding;
+    use std::io::{Read, Write};
+    use std::net::{Shutdown, TcpListener, TcpStream};
+
+    let env = Env::new();
+    let engine = libclankerd::Engine::new(env.config(dev_vmm())).unwrap();
+    let m = create(&engine, "ported", "sleep 60");
+    m.start().unwrap();
+
+    // The dev-local guest's loopback is 127.0.0.2.
+    let service = TcpListener::bind(("127.0.0.2", 0)).unwrap();
+    let guest_port = service.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for mut c in service.incoming().flatten() {
+            let mut seen = String::new();
+            c.read_to_string(&mut seen).unwrap();
+            write!(c, "guest saw {seen}").unwrap();
+        }
+    });
+
+    let published = m.publish(PortBinding::loopback(0, guest_port)).unwrap();
+    let mut conn = TcpStream::connect(published.local_addr()).unwrap();
+    conn.write_all(b"ping").unwrap();
+    conn.shutdown(Shutdown::Write).unwrap();
+    let mut out = String::new();
+    conn.read_to_string(&mut out).unwrap();
+    assert_eq!(out, "guest saw ping");
+    m.remove(true).unwrap();
+}

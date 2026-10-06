@@ -12,7 +12,9 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use clankerd_proto::guest::{Event, METHOD_EVENTS};
-use clankerd_proto::spawn::{BOOT_GUESTD, BOOT_WORKLOAD, GUEST_VSOCK_PORT, SpawnSpec};
+use clankerd_proto::spawn::{
+    BOOT_GUESTD, BOOT_WORKLOAD, GUEST_VSOCK_PORT, HOST_VSOCK_PORT, SpawnSpec,
+};
 use clankerd_proto::varlink::{self, Call, Reply};
 
 /// What actually runs the guest.
@@ -34,14 +36,24 @@ impl Hypervisor for Libkrun {
             format!("/{BOOT_WORKLOAD}"),
             "--vsock-port".into(),
             GUEST_VSOCK_PORT.to_string(),
+            "--host-vsock-port".into(),
+            HOST_VSOCK_PORT.to_string(),
         ];
         // Make init.krun exec guestd as PID 1 instead of forking it.
         cfg.env = vec!["KRUN_INIT_PID1=1".into()];
         cfg.console_log = Some(spec.console_log.clone());
-        cfg.vsock_ports = vec![libkrun_sys::VsockPort {
-            port: GUEST_VSOCK_PORT,
-            host_socket: spec.vsock_socket.clone(),
-        }];
+        cfg.vsock_ports = vec![
+            libkrun_sys::VsockPort {
+                port: GUEST_VSOCK_PORT,
+                host_socket: spec.vsock_socket.clone(),
+                listen: true,
+            },
+            libkrun_sys::VsockPort {
+                port: HOST_VSOCK_PORT,
+                host_socket: spec.host_socket.clone(),
+                listen: false,
+            },
+        ];
         cfg.cpus = spec.cpus;
         cfg.memory_mib = spec.memory_mib;
         libkrun_sys::boot(&cfg)
@@ -68,6 +80,12 @@ impl Hypervisor for DevLocal {
         let mut cmd = Command::new(spec.boot_dir.join(BOOT_GUESTD));
         cmd.arg("--config")
             .arg(spec.boot_dir.join(BOOT_WORKLOAD))
+            .arg("--host-socket")
+            .arg(&spec.host_socket)
+            // The local process shares the host's loopback, so the guest's
+            // loopback is another address (same as LocalProcessVmm).
+            .arg("--loopback")
+            .arg("127.0.0.2")
             .env("LISTEN_FDS", "1")
             .stdin(Stdio::null())
             .stdout(console.try_clone().map_err(|e| e.to_string())?)
@@ -158,6 +176,7 @@ fn wait_for_exit(guest: &Path) -> Option<i32> {
             method: METHOD_EVENTS.into(),
             parameters: serde_json::Value::Null,
             more: true,
+            upgrade: false,
         },
     )
     .ok()?;

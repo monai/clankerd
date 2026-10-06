@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 
 /// vsock port clankerd-guestd listens on for `io.clankerd.Guest`.
 pub const GUEST_VSOCK_PORT: u32 = 1024;
+/// vsock port on the host that guestd dials for tunnels (the library's
+/// host-side tunnel server).
+pub const HOST_VSOCK_PORT: u32 = 1025;
 
 /// Files in the boot directory (the guest's root over virtio-fs).
 pub const BOOT_GUESTD: &str = "clankerd-guestd";
@@ -25,6 +28,9 @@ pub struct SpawnSpec {
     /// available (libkrun creates it); the helper's own listener, inherited
     /// via `LISTEN_FDS`, proxies to it.
     pub vsock_socket: PathBuf,
+    /// Unix socket where the library's tunnel server listens; guest
+    /// connections to [`HOST_VSOCK_PORT`] are forwarded there.
+    pub host_socket: PathBuf,
     pub cpus: u8,
     pub memory_mib: u32,
 }
