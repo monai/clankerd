@@ -1,6 +1,6 @@
 //! `Engine`: the library's entry point.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -13,6 +13,7 @@ use crate::machine::{Machine, MachineInfo};
 use crate::rootdisk::{DiskPopulator, clone_file, ensure_base};
 use crate::state::MachineState;
 use crate::store::{Record, Store};
+use crate::tunnel::{MachineTunnels, validate_host_config};
 use crate::vmm::{UnavailableVmm, Vmm};
 
 /// File name of a machine's root disk inside its state directory.
@@ -100,6 +101,8 @@ pub(crate) struct Inner {
     pub guarded: Mutex<HashSet<String>>,
     /// Signalled on every state change.
     pub changed: Condvar,
+    /// Tunnel resources of running machines, by id.
+    pub tunnels: Mutex<HashMap<String, Arc<MachineTunnels>>>,
 }
 
 impl Inner {
@@ -115,6 +118,21 @@ impl Inner {
         self.store.save_state(id, &state)?;
         self.changed.notify_all();
         Ok(())
+    }
+
+    pub fn tunnels(&self) -> MutexGuard<'_, HashMap<String, Arc<MachineTunnels>>> {
+        self.tunnels.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Closes the host side of a machine's tunnels (listeners, host endpoint).
+    pub fn drop_tunnels(&self, id: &str) {
+        let removed = self.tunnels().remove(id);
+        drop(removed);
+    }
+
+    /// Where the guest dials the host (stands in for a vsock port).
+    pub fn host_socket_path(&self, id: &str) -> PathBuf {
+        self.runtime_dir.join(format!("{}.host", &id[..12]))
     }
 
     pub fn socket_path(&self, id: &str) -> PathBuf {
@@ -174,6 +192,7 @@ impl Engine {
             populator: config.populator,
             guarded: Mutex::default(),
             changed: Condvar::new(),
+            tunnels: Mutex::default(),
         });
         for id in inner.store.ids()? {
             crate::machine::reattach(&inner, &id);
@@ -194,6 +213,7 @@ impl Engine {
         if config.entrypoint.is_empty() && config.cmd.is_empty() {
             return Err(Error::invalid_parameter("no command specified"));
         }
+        validate_host_config(&host_config)?;
         if let Some(name) = name {
             validate_name(name)?;
         }

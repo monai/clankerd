@@ -1,14 +1,17 @@
 //! vmctl: Docker-style CLI over libclankerd.
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+mod exec;
+
 use clap::{Args, Parser, Subcommand};
-use libclankerd::vmm::LocalProcessVmm;
+use libclankerd::vmm::{LocalProcessVmm, VmspawnVmm};
 use libclankerd::{
     Engine, EngineConfig, Error, HostConfig, ImageInfo, LocalGuestdPopulator, MachineConfig,
-    MachineInfo, Status,
+    MachineInfo, PortBinding, Status,
 };
 
 #[derive(Parser)]
@@ -39,6 +42,13 @@ struct Cli {
     /// the directory of --dev-guestd.
     #[arg(long, global = true, env = "CLANKERD_BOOT_DIR", hide = true)]
     boot_dir: Option<PathBuf>,
+    /// clankerd-vmspawn helper binary (default: next to vmctl).
+    #[arg(long, global = true, env = "CLANKERD_VMSPAWN")]
+    vmspawn: Option<PathBuf>,
+    /// Static aarch64 Linux clankerd-guestd placed in the guest's boot
+    /// directory (default: next to vmctl, or ../linux-arm64/ as in build/rust).
+    #[arg(long, global = true, env = "CLANKERD_GUESTD")]
+    guestd: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -63,6 +73,10 @@ enum Command {
     },
     /// Show machine configuration and state as JSON.
     Inspect { machines: Vec<String> },
+    /// Print the console output (kernel, guestd and workload) of a machine.
+    Logs { machine: String },
+    /// Run a command in a running machine.
+    Exec(exec::ExecArgs),
     /// Remove machines.
     Rm {
         /// Remove running machines too.
@@ -85,6 +99,9 @@ struct CreateArgs {
     workdir: Option<String>,
     #[arg(long)]
     entrypoint: Option<String>,
+    /// Publish a guest port on host loopback: [IP:]HOST_PORT:GUEST_PORT.
+    #[arg(short = 'p', long = "publish", value_parser = parse_publish)]
+    publish: Vec<PortBinding>,
     image: String,
     /// Command and arguments.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -109,10 +126,13 @@ fn engine(cli: &Cli) -> Result<Engine, Error> {
         cli.runtime_dir.clone().unwrap_or(defaults.runtime_dir),
     );
     cfg.insecure_registries = cli.insecure_registries.clone();
-    // The image cache is always on for pull/images and for real VMs; the
-    // development stand-in only uses it when a cache directory is given.
+    // The image cache is always on for pull/images; create and run only use it
+    // when a cache directory is given.
     let wants_cache = matches!(cli.command, Command::Pull { .. } | Command::Images);
-    if cli.cache_dir.is_some() || wants_cache || cli.dev_guestd.is_none() {
+    // Creating machines from images needs a root-disk populator, which only the
+    // local development stand-in has so far; the libkrun-backed one is a
+    // follow-up, so real VMs keep the placeholder root until then.
+    if cli.cache_dir.is_some() || wants_cache {
         cfg.cache_dir = Some(
             cli.cache_dir
                 .clone()
@@ -127,8 +147,39 @@ fn engine(cli: &Cli) -> Result<Engine, Error> {
             .or_else(|| guestd.parent().map(PathBuf::from))
             .unwrap_or_default();
         cfg.populator = Some(Arc::new(LocalGuestdPopulator::new(guestd, boot_dir)));
+    } else if cfg!(target_os = "macos") || cli.vmspawn.is_some() {
+        let vmspawn = cli
+            .vmspawn
+            .clone()
+            .unwrap_or_else(|| sibling("clankerd-vmspawn", &["."]));
+        let guestd = cli
+            .guestd
+            .clone()
+            .unwrap_or_else(|| sibling("clankerd-guestd", &[".", "../linux-arm64"]));
+        let mut vmm = VmspawnVmm::new(vmspawn, guestd);
+        // Development: CLANKERD_VMSPAWN_DEV_LOCAL=1 runs guestd as a local process, not a VM.
+        if std::env::var_os("CLANKERD_VMSPAWN_DEV_LOCAL").is_some_and(|v| v == "1") {
+            vmm = vmm.dev_local();
+        }
+        cfg.vmm = Arc::new(vmm);
     }
     Engine::new(cfg)
+}
+
+/// Looks for `name` in directories relative to this executable; returns the
+/// first candidate path (existing or not) so errors name a concrete path.
+fn sibling(name: &str, dirs: &[&str]) -> PathBuf {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(PathBuf::from))
+        .unwrap_or_default();
+    let candidates: Vec<PathBuf> = dirs.iter().map(|d| exe_dir.join(d).join(name)).collect();
+    candidates
+        .iter()
+        .find(|p| p.exists())
+        .or(candidates.first())
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from(name))
 }
 
 fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error> {
@@ -141,7 +192,29 @@ fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error>
         working_dir: a.workdir.unwrap_or_default(),
         ..Default::default()
     };
-    engine.create(a.name.as_deref(), config, HostConfig::default())
+    let host_config = HostConfig {
+        port_bindings: a.publish,
+        ..Default::default()
+    };
+    engine.create(a.name.as_deref(), config, host_config)
+}
+
+/// Parses `[IP:]HOST_PORT:GUEST_PORT`. The library rejects non-loopback IPs.
+fn parse_publish(s: &str) -> Result<PortBinding, String> {
+    let port = |p: &str| {
+        p.parse::<u16>()
+            .map_err(|_| format!("invalid port \"{p}\""))
+    };
+    let parts: Vec<&str> = s.rsplitn(3, ':').collect();
+    match parts.as_slice() {
+        [guest, host] => Ok(PortBinding::loopback(port(host)?, port(guest)?)),
+        [guest, host, ip] => Ok(PortBinding {
+            host_ip: Some(ip.parse().map_err(|_| format!("invalid IP \"{ip}\""))?),
+            host_port: port(host)?,
+            guest_port: port(guest)?,
+        }),
+        _ => Err("expected [IP:]HOST_PORT:GUEST_PORT".into()),
+    }
 }
 
 /// Runs `f` over every name, printing each success via `ok` and each error;
@@ -185,6 +258,7 @@ fn run(cli: Cli) -> Result<u8, Error> {
             // Exit codes are 0..=255 on the host.
             Ok(m.wait()?.exit_code as u8)
         }
+        Command::Exec(args) => exec::run(&engine, args),
         Command::Create(args) => {
             println!("{}", create(&engine, args)?.id());
             Ok(0)
@@ -220,6 +294,11 @@ fn run(cli: Cli) -> Result<u8, Error> {
             }
             println!("{}", serde_json::to_string_pretty(&infos).unwrap());
             Ok(code)
+        }
+        Command::Logs { machine } => {
+            let bytes = engine.get(&machine)?.logs()?;
+            std::io::stdout().write_all(&bytes).map_err(Error::from)?;
+            Ok(0)
         }
         Command::Rm { force, machines } => Ok(each(&machines, |n| {
             engine.get(n)?.remove(force)?;

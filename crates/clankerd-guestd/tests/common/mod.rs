@@ -102,6 +102,7 @@ impl Guestd {
                 method: method.into(),
                 parameters: serde_json::to_value(params).unwrap(),
                 more: false,
+                upgrade: false,
             },
         )
         .unwrap();

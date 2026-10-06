@@ -66,6 +66,7 @@ fn guestd_unpack(tar: &Path, target: &Path, lenient: bool) -> UnpackSummary {
             })
             .unwrap(),
             more: false,
+            upgrade: false,
         },
     )
     .unwrap();

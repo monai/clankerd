@@ -22,6 +22,7 @@ test:
 # Rust workspace. Prerequisite: `mise install`. One command: `make rust`
 # (build + sign + verify); outputs land in build/rust/<os-arch>/.
 RUST_OUT := build/rust
+TARGET_DIR := $(or $(CARGO_TARGET_DIR),target)
 DARWIN := aarch64-apple-darwin
 MUSL := aarch64-unknown-linux-musl
 
@@ -40,8 +41,8 @@ rust-build:
 	SDKROOT=$(CURDIR)/scripts/macos-sdk-stubs cargo zigbuild --release --target $(DARWIN) -p vmctl -p clankerd-vmspawn
 	cargo zigbuild --release --target $(MUSL) -p clankerd-guestd
 	mkdir -p $(RUST_OUT)/darwin-arm64 $(RUST_OUT)/linux-arm64
-	cp target/$(DARWIN)/release/vmctl target/$(DARWIN)/release/clankerd-vmspawn $(RUST_OUT)/darwin-arm64/
-	cp target/$(MUSL)/release/clankerd-guestd $(RUST_OUT)/linux-arm64/
+	cp $(TARGET_DIR)/$(DARWIN)/release/vmctl $(TARGET_DIR)/$(DARWIN)/release/clankerd-vmspawn $(RUST_OUT)/darwin-arm64/
+	cp $(TARGET_DIR)/$(MUSL)/release/clankerd-guestd $(RUST_OUT)/linux-arm64/
 	scripts/build-e2fsprogs.sh $(RUST_OUT)/linux-arm64
 
 # Ad-hoc signs with the hypervisor entitlement (rcodesign works on Linux).

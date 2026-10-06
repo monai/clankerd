@@ -104,6 +104,7 @@ fn populate_over(socket: &Path, disk: &Path, size: u64, tar: &mut dyn Read) -> R
                 size: Some(size),
             })?,
             more: false,
+            upgrade: false,
         },
     )?;
     // An early error reply closes the stream under us; the reply below says why.
