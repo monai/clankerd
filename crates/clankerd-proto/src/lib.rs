@@ -2,8 +2,9 @@
 //!
 //! * [`varlink`]: the varlink wire format (NUL-terminated JSON messages).
 //! * [`guest`]: the `io.clankerd.Guest` interface (types and method names).
-//!
-//! The exec/tunnel frame codec lands here in later tickets.
+//! * [`frame`]: the frame codec for raw streams after a varlink `upgrade`
+//!   (exec now, tunnels later).
 
+pub mod frame;
 pub mod guest;
 pub mod varlink;

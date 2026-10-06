@@ -5,8 +5,14 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Instant;
 
-use clankerd_proto::guest::{Event, METHOD_EVENTS};
+use clankerd_proto::guest::{
+    ERROR_CONFLICT, ERROR_INVALID_PARAMETER, ERROR_NO_SUCH_EXEC, Event, METHOD_EVENTS,
+};
 use clankerd_proto::varlink::{self, Call, Reply};
+use serde::Serialize;
+use serde_json::Value;
+
+use crate::error::{Error, Result};
 
 /// A live `Events` stream.
 pub(crate) struct EventStream {
@@ -30,6 +36,7 @@ impl EventStream {
                 method: METHOD_EVENTS.into(),
                 parameters: serde_json::Value::Null,
                 more: true,
+                upgrade: false,
             },
         )?;
         Ok(EventStream {
@@ -65,6 +72,59 @@ impl EventStream {
                 Next::TimedOut
             }
             _ => Next::Closed,
+        }
+    }
+}
+
+/// Sends one call and returns the reply's parameters; guest errors map to [`Error`].
+pub(crate) fn call(socket: &Path, method: &str, params: &impl Serialize) -> Result<Value> {
+    Ok(send(socket, method, params, false)?.0)
+}
+
+/// Sends a call with `upgrade`. On success the returned reader carries the raw
+/// framed stream (it may already hold buffered frames); the write half is
+/// reachable through `get_ref`.
+pub(crate) fn upgrade(
+    socket: &Path,
+    method: &str,
+    params: &impl Serialize,
+) -> Result<BufReader<UnixStream>> {
+    Ok(send(socket, method, params, true)?.1)
+}
+
+fn send(
+    socket: &Path,
+    method: &str,
+    params: &impl Serialize,
+    upgrade: bool,
+) -> Result<(Value, BufReader<UnixStream>)> {
+    let mut conn = UnixStream::connect(socket)
+        .map_err(|e| Error::unavailable(format!("cannot reach the guest: {e}")))?;
+    varlink::write(
+        &mut conn,
+        &Call {
+            method: method.into(),
+            parameters: serde_json::to_value(params)?,
+            more: false,
+            upgrade,
+        },
+    )?;
+    let mut reader = BufReader::new(conn);
+    let reply: Reply = varlink::read(&mut reader)?
+        .ok_or_else(|| Error::unavailable("the guest closed the connection"))?;
+    match reply.error.as_deref() {
+        None => Ok((reply.parameters, reader)),
+        Some(name) => {
+            let message = reply.parameters["message"]
+                .as_str()
+                .unwrap_or(name)
+                .to_owned();
+            Err(match name {
+                ERROR_NO_SUCH_EXEC => Error::not_found(message),
+                ERROR_INVALID_PARAMETER => Error::invalid_parameter(message),
+                ERROR_CONFLICT => Error::conflict(message),
+                _ => Error::system(format!("{name}: {message}")),
+            })
         }
     }
 }
