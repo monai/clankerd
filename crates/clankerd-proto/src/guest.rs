@@ -19,7 +19,42 @@ pub struct Workload {
     pub env: Vec<String>,
     #[serde(default)]
     pub working_dir: String,
+    /// Docker `user[:group]` spec resolved against the image's passwd and
+    /// group files; empty runs as root.
+    #[serde(default)]
+    pub user: String,
+    /// The host's wall clock when the machine was started; guestd sets the
+    /// guest clock from it when it boots a root disk.
+    #[serde(default)]
+    pub clock: Option<Clock>,
 }
+
+/// A point in time as seconds and nanoseconds since the Unix epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Clock {
+    pub secs: i64,
+    pub nanos: u32,
+}
+
+impl Clock {
+    pub fn now() -> Self {
+        let d = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        Clock {
+            secs: d.as_secs() as i64,
+            nanos: d.subsec_nanos(),
+        }
+    }
+}
+
+/// Graceful stop: signals the workload with SIGTERM and returns at once. The
+/// machine then follows its normal end (the workload's exit is reported through
+/// `Events`, then processes are stopped, disks synced and unmounted and the
+/// machine powered off). The caller escalates to killing the VMM on a timeout.
+pub const METHOD_SHUTDOWN: &str = "io.clankerd.Guest.Shutdown";
+/// Signals the workload (parameters: [`SignalParams`], `id` unused).
+pub const METHOD_KILL: &str = "io.clankerd.Guest.Kill";
 
 /// Parameters of each reply of [`METHOD_EVENTS`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,7 +85,7 @@ pub struct ExecSpec {
     pub env: Vec<String>,
     #[serde(default)]
     pub working_dir: String,
-    /// Docker `user[:group]` spec; empty means the machine's user (root).
+    /// Docker `user[:group]` spec; empty means the machine's user (the workload's).
     #[serde(default)]
     pub user: String,
     #[serde(default)]

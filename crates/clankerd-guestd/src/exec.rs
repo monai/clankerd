@@ -34,6 +34,7 @@ pub type Failure = (&'static str, String);
 pub struct Registry {
     base_env: Vec<String>,
     base_cwd: String,
+    base_user: String,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
 }
 
@@ -51,10 +52,11 @@ struct SessionState {
 }
 
 impl Registry {
-    pub fn new(base_env: Vec<String>, base_cwd: String) -> Self {
+    pub fn new(base_env: Vec<String>, base_cwd: String, base_user: String) -> Self {
         Registry {
             base_env,
             base_cwd,
+            base_user,
             sessions: Mutex::new(HashMap::new()),
         }
     }
@@ -115,6 +117,7 @@ impl Registry {
             session: s,
             base_env: self.base_env.clone(),
             base_cwd: self.base_cwd.clone(),
+            base_user: self.base_user.clone(),
         })
     }
 }
@@ -203,6 +206,7 @@ pub struct ExecHandle {
     session: Arc<Session>,
     base_env: Vec<String>,
     base_cwd: String,
+    base_user: String,
 }
 
 struct Spawned {
@@ -259,7 +263,9 @@ impl ExecHandle {
             std::thread::spawn(move || pump_input(input, session, stdin_tx));
         }
 
-        let status = match child.wait() {
+        let waited = child.wait();
+        crate::power::release(child.id());
+        let status = match waited {
             Ok(s) => ExecStatus {
                 exit_code: s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0)),
                 signal: s.signal(),
@@ -287,13 +293,13 @@ impl ExecHandle {
 
     fn spawn(&self) -> Result<Spawned, (i32, String)> {
         let spec = &self.session.spec;
-        let resolved = if spec.user.is_empty() {
-            None
+        // Like Docker, an exec runs as the machine's user unless told otherwise.
+        let user_spec = if spec.user.is_empty() {
+            &self.base_user
         } else {
-            let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
-            let group = std::fs::read_to_string("/etc/group").unwrap_or_default();
-            Some(user::resolve(&spec.user, &passwd, &group).map_err(|e| (126, e))?)
+            &spec.user
         };
+        let resolved = user::lookup(user_spec).map_err(|e| (126, e))?;
 
         let mut cmd = Command::new(&spec.argv[0]);
         cmd.args(&spec.argv[1..]).env_clear();
@@ -319,27 +325,20 @@ impl ExecHandle {
         }
 
         let tty = spec.tty;
-        let creds = resolved.map(|r| (r.uid, r.gid, r.groups));
-        let creds_groups: Vec<libc::gid_t> = creds.as_ref().map_or(vec![], |c| c.2.clone());
         // SAFETY: only async-signal-safe libc calls between fork and exec.
         unsafe {
             cmd.pre_exec(move || {
                 if libc::setsid() < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
-                if tty && libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
+                if tty && libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
                     return Err(std::io::Error::last_os_error());
-                }
-                if let Some((uid, gid, _)) = &creds {
-                    // Non-root callers cannot change groups; the later setuid/setgid
-                    // then fail unless they are no-ops, which is the right outcome.
-                    libc::setgroups(creds_groups.len() as _, creds_groups.as_ptr());
-                    if libc::setgid(*gid) < 0 || libc::setuid(*uid) < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
                 }
                 Ok(())
             });
+        }
+        if let Some(user) = &resolved {
+            user::drop_privileges(&mut cmd, user);
         }
 
         let fail = |e: std::io::Error| {
@@ -358,7 +357,7 @@ impl ExecHandle {
             cmd.stdin(Stdio::from(dup(&slave)?))
                 .stdout(Stdio::from(dup(&slave)?))
                 .stderr(Stdio::from(slave));
-            let child = cmd.spawn().map_err(fail)?;
+            let child = crate::power::spawn_owned(&mut cmd).map_err(fail)?;
             // The Command still owns slave dups; release them so EOF can happen.
             drop(cmd);
             let master = Arc::new(master);
@@ -378,7 +377,7 @@ impl ExecHandle {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-            let mut child = cmd.spawn().map_err(fail)?;
+            let mut child = crate::power::spawn_owned(&mut cmd).map_err(fail)?;
             let stdin = child.stdin.take().map(|p| File::from(OwnedFd::from(p)));
             let out = File::from(OwnedFd::from(child.stdout.take().unwrap()));
             let err = File::from(OwnedFd::from(child.stderr.take().unwrap()));

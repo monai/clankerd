@@ -9,31 +9,12 @@ mod common;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::*;
 use libclankerd::vmm::VmspawnVmm;
 use libclankerd::{ErrorKind, Status};
-
-fn built(package: &str) -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let profile_dir = exe.parent().unwrap().parent().unwrap().to_path_buf();
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut cmd = Command::new(cargo);
-    cmd.args(["build", "-q", "-p", package]);
-    if profile_dir.file_name().is_some_and(|n| n == "release") {
-        cmd.arg("--release");
-    }
-    assert!(cmd.status().unwrap().success(), "building {package} failed");
-    profile_dir.join(package)
-}
-
-fn vmspawn_path() -> PathBuf {
-    static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| built("clankerd-vmspawn")).clone()
-}
 
 fn dev_vmm() -> Arc<VmspawnVmm> {
     Arc::new(VmspawnVmm::new(vmspawn_path(), guestd_path()).dev_local())
@@ -177,4 +158,59 @@ fn published_ports_work_through_the_helper_proxy() {
     conn.read_to_string(&mut out).unwrap();
     assert_eq!(out, "guest saw ping");
     m.remove(true).unwrap();
+}
+
+fn spawn_spec(env: &Env, id: &str) -> serde_json::Value {
+    let path = env
+        .root()
+        .join("state/machines")
+        .join(id)
+        .join("vmspawn.json");
+    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+#[test]
+fn a_machine_with_a_root_disk_hands_it_to_the_helper() {
+    use common::registry::{Registry, layer};
+
+    let env = Env::new();
+    let registry = Registry::start();
+    registry.push("test/app", "v1", &[layer(&[("hello", b"hi")])]);
+    let mut cfg = env.config(dev_vmm());
+    cfg.cache_dir = Some(env.root().join("cache"));
+    cfg.populator = Some(Arc::new(TarCapture::default()));
+    cfg.insecure_registries = vec![registry.addr.clone()];
+    let engine = libclankerd::Engine::new(cfg).unwrap();
+    let m = engine
+        .create(
+            None,
+            libclankerd::MachineConfig {
+                image: format!("{}/test/app:v1", registry.addr),
+                cmd: vec!["/bin/true".into()],
+                ..Default::default()
+            },
+            libclankerd::HostConfig::default(),
+        )
+        .unwrap();
+    m.start().unwrap();
+    m.wait().unwrap();
+
+    let spec = spawn_spec(&env, m.id());
+    let disk = env
+        .root()
+        .join("state/machines")
+        .join(m.id())
+        .join(libclankerd::ROOT_DISK);
+    assert_eq!(spec["root_disk"], disk.to_str().unwrap());
+    assert_eq!(spec["populate"], false);
+}
+
+#[test]
+fn a_machine_without_an_image_boots_from_the_boot_directory_alone() {
+    let env = Env::new();
+    let engine = libclankerd::Engine::new(env.config(dev_vmm())).unwrap();
+    let m = create(&engine, "bootdir", "exit 0");
+    m.start().unwrap();
+    m.wait().unwrap();
+    assert!(spawn_spec(&env, m.id())["root_disk"].is_null());
 }

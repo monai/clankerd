@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 mod exec;
 
@@ -11,7 +12,7 @@ use clap::{Args, Parser, Subcommand};
 use libclankerd::vmm::{LocalProcessVmm, VmspawnVmm};
 use libclankerd::{
     Engine, EngineConfig, Error, HostConfig, ImageInfo, LocalGuestdPopulator, MachineConfig,
-    MachineInfo, PortBinding, Status,
+    MachineInfo, PortBinding, Status, VmspawnPopulator,
 };
 
 #[derive(Parser)]
@@ -24,7 +25,7 @@ struct Cli {
     #[arg(long, global = true, env = "CLANKERD_RUNTIME_DIR")]
     runtime_dir: Option<PathBuf>,
     /// Development: run clankerd-guestd from this path as a local process
-    /// instead of booting a VM (no libkrun backend is wired up yet).
+    /// instead of booting a VM.
     #[arg(long, global = true, env = "CLANKERD_DEV_GUESTD", hide = true)]
     dev_guestd: Option<PathBuf>,
     /// Directory for the image cache (blobs, base root disks).
@@ -42,6 +43,10 @@ struct Cli {
     /// the directory of --dev-guestd.
     #[arg(long, global = true, env = "CLANKERD_BOOT_DIR", hide = true)]
     boot_dir: Option<PathBuf>,
+    /// Boot the machine's `boot/` directory as the guest root instead of an
+    /// image's root disk (the first-boot check of docs/libkrun-first-boot.md).
+    #[arg(long, global = true, env = "CLANKERD_BOOT_DIR_ROOT", hide = true)]
+    boot_dir_root: bool,
     /// clankerd-vmspawn helper binary (default: next to vmctl).
     #[arg(long, global = true, env = "CLANKERD_VMSPAWN")]
     vmspawn: Option<PathBuf>,
@@ -60,11 +65,26 @@ enum Command {
     /// List cached images.
     Images,
     /// Create a machine, start it, wait for it, and exit with its exit code.
-    Run(CreateArgs),
+    Run(RunArgs),
     /// Create a machine without starting it.
     Create(CreateArgs),
     /// Start created or exited machines.
     Start { machines: Vec<String> },
+    /// Stop machines gracefully: the workload gets SIGTERM, the machine syncs,
+    /// unmounts and powers off; it is killed after the timeout.
+    Stop {
+        /// Seconds to wait before killing.
+        #[arg(short = 't', long = "time", default_value_t = 10)]
+        time: u64,
+        machines: Vec<String>,
+    },
+    /// Kill machines immediately (or send them a signal).
+    Kill {
+        /// Signal name or number.
+        #[arg(short = 's', long, default_value = "KILL")]
+        signal: String,
+        machines: Vec<String>,
+    },
     /// List machines.
     Ps {
         /// Show all machines, not only running ones.
@@ -84,6 +104,15 @@ enum Command {
         force: bool,
         machines: Vec<String>,
     },
+}
+
+#[derive(Args)]
+struct RunArgs {
+    /// Start the machine and print its id, without waiting for it to exit.
+    #[arg(short = 'd', long)]
+    detach: bool,
+    #[command(flatten)]
+    create: CreateArgs,
 }
 
 #[derive(Args)]
@@ -126,12 +155,15 @@ fn engine(cli: &Cli) -> Result<Engine, Error> {
         cli.runtime_dir.clone().unwrap_or(defaults.runtime_dir),
     );
     cfg.insecure_registries = cli.insecure_registries.clone();
-    // The image cache is always on for pull/images; create and run only use it
-    // when a cache directory is given.
-    let wants_cache = matches!(cli.command, Command::Pull { .. } | Command::Images);
-    // Creating machines from images needs a root-disk populator, which only the
-    // local development stand-in has so far; the libkrun-backed one is a
-    // follow-up, so real VMs keep the placeholder root until then.
+    // Real machines boot images, so the cache is on whenever libkrun is the
+    // backend; the development stand-ins use it only when a cache directory
+    // is given (their machines otherwise run host commands).
+    let dev_local = std::env::var_os("CLANKERD_VMSPAWN_DEV_LOCAL").is_some_and(|v| v == "1");
+    let libkrun = cli.dev_guestd.is_none()
+        && (cfg!(target_os = "macos") || cli.vmspawn.is_some())
+        && !dev_local
+        && !cli.boot_dir_root;
+    let wants_cache = matches!(cli.command, Command::Pull { .. } | Command::Images) || libkrun;
     if cli.cache_dir.is_some() || wants_cache {
         cfg.cache_dir = Some(
             cli.cache_dir
@@ -156,12 +188,18 @@ fn engine(cli: &Cli) -> Result<Engine, Error> {
             .guestd
             .clone()
             .unwrap_or_else(|| sibling("clankerd-guestd", &[".", "../linux-arm64"]));
+        // Base root disks are built by a population boot of the same helper;
+        // mke2fs and the other static tools sit next to guestd.
+        let guest_dir = guestd.parent().map(PathBuf::from).unwrap_or_default();
+        let mut populator = VmspawnPopulator::new(&vmspawn, guest_dir);
         let mut vmm = VmspawnVmm::new(vmspawn, guestd);
         // Development: CLANKERD_VMSPAWN_DEV_LOCAL=1 runs guestd as a local process, not a VM.
-        if std::env::var_os("CLANKERD_VMSPAWN_DEV_LOCAL").is_some_and(|v| v == "1") {
+        if dev_local {
             vmm = vmm.dev_local();
+            populator = populator.dev_local();
         }
         cfg.vmm = Arc::new(vmm);
+        cfg.populator = Some(Arc::new(populator));
     }
     Engine::new(cfg)
 }
@@ -253,8 +291,12 @@ fn run(cli: Cli) -> Result<u8, Error> {
             Ok(0)
         }
         Command::Run(args) => {
-            let m = create(&engine, args)?;
+            let m = create(&engine, args.create)?;
             m.start()?;
+            if args.detach {
+                println!("{}", m.id());
+                return Ok(0);
+            }
             // Exit codes are 0..=255 on the host.
             Ok(m.wait()?.exit_code as u8)
         }
@@ -267,6 +309,17 @@ fn run(cli: Cli) -> Result<u8, Error> {
             engine.get(n)?.start()?;
             Ok(n.to_owned())
         })),
+        Command::Stop { time, machines } => Ok(each(&machines, |n| {
+            engine.get(n)?.stop(Duration::from_secs(time))?;
+            Ok(n.to_owned())
+        })),
+        Command::Kill { signal, machines } => {
+            let signal = parse_signal(&signal).map_err(Error::invalid_parameter)?;
+            Ok(each(&machines, |n| {
+                engine.get(n)?.kill(signal)?;
+                Ok(n.to_owned())
+            }))
+        }
         Command::Ps { all } => {
             println!("{:<14}{:<24}{:<24}NAMES", "MACHINE ID", "IMAGE", "STATUS");
             for info in engine.list(all)? {
@@ -305,6 +358,31 @@ fn run(cli: Cli) -> Result<u8, Error> {
             Ok(n.to_owned())
         })),
     }
+}
+
+/// `KILL`, `SIGKILL`, `kill` or `9`.
+fn parse_signal(s: &str) -> Result<i32, String> {
+    if let Ok(n) = s.parse::<i32>() {
+        return if (1..=64).contains(&n) {
+            Ok(n)
+        } else {
+            Err(format!("invalid signal number {n}"))
+        };
+    }
+    let name = s.to_ascii_uppercase();
+    let name = name.strip_prefix("SIG").unwrap_or(&name);
+    Ok(match name {
+        "HUP" => libc::SIGHUP,
+        "INT" => libc::SIGINT,
+        "QUIT" => libc::SIGQUIT,
+        "KILL" => libc::SIGKILL,
+        "USR1" => libc::SIGUSR1,
+        "USR2" => libc::SIGUSR2,
+        "TERM" => libc::SIGTERM,
+        "CONT" => libc::SIGCONT,
+        "STOP" => libc::SIGSTOP,
+        _ => return Err(format!("unknown signal \"{s}\"")),
+    })
 }
 
 fn status_text(info: &MachineInfo) -> String {

@@ -62,7 +62,25 @@ impl Registry {
     /// Publishes an image (linux/arm64) built from gzip'd `layers` as
     /// `repo:tag` and returns its manifest digest.
     pub fn push(&self, repo: &str, tag: &str, layers: &[Vec<u8>]) -> String {
-        let config = br#"{"architecture":"arm64","os":"linux","config":{},"rootfs":{"type":"layers","diff_ids":[]}}"#.to_vec();
+        self.push_with_config(repo, tag, layers, serde_json::json!({}))
+    }
+
+    /// Like [`Registry::push`], with the image config's `config` object
+    /// (`Entrypoint`, `Cmd`, `Env`, `User`, `WorkingDir`).
+    pub fn push_with_config(
+        &self,
+        repo: &str,
+        tag: &str,
+        layers: &[Vec<u8>],
+        runtime: serde_json::Value,
+    ) -> String {
+        let config = serde_json::to_vec(&serde_json::json!({
+            "architecture": "arm64",
+            "os": "linux",
+            "config": runtime,
+            "rootfs": {"type": "layers", "diff_ids": []},
+        }))
+        .unwrap();
         let mut descriptors = Vec::new();
         for l in layers {
             let digest = sha256(l);

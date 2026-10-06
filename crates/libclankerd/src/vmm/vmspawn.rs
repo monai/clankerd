@@ -3,7 +3,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixListener;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 use clankerd_proto::spawn::{BOOT_GUESTD, BOOT_WORKLOAD, SpawnSpec};
 
@@ -81,6 +81,8 @@ impl Vmm for VmspawnVmm {
             host_socket: spec.host_socket.clone(),
             cpus: spec.cpus.unwrap_or(DEFAULT_CPUS).min(255) as u8,
             memory_mib: (spec.memory.unwrap_or(DEFAULT_MEMORY) / (1024 * 1024)).max(128) as u32,
+            root_disk: spec.root_disk.clone(),
+            populate: false,
         };
         let spec_file = spec.dir.join(SPEC_FILE);
         fs::write(&spec_file, serde_json::to_vec_pretty(&spawn_spec)?)?;
@@ -88,41 +90,13 @@ impl Vmm for VmspawnVmm {
         let _ = fs::remove_file(&spec.guest_socket);
         let listener = UnixListener::bind(&spec.guest_socket)
             .map_err(|e| Error::system(format!("binding {}: {e}", spec.guest_socket.display())))?;
-        let fd = listener.as_raw_fd();
-
-        let log = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(spec.dir.join(LOG_FILE))?;
-        let mut cmd = Command::new(&self.vmspawn);
-        cmd.arg("--spec").arg(&spec_file);
-        if self.dev_local {
-            cmd.arg("--dev-local");
-        }
-        cmd.env("LISTEN_FDS", "1")
-            .stdin(Stdio::null())
-            .stdout(log.try_clone()?)
-            .stderr(log)
-            .process_group(0);
-        // SAFETY: only async-signal-safe calls (dup2, fcntl) between fork and exec.
-        unsafe {
-            cmd.pre_exec(move || {
-                if fd == 3 {
-                    let flags = libc::fcntl(3, libc::F_GETFD);
-                    libc::fcntl(3, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
-                } else if libc::dup2(fd, 3) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let mut child = cmd.spawn().map_err(|e| {
-            Error::unavailable(format!(
-                "cannot start clankerd-vmspawn ({}): {e}",
-                self.vmspawn.display()
-            ))
-        })?;
+        let mut child = spawn_helper(
+            &self.vmspawn,
+            &spec_file,
+            &spec.dir.join(LOG_FILE),
+            &listener,
+            self.dev_local,
+        )?;
         let pid = child.id();
         // Reap it if it ends while we are still alive.
         std::thread::spawn(move || {
@@ -140,6 +114,52 @@ impl Vmm for VmspawnVmm {
         let log = fs::read_to_string(spec.dir.join(LOG_FILE)).unwrap_or_default();
         Err(explain_exit(&log))
     }
+}
+
+/// Starts `clankerd-vmspawn --spec spec_file` in its own process group, with
+/// `listener` as its guest endpoint (`LISTEN_FDS`) and stdout/stderr going to
+/// `log_path`.
+pub(crate) fn spawn_helper(
+    vmspawn: &Path,
+    spec_file: &Path,
+    log_path: &Path,
+    listener: &UnixListener,
+    dev_local: bool,
+) -> Result<Child> {
+    let fd = listener.as_raw_fd();
+    let log = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(log_path)?;
+    let mut cmd = Command::new(vmspawn);
+    cmd.arg("--spec").arg(spec_file);
+    if dev_local {
+        cmd.arg("--dev-local");
+    }
+    cmd.env("LISTEN_FDS", "1")
+        .stdin(Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log)
+        .process_group(0);
+    // SAFETY: only async-signal-safe calls (dup2, fcntl) between fork and exec.
+    unsafe {
+        cmd.pre_exec(move || {
+            if fd == 3 {
+                let flags = libc::fcntl(3, libc::F_GETFD);
+                libc::fcntl(3, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+            } else if libc::dup2(fd, 3) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    cmd.spawn().map_err(|e| {
+        Error::unavailable(format!(
+            "cannot start clankerd-vmspawn ({}): {e}",
+            vmspawn.display()
+        ))
+    })
 }
 
 /// Turns the helper's captured stderr into what the developer should read.

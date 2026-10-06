@@ -99,6 +99,46 @@ pub fn resolve(spec: &str, passwd: &str, group: &str) -> Result<Resolved, String
     })
 }
 
+/// Resolves `spec` against the guest's own `/etc/passwd` and `/etc/group`
+/// (the image's, once guestd has pivoted into it). An empty spec means "the
+/// machine's user" and resolves to nothing.
+pub fn lookup(spec: &str) -> Result<Option<Resolved>, String> {
+    if spec.is_empty() {
+        return Ok(None);
+    }
+    let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
+    let group = std::fs::read_to_string("/etc/group").unwrap_or_default();
+    resolve(spec, &passwd, &group).map(Some)
+}
+
+/// The home directory of root, for processes that run without a `-u`.
+pub fn root_home() -> Option<String> {
+    let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
+    passwd_entries(&passwd)
+        .find(|p| p.uid == 0)
+        .map(|p| p.home.to_owned())
+}
+
+/// Makes `cmd` switch to `user` between fork and exec. A failing switch (not
+/// permitted, unknown ids) fails the spawn, never runs the command as someone else.
+pub fn drop_privileges(cmd: &mut std::process::Command, user: &Resolved) {
+    use std::os::unix::process::CommandExt;
+    let (uid, gid) = (user.uid, user.gid);
+    let groups: Vec<libc::gid_t> = user.groups.clone();
+    // SAFETY: only async-signal-safe libc calls between fork and exec.
+    unsafe {
+        cmd.pre_exec(move || {
+            // Non-root callers cannot change groups; the later setuid/setgid
+            // then fail unless they are no-ops, which is the right outcome.
+            libc::setgroups(groups.len() as _, groups.as_ptr());
+            if libc::setgid(gid) < 0 || libc::setuid(uid) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

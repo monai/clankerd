@@ -113,7 +113,13 @@ impl Pty {
         // SAFETY: openpty fills fds we then own.
         unsafe {
             assert_eq!(
-                libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null(), &ws),
+                libc::openpty(
+                    &mut m,
+                    &mut s,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::from_ref(&ws).cast_mut(),
+                ),
                 0
             );
             Pty {
@@ -132,7 +138,7 @@ impl Pty {
         unsafe {
             cmd.pre_exec(move || {
                 libc::setsid();
-                libc::ioctl(slave, libc::TIOCSCTTY, 0);
+                libc::ioctl(slave, libc::TIOCSCTTY as _, 0);
                 Ok(())
             });
         }

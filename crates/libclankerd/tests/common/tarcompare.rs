@@ -280,7 +280,20 @@ pub fn lgetxattr(path: &Path, name: &str) -> Option<Vec<u8>> {
     let n = CString::new(name).unwrap();
     let mut buf = vec![0u8; 65536];
     // SAFETY: valid NUL-terminated strings and a writable buffer of the given length.
+    #[cfg(target_os = "linux")]
     let r = unsafe { libc::lgetxattr(p.as_ptr(), n.as_ptr(), buf.as_mut_ptr().cast(), buf.len()) };
+    // SAFETY: as above; macOS spells the no-follow variant as a flag.
+    #[cfg(target_os = "macos")]
+    let r = unsafe {
+        libc::getxattr(
+            p.as_ptr(),
+            n.as_ptr(),
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            0,
+            libc::XATTR_NOFOLLOW,
+        )
+    };
     if r < 0 {
         return None;
     }

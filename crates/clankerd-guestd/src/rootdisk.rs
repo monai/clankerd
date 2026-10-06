@@ -83,7 +83,7 @@ pub fn handle(
     let _ = varlink::write(out, &reply);
     if result.is_ok() && ctx.populate_mode && call.method == METHOD_POPULATE_DISK {
         // The population boot has done its job: power off.
-        std::process::exit(0);
+        crate::power::exit_machine();
     }
     true
 }
@@ -184,6 +184,11 @@ fn populate_disk(
     p: PopulateDisk,
 ) -> Result<Value, Failure> {
     let device = Path::new(&p.device);
+    if ctx.lenient && device.is_dir() {
+        // Development without root or a block device: unpack straight into
+        // the directory, skipping format and mount.
+        return summary(unpack_stream(input, device, true)?);
+    }
     format_device(ctx, device, p.size, None)?;
 
     let loop_dev = if fs::metadata(device)?.is_file() {
