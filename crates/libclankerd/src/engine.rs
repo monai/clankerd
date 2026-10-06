@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::config::{HostConfig, MachineConfig};
 use crate::error::{Error, Result};
+use crate::image_config::ImageConfig;
 use crate::images::{ImageInfo, ImageStore};
 use crate::machine::{Machine, MachineInfo};
 use crate::rootdisk::{DiskPopulator, clone_file, ensure_base};
@@ -210,7 +211,8 @@ impl Engine {
         if config.image.is_empty() {
             return Err(Error::invalid_parameter("image is required"));
         }
-        if config.entrypoint.is_empty() && config.cmd.is_empty() {
+        // With an image cache the image may supply the command (merged below).
+        if self.inner.images.is_none() && config.entrypoint.is_empty() && config.cmd.is_empty() {
             return Err(Error::invalid_parameter("no command specified"));
         }
         validate_host_config(&host_config)?;
@@ -222,9 +224,16 @@ impl Engine {
 
         // Resolve and pin the image, and build its base disk, before taking the
         // lock: pulling and building can take minutes.
+        let mut config = config;
+        let mut image_config = None;
         let base = match &self.inner.images {
             Some(store) => {
                 let image = self.resolve_image(store, &config.image)?;
+                let defaults = ImageConfig::parse(&image.config)?;
+                // What runs is decided now, from the pinned image: the stored
+                // configuration is the merged one, as in Docker's inspect.
+                config = defaults.merge(&config)?;
+                image_config = Some(defaults);
                 let populator = self
                     .inner
                     .populator
@@ -254,6 +263,7 @@ impl Engine {
                 config,
                 host_config,
                 image_id: base.as_ref().map(|(id, _)| id.clone()).unwrap_or_default(),
+                image_config,
             };
             self.inner.store.create(&record, &MachineState::created())?;
         }

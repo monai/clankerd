@@ -11,7 +11,8 @@
 //! * `machine`: [`Machine`] handle and the start/monitor/reattach lifecycle.
 //! * `config`: [`MachineConfig`] (what runs) and [`HostConfig`] (how it is hosted).
 //! * `state`: [`MachineState`], [`Status`], [`WaitResult`].
-//! * `images`: the image cache (pull, list, resolve); `merge`: layers to one tar;
+//! * `image_config`: the OCI image config and Docker's merge rules over it;
+//!   `images`: the image cache (pull, list, resolve); `merge`: layers to one tar;
 //!   `rootdisk`: base root disk building and per-machine clones.
 //! * `store`: atomic on-disk persistence of config and state (private).
 //! * `exec`: [`Exec`] lifecycle (create, start, resize, kill, inspect) and its streams.
@@ -28,6 +29,7 @@ mod engine;
 mod error;
 mod exec;
 mod guest;
+mod image_config;
 mod images;
 mod machine;
 mod merge;
@@ -41,6 +43,7 @@ pub use config::{HostConfig, MachineConfig, PortBinding, SocketBinding};
 pub use engine::{Engine, EngineConfig, ROOT_DISK};
 pub use error::{Error, ErrorKind, Result};
 pub use exec::{Exec, ExecConfig, ExecInfo, ExecOutput, ExecStatus, ExecStdin, ExecStreams};
+pub use image_config::ImageConfig;
 pub use images::{ImageInfo, LayerInfo};
 pub use machine::{Machine, MachineInfo};
 pub use rootdisk::{DiskPopulator, LocalGuestdPopulator};

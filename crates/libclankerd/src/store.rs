@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{HostConfig, MachineConfig};
 use crate::error::{Error, Result};
+use crate::image_config::ImageConfig;
 use crate::state::MachineState;
 
 /// The immutable part of a machine record.
@@ -25,6 +26,9 @@ pub struct Record {
     /// empty when the engine has no image cache.
     #[serde(default)]
     pub image_id: String,
+    /// The image's runtime defaults at create time (`None` without an image cache).
+    #[serde(default)]
+    pub image_config: Option<ImageConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +141,7 @@ mod tests {
             config: MachineConfig::default(),
             host_config: HostConfig::default(),
             image_id: String::new(),
+            image_config: None,
         };
         store.create(&record, &MachineState::created()).unwrap();
 

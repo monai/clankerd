@@ -13,6 +13,7 @@ use crate::engine::Inner;
 use crate::error::{Error, Result};
 use crate::exec::{Exec, ExecConfig};
 use crate::guest::{EventStream, Next};
+use crate::image_config::ImageConfig;
 use crate::state::{MachineState, Status, WaitResult};
 use crate::tunnel::{GuestBinding, MachineTunnels, PublishedPort, validate_port_binding};
 use crate::vmm::BootSpec;
@@ -27,6 +28,8 @@ pub struct MachineInfo {
     pub host_config: HostConfig,
     /// Digest the image was pinned to when the machine was created.
     pub image_id: String,
+    /// The image's runtime defaults the configuration above was merged over.
+    pub image_config: Option<ImageConfig>,
     pub state: MachineState,
 }
 
@@ -58,6 +61,7 @@ impl Machine {
             config: record.config,
             host_config: record.host_config,
             image_id: record.image_id,
+            image_config: record.image_config,
             state,
         })
     }
