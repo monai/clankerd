@@ -39,11 +39,9 @@ pub fn compare(tar_path: &Path, root: &Path, privileged: bool) -> Report {
     let mut ar = tar::Archive::new(std::fs::File::open(tar_path).unwrap());
     // Last entry for a path wins, like an unpack does.
     let mut last: BTreeMap<PathBuf, usize> = BTreeMap::new();
-    let mut index = 0;
-    for e in ar.entries().unwrap() {
+    for (index, e) in ar.entries().unwrap().enumerate() {
         let e = e.unwrap();
         last.insert(rel(&e.path_bytes()), index);
-        index += 1;
     }
     let mut ar = tar::Archive::new(std::fs::File::open(tar_path).unwrap());
     for (i, e) in ar.entries().unwrap().enumerate() {

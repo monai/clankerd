@@ -32,8 +32,12 @@ rust-lint:
 rust-test:
 	cargo test --workspace
 
+# vmctl links Security.framework and CoreFoundation (TLS certificate
+# verification via rustls-platform-verifier). Linux has no macOS SDK, so the
+# darwin link uses an SDK root holding link-time stubs of just the symbols we
+# import (scripts/macos-sdk-stubs); dyld binds them to the real frameworks.
 rust-build:
-	cargo zigbuild --release --target $(DARWIN) -p vmctl -p clankerd-vmspawn
+	SDKROOT=$(CURDIR)/scripts/macos-sdk-stubs cargo zigbuild --release --target $(DARWIN) -p vmctl -p clankerd-vmspawn
 	cargo zigbuild --release --target $(MUSL) -p clankerd-guestd
 	mkdir -p $(RUST_OUT)/darwin-arm64 $(RUST_OUT)/linux-arm64
 	cp target/$(DARWIN)/release/vmctl target/$(DARWIN)/release/clankerd-vmspawn $(RUST_OUT)/darwin-arm64/

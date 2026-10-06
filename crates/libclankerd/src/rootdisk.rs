@@ -189,7 +189,7 @@ pub(crate) fn clone_file(src: &Path, dst: &Path) -> Result<()> {
     let output = File::create(dst)?;
     #[cfg(target_os = "linux")]
     {
-        const FICLONE: libc::c_ulong = 0x4004_9409;
+        const FICLONE: libc::Ioctl = 0x4004_9409 as libc::Ioctl;
         // SAFETY: FICLONE takes the source file descriptor.
         if unsafe { libc::ioctl(output.as_raw_fd(), FICLONE, input.as_raw_fd()) } == 0 {
             return Ok(());

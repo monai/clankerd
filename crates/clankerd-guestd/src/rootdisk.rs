@@ -252,10 +252,10 @@ struct LoopDevice {
     path: PathBuf,
 }
 
-const LOOP_SET_FD: libc::c_ulong = 0x4C00;
-const LOOP_CLR_FD: libc::c_ulong = 0x4C01;
-const LOOP_SET_STATUS64: libc::c_ulong = 0x4C04;
-const LOOP_CTL_GET_FREE: libc::c_ulong = 0x4C82;
+const LOOP_SET_FD: libc::Ioctl = 0x4C00 as libc::Ioctl;
+const LOOP_CLR_FD: libc::Ioctl = 0x4C01 as libc::Ioctl;
+const LOOP_SET_STATUS64: libc::Ioctl = 0x4C04 as libc::Ioctl;
+const LOOP_CTL_GET_FREE: libc::Ioctl = 0x4C82 as libc::Ioctl;
 const LO_FLAGS_AUTOCLEAR: u32 = 4;
 
 impl LoopDevice {

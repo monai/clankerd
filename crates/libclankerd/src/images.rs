@@ -150,6 +150,9 @@ impl ImageStore {
         let unavailable = |what: &str, e: &dyn std::fmt::Display| {
             Error::unavailable(format!("{what} {canonical}: {e}"))
         };
+        // ring, not aws-lc: aws-lc-sys does not link with zig for darwin. Fails
+        // harmlessly when a provider is already installed.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let client = Client::new(ClientConfig {
             protocol: if self.insecure_registries.is_empty() {
                 ClientProtocol::Https
