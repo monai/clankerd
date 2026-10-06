@@ -1,7 +1,6 @@
 ---
 name: clankerd
 description: How to use `guestctl` in the VM to lease ports and `.local` names and drive the host's Chrome.
-disable-model-invocation: true
 ---
 
 # clankerd
