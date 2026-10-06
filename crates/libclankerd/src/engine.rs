@@ -102,6 +102,8 @@ pub(crate) struct Inner {
     pub guarded: Mutex<HashSet<String>>,
     /// Signalled on every state change.
     pub changed: Condvar,
+    /// Machines whose VMM was killed on purpose (their end is exit code 137, not `dead`).
+    pub forced: Mutex<HashSet<String>>,
     /// Tunnel resources of running machines, by id.
     pub tunnels: Mutex<HashMap<String, Arc<MachineTunnels>>>,
 }
@@ -119,6 +121,10 @@ impl Inner {
         self.store.save_state(id, &state)?;
         self.changed.notify_all();
         Ok(())
+    }
+
+    pub fn forced(&self) -> MutexGuard<'_, HashSet<String>> {
+        self.forced.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn tunnels(&self) -> MutexGuard<'_, HashMap<String, Arc<MachineTunnels>>> {
@@ -193,6 +199,7 @@ impl Engine {
             populator: config.populator,
             guarded: Mutex::default(),
             changed: Condvar::new(),
+            forced: Mutex::default(),
             tunnels: Mutex::default(),
         });
         for id in inner.store.ids()? {

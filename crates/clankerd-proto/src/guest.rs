@@ -25,6 +25,14 @@ pub struct Workload {
     pub user: String,
 }
 
+/// Graceful stop: signals the workload with SIGTERM and returns at once. The
+/// machine then follows its normal end (the workload's exit is reported through
+/// `Events`, then processes are stopped, disks synced and unmounted and the
+/// machine powered off). The caller escalates to killing the VMM on a timeout.
+pub const METHOD_SHUTDOWN: &str = "io.clankerd.Guest.Shutdown";
+/// Signals the workload (parameters: [`SignalParams`], `id` unused).
+pub const METHOD_KILL: &str = "io.clankerd.Guest.Kill";
+
 /// Parameters of each reply of [`METHOD_EVENTS`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "lowercase")]

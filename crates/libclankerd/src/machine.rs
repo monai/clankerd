@@ -5,14 +5,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use clankerd_proto::guest::{Event, Workload};
+use clankerd_proto::guest::{Event, METHOD_KILL, METHOD_SHUTDOWN, SignalParams, Workload};
 use serde::Serialize;
 
 use crate::config::{HostConfig, MachineConfig, PortBinding};
 use crate::engine::Inner;
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorKind, Result};
 use crate::exec::{Exec, ExecConfig};
-use crate::guest::{EventStream, Next};
+use crate::guest::{self, EventStream, Next};
 use crate::image_config::ImageConfig;
 use crate::state::{MachineState, Status, WaitResult};
 use crate::tunnel::{GuestBinding, MachineTunnels, PublishedPort, validate_port_binding};
@@ -203,21 +203,94 @@ impl Machine {
     /// Blocks until the machine is not running and returns its exit code.
     /// Returns immediately for a machine that never started.
     pub fn wait(&self) -> Result<WaitResult> {
+        Ok(self
+            .wait_until(None)?
+            .expect("waiting without a deadline ends with a result"))
+    }
+
+    /// Like [`Machine::wait`], giving up with `None` at `deadline`.
+    fn wait_until(&self, deadline: Option<Instant>) -> Result<Option<WaitResult>> {
         let mut starting = self.inner.lock();
         loop {
             let state = self.inner.store.load_state(&self.id)?;
             if state.status != Status::Running && !starting.contains(&self.id) {
-                return Ok(WaitResult {
+                return Ok(Some(WaitResult {
                     exit_code: state.exit_code,
-                });
+                }));
+            }
+            let mut nap = Duration::from_millis(500);
+            if let Some(deadline) = deadline {
+                match deadline.checked_duration_since(Instant::now()) {
+                    Some(left) if !left.is_zero() => nap = nap.min(left),
+                    _ => return Ok(None),
+                }
             }
             starting = self
                 .inner
                 .changed
-                .wait_timeout(starting, Duration::from_millis(500))
+                .wait_timeout(starting, nap)
                 .unwrap_or_else(|e| e.into_inner())
                 .0;
         }
+    }
+
+    /// Stops the machine gracefully: guestd signals the workload (SIGTERM),
+    /// and once it exits stops the remaining processes, syncs, unmounts and
+    /// powers off. If the machine is still running after `timeout` (or guestd
+    /// cannot be reached) the VMM is killed. Stopping a machine that is not
+    /// running succeeds.
+    pub fn stop(&self, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        if self.inner.store.load_state(&self.id)?.status != Status::Running {
+            return Ok(());
+        }
+        let asked = guest::call(
+            &self.inner.socket_path(&self.id),
+            METHOD_SHUTDOWN,
+            &serde_json::json!({}),
+        );
+        if asked.is_ok() && self.wait_until(Some(deadline))?.is_some() {
+            return Ok(());
+        }
+        match self.kill(libc::SIGKILL) {
+            // It ended between the check and the kill.
+            Err(e) if e.kind() == ErrorKind::Conflict => Ok(()),
+            other => other,
+        }
+    }
+
+    /// Sends `signal` to the machine, like `docker kill`. SIGKILL ends the VMM
+    /// at once and records exit code 137; any other signal is delivered to the
+    /// workload by guestd. Fails with a conflict if the machine is not running.
+    pub fn kill(&self, signal: i32) -> Result<()> {
+        let (record, state) = self.inner.store.load(&self.id)?;
+        let not_running = || {
+            Error::conflict(format!(
+                "cannot kill machine {}: it is not running",
+                record.name
+            ))
+        };
+        let pid = match (state.status, state.pid) {
+            (Status::Running, Some(pid)) => pid,
+            _ => return Err(not_running()),
+        };
+        if signal != libc::SIGKILL {
+            return guest::call(
+                &self.inner.socket_path(&self.id),
+                METHOD_KILL,
+                &SignalParams {
+                    id: String::new(),
+                    signal,
+                },
+            )
+            .map(|_| ());
+        }
+        self.inner.forced().insert(self.id.clone());
+        kill_group(pid);
+        // The monitor records the end; return once it has.
+        self.wait_until(Some(Instant::now() + Duration::from_secs(10)))?;
+        self.inner.forced().remove(&self.id);
+        Ok(())
     }
 
     /// Everything the machine printed on its console (kernel, guestd and
@@ -328,6 +401,8 @@ fn record_exit(inner: &Inner, id: &str, code: Option<i32>) {
     // Release host resources first: whoever sees the new state sees them gone.
     inner.drop_tunnels(id);
     let _ = fs::remove_file(inner.socket_path(id));
+    // A machine whose helper we killed ended by SIGKILL: Docker's 137.
+    let code = code.or_else(|| inner.forced().remove(id).then_some(137));
     let _ = inner.update_state(id, |s| {
         if s.status != Status::Running {
             return;

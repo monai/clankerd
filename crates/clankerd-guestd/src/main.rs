@@ -39,8 +39,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use clankerd_proto::guest::{
-    ERROR_INVALID_PARAMETER, ERROR_METHOD_NOT_FOUND, Event, METHOD_EVENTS, METHOD_EXEC_CREATE,
-    METHOD_EXEC_INSPECT, METHOD_EXEC_KILL, METHOD_EXEC_RESIZE, METHOD_EXEC_START, Workload,
+    ERROR_CONFLICT, ERROR_INVALID_PARAMETER, ERROR_METHOD_NOT_FOUND, Event, METHOD_EVENTS,
+    METHOD_EXEC_CREATE, METHOD_EXEC_INSPECT, METHOD_EXEC_KILL, METHOD_EXEC_RESIZE,
+    METHOD_EXEC_START, METHOD_KILL, METHOD_SHUTDOWN, SignalParams, Workload,
 };
 use clankerd_proto::varlink::{self, Call, Reply};
 use serde_json::Value;
@@ -64,6 +65,8 @@ struct Shared {
 struct Inner {
     exit_code: Option<i32>,
     streams: usize,
+    /// Process id of the workload while it runs.
+    workload_pid: Option<i32>,
 }
 
 fn main() {
@@ -158,6 +161,9 @@ fn main() {
     });
     if let Some(workload) = &workload {
         let child = spawn_workload(workload);
+        if let Ok(c) = &child {
+            shared.inner.lock().unwrap().workload_pid = Some(c.id() as i32);
+        }
         let shared = shared.clone();
         std::thread::spawn(move || supervise(child, shared, exit_file));
     }
@@ -266,7 +272,11 @@ fn supervise(
             let _ = std::fs::rename(&tmp, &exit_file);
         }
     }
-    shared.inner.lock().unwrap().exit_code = Some(code);
+    {
+        let mut g = shared.inner.lock().unwrap();
+        g.exit_code = Some(code);
+        g.workload_pid = None;
+    }
     shared.cv.notify_all();
 
     std::thread::sleep(LINGER);
@@ -326,6 +336,10 @@ fn serve(
             end_stream(&shared);
         }
         METHOD_EXEC_START => exec_start(input, out, call.parameters, &shared),
+        METHOD_SHUTDOWN | METHOD_KILL => {
+            let result = signal_workload(&call, &shared);
+            let _ = reply(&mut out, result);
+        }
         METHOD_EXEC_CREATE | METHOD_EXEC_RESIZE | METHOD_EXEC_KILL | METHOD_EXEC_INSPECT => {
             let result = exec_call(&call, &shared.execs);
             let _ = reply(&mut out, result);
@@ -334,6 +348,29 @@ fn serve(
             let _ = reply(&mut out, Err((ERROR_METHOD_NOT_FOUND, String::new())));
         }
     }
+}
+
+/// `Shutdown` (SIGTERM) and `Kill` (any signal) act on the workload only.
+fn signal_workload(call: &Call, shared: &Shared) -> Result<Value, exec::Failure> {
+    let signal = if call.method == METHOD_SHUTDOWN {
+        libc::SIGTERM
+    } else {
+        params::<SignalParams>(call)?.signal
+    };
+    let Some(pid) = shared.inner.lock().unwrap().workload_pid else {
+        return Err((ERROR_CONFLICT, "the workload is not running".into()));
+    };
+    // SAFETY: plain signal delivery to the workload we spawned and have not reaped.
+    if unsafe { libc::kill(pid, signal) } < 0 {
+        return Err((
+            ERROR_CONFLICT,
+            format!(
+                "signalling the workload: {}",
+                std::io::Error::last_os_error()
+            ),
+        ));
+    }
+    Ok(serde_json::json!({}))
 }
 
 fn end_stream(shared: &Shared) {
