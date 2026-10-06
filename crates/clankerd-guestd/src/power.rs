@@ -96,11 +96,15 @@ pub fn power_off() -> ! {
 
 /// SIGTERM everything, wait, SIGKILL what is left, then sync and unmount.
 fn teardown() {
+    // Progress goes to the console (`vmctl logs`), the only trace of a shutdown.
+    eprintln!("clankerd-guestd: stopping processes");
     signal_all(libc::SIGTERM);
     if !wait_for_userspace_to_end(Duration::from_secs(3)) {
+        eprintln!("clankerd-guestd: killing processes that ignored SIGTERM");
         signal_all(libc::SIGKILL);
         wait_for_userspace_to_end(Duration::from_secs(2));
     }
+    eprintln!("clankerd-guestd: syncing and unmounting");
     // SAFETY: sync has no preconditions.
     unsafe { libc::sync() };
     let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
@@ -111,6 +115,10 @@ fn teardown() {
         // SAFETY: valid NUL-terminated path.
         unsafe {
             if libc::umount2(path.as_ptr(), 0) < 0 {
+                eprintln!(
+                    "clankerd-guestd: {} is busy, detaching it",
+                    path.to_string_lossy()
+                );
                 libc::umount2(path.as_ptr(), libc::MNT_DETACH);
             }
         }
@@ -128,6 +136,7 @@ fn teardown() {
         );
         libc::sync();
     }
+    eprintln!("clankerd-guestd: powering off");
 }
 
 fn signal_all(signal: i32) {
@@ -234,5 +243,43 @@ share /workspace virtiofs rw 0 0
                 "/storage"
             ]
         );
+    }
+
+    /// This process stands in for PID 1: as a subreaper it adopts orphans.
+    #[test]
+    fn adopted_orphans_are_reaped_while_owned_children_keep_their_status() {
+        // SAFETY: prctl with PR_SET_CHILD_SUBREAPER takes plain integers.
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) },
+            0
+        );
+        start_reaper();
+
+        // An owned child exits with its own status, not stolen by the reaper.
+        let mut owned = spawn_owned(Command::new("sh").args(["-c", "exit 3"])).unwrap();
+        let status = owned.wait().unwrap();
+        release(owned.id());
+        assert_eq!(status.code(), Some(3));
+
+        // A grandchild outliving its parent is adopted by us and must not linger as a zombie.
+        let mut parent =
+            spawn_owned(Command::new("sh").args(["-c", "sleep 0.2 & exit 0"])).unwrap();
+        parent.wait().unwrap();
+        release(parent.id());
+        // The grandchild exits after 0.2 s; the reaper polls every 0.1 s.
+        std::thread::sleep(Duration::from_secs(1));
+        // SAFETY: peeks at a zombie child without reaping it.
+        let (rc, zombie) = unsafe {
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            let rc = libc::waitid(
+                libc::P_ALL,
+                0,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            );
+            (rc, info.si_pid())
+        };
+        // rc < 0 is ECHILD (no children at all); otherwise no zombie may be waiting.
+        assert!(rc < 0 || zombie == 0, "zombie {zombie} was not reaped");
     }
 }
