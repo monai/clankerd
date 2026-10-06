@@ -13,6 +13,7 @@ const guestUsage = `usage: guestctl <command>
 
   lease acquire NAME [HOST.local ...]   reserve ports and .local names (repeat to change the hostnames)
   lease show NAME                 see a lease (--json for structured output)
+  lease release NAME [--purge]    free a lease; --purge also deletes its Chrome profile
   browser start|stop NAME         start or stop the host Chrome wired to the lease
   version
 `
@@ -51,7 +52,7 @@ func (c *ctl) runGuest(args []string) error {
 		}
 		fs := flag.NewFlagSet(cmd+" "+rest[0], flag.ContinueOnError)
 		return c.leaseCmd(fs, cmd, rest[0], rest[1:],
-			[]string{"lease acquire", "lease show", "browser start", "browser stop"},
+			[]string{"lease acquire", "lease show", "lease release", "browser start", "browser stop"},
 			guestSocket, "run `hostctl smol up` on the host")
 	}
 	return usageError{"unknown command " + cmd}

@@ -18,7 +18,7 @@ hostctl lease list | show NAME | release NAME [--purge]
 # VM
 eval "$(guestctl lease acquire shop console.shop.local)"   # CLANKER_LEASE_APP_PORT CLANKER_LEASE_CDP_URL CLANKER_LEASE_HOSTS
 guestctl browser start shop                                 # host Chrome, CDP at $CLANKER_LEASE_CDP_URL
-guestctl lease show shop | browser stop shop
+guestctl lease show shop | release shop | browser stop shop
 ```
 
 ## Agent skill

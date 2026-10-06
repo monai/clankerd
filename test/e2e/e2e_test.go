@@ -575,13 +575,24 @@ func TestEachSideOffersOnlyItsCommands(t *testing.T) {
 		}
 	}
 	for _, args := range [][]string{
-		{"smol", "status"}, {"lease", "list"}, {"lease", "release", "shop"}, {"nope"},
+		{"smol", "status"}, {"lease", "list"}, {"nope"},
 	} {
 		if res := r.guest(args...); res.code != 64 {
 			t.Errorf("guestctl %v: exit %d, want 64", args, res.code)
 		}
 	}
 	contains(t, r.ok("lease", "list"), "shop")
+}
+
+func TestGuestCanReleaseItsLease(t *testing.T) {
+	r := newRig(t)
+	r.up()
+	r.acquire("shop")
+	r.gok("lease", "release", "shop")
+	if out := r.ok("lease", "list"); strings.Contains(out, "shop") {
+		t.Fatalf("lease survived release: %s", out)
+	}
+	contains(t, r.gfail("lease", "show", "shop"), "unknown lease")
 }
 
 func TestGuestCtlWithoutControlSocket(t *testing.T) {

@@ -36,6 +36,7 @@ You are in a VM. `guestctl` talks to the host daemon. A **lease** is a named set
 | :- | :- |
 | `lease acquire NAME [HOST.local ...]` | Reserve or update a lease. Safe to repeat. New hostnames replace the old ones. |
 | `lease show NAME` | Print the lease again. |
+| `lease release NAME [--purge]` | Free the lease. `--purge` also deletes its Chrome profile. |
 | `browser start NAME` | Start Chrome. OK if already running. |
 | `browser stop NAME` | Stop Chrome. OK if already stopped. |
 
@@ -49,8 +50,6 @@ Add `--json` to `lease acquire` or `lease show` for JSON output.
 | :- | :- |
 | `control socket … is missing` | Ask the user to run `hostctl smol down`, then `hostctl smol up`. |
 | `clankerd is not running` | Ask the user to run `hostctl smol up`. |
-| `no free lease` | Reuse a lease name, or ask the user to run `hostctl lease release NAME`. |
+| `no free lease` | Reuse a lease name, or release one you no longer need. |
 | `already used by lease` | Pick another hostname. |
 | `unknown lease` | Run `guestctl lease acquire NAME` first. |
-
-You cannot release leases. The user does that with `hostctl`.
