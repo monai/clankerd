@@ -25,6 +25,8 @@ pub struct MachineInfo {
     pub created: SystemTime,
     pub config: MachineConfig,
     pub host_config: HostConfig,
+    /// Digest the image was pinned to when the machine was created.
+    pub image_id: String,
     pub state: MachineState,
 }
 
@@ -55,6 +57,7 @@ impl Machine {
             created: record.created,
             config: record.config,
             host_config: record.host_config,
+            image_id: record.image_id,
             state,
         })
     }

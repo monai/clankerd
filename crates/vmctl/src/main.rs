@@ -10,7 +10,8 @@ mod exec;
 use clap::{Args, Parser, Subcommand};
 use libclankerd::vmm::{LocalProcessVmm, VmspawnVmm};
 use libclankerd::{
-    Engine, EngineConfig, Error, HostConfig, MachineConfig, MachineInfo, PortBinding, Status,
+    Engine, EngineConfig, Error, HostConfig, ImageInfo, LocalGuestdPopulator, MachineConfig,
+    MachineInfo, PortBinding, Status,
 };
 
 #[derive(Parser)]
@@ -26,6 +27,21 @@ struct Cli {
     /// instead of booting a VM (no libkrun backend is wired up yet).
     #[arg(long, global = true, env = "CLANKERD_DEV_GUESTD", hide = true)]
     dev_guestd: Option<PathBuf>,
+    /// Directory for the image cache (blobs, base root disks).
+    #[arg(long, global = true, env = "CLANKERD_CACHE_DIR")]
+    cache_dir: Option<PathBuf>,
+    /// Registries (host:port) to reach over plain HTTP.
+    #[arg(
+        long = "insecure-registry",
+        global = true,
+        env = "CLANKERD_INSECURE_REGISTRIES",
+        value_delimiter = ','
+    )]
+    insecure_registries: Vec<String>,
+    /// Development: directory with the static e2fsprogs (mke2fs); defaults to
+    /// the directory of --dev-guestd.
+    #[arg(long, global = true, env = "CLANKERD_BOOT_DIR", hide = true)]
+    boot_dir: Option<PathBuf>,
     /// clankerd-vmspawn helper binary (default: next to vmctl).
     #[arg(long, global = true, env = "CLANKERD_VMSPAWN")]
     vmspawn: Option<PathBuf>,
@@ -39,6 +55,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Pull an image (linux/arm64) into the local cache.
+    Pull { image: String },
+    /// List cached images.
+    Images,
     /// Create a machine, start it, wait for it, and exit with its exit code.
     Run(CreateArgs),
     /// Create a machine without starting it.
@@ -105,8 +125,28 @@ fn engine(cli: &Cli) -> Result<Engine, Error> {
         cli.state_dir.clone().unwrap_or(defaults.state_dir),
         cli.runtime_dir.clone().unwrap_or(defaults.runtime_dir),
     );
+    cfg.insecure_registries = cli.insecure_registries.clone();
+    // The image cache is always on for pull/images; create and run only use it
+    // when a cache directory is given.
+    let wants_cache = matches!(cli.command, Command::Pull { .. } | Command::Images);
+    // Creating machines from images needs a root-disk populator, which only the
+    // local development stand-in has so far; the libkrun-backed one is a
+    // follow-up, so real VMs keep the placeholder root until then.
+    if cli.cache_dir.is_some() || wants_cache {
+        cfg.cache_dir = Some(
+            cli.cache_dir
+                .clone()
+                .unwrap_or_else(EngineConfig::default_cache_dir),
+        );
+    }
     if let Some(guestd) = &cli.dev_guestd {
         cfg.vmm = Arc::new(LocalProcessVmm::new(guestd));
+        let boot_dir = cli
+            .boot_dir
+            .clone()
+            .or_else(|| guestd.parent().map(PathBuf::from))
+            .unwrap_or_default();
+        cfg.populator = Some(Arc::new(LocalGuestdPopulator::new(guestd, boot_dir)));
     } else if cfg!(target_os = "macos") || cli.vmspawn.is_some() {
         let vmspawn = cli
             .vmspawn
@@ -196,6 +236,22 @@ fn each(names: &[String], mut f: impl FnMut(&str) -> Result<String, Error>) -> u
 fn run(cli: Cli) -> Result<u8, Error> {
     let engine = engine(&cli)?;
     match cli.command {
+        Command::Pull { image } => {
+            let info = engine.pull(&image)?;
+            println!("Digest: {}", info.id);
+            println!("Status: image is up to date for {image}");
+            Ok(0)
+        }
+        Command::Images => {
+            println!(
+                "{:<40}{:<16}{:<14}{:<16}SIZE",
+                "REPOSITORY", "TAG", "IMAGE ID", "PULLED"
+            );
+            for info in engine.images()? {
+                print_image_rows(&info);
+            }
+            Ok(0)
+        }
         Command::Run(args) => {
             let m = create(&engine, args)?;
             m.start()?;
@@ -260,4 +316,60 @@ fn status_text(info: &MachineInfo) -> String {
             s[..1].to_uppercase() + &s[1..]
         }
     }
+}
+
+/// One row per reference (or `<none>` for an image whose tag moved on).
+fn print_image_rows(info: &ImageInfo) {
+    let id = info.id.trim_start_matches("sha256:");
+    let id = &id[..id.len().min(12)];
+    let refs: Vec<(String, String)> = if info.references.is_empty() {
+        vec![("<none>".into(), "<none>".into())]
+    } else {
+        info.references.iter().map(|r| split_reference(r)).collect()
+    };
+    for (repo, tag) in refs {
+        println!(
+            "{:<40}{:<16}{:<14}{:<16}{}",
+            repo,
+            tag,
+            id,
+            age_text(info.pulled),
+            size_text(info.size())
+        );
+    }
+}
+
+/// `host/name:tag` -> (`host/name`, `tag`); digest references show their digest as the tag.
+fn split_reference(r: &str) -> (String, String) {
+    if let Some((name, digest)) = r.split_once('@') {
+        let name = name
+            .rsplit_once(':')
+            .filter(|(_, t)| !t.contains('/'))
+            .map_or(name, |(n, _)| n);
+        return (name.to_owned(), digest.to_owned());
+    }
+    match r.rsplit_once(':') {
+        Some((name, tag)) if !tag.contains('/') => (name.to_owned(), tag.to_owned()),
+        _ => (r.to_owned(), "latest".to_owned()),
+    }
+}
+
+fn age_text(t: std::time::SystemTime) -> String {
+    let secs = t.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+    match secs {
+        0..=59 => "seconds ago".into(),
+        60..=3599 => format!("{} minutes ago", secs / 60),
+        3600..=86399 => format!("{} hours ago", secs / 3600),
+        _ => format!("{} days ago", secs / 86400),
+    }
+}
+
+fn size_text(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "kB", "MB", "GB"];
+    let (mut v, mut u) = (bytes as f64, 0);
+    while v >= 1000.0 && u < UNITS.len() - 1 {
+        v /= 1000.0;
+        u += 1;
+    }
+    format!("{v:.1}{}", UNITS[u])
 }

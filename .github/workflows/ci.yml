@@ -65,6 +65,20 @@ jobs:
 
       - run: mise exec -- make rust-test
 
+      # Seam B as root: chown to foreign owners, mknod, security.capability and
+      # the loop-mount population of an ext4 root disk cannot run unprivileged
+      # (those tests skip themselves in the step above and print SKIPPED).
+      # The image tests also pull debian:trixie-slim and ghcr.io/monai/clankers:slim.
+      # The step fails if anything skipped, so a silently unprivileged run cannot pass.
+      - name: Seam B (root, real images)
+        env:
+          CLANKERD_TEST_NETWORK: "1"
+        run: |
+          sudo apt-get install -y --no-install-recommends e2fsprogs
+          sudo -E env "PATH=$PATH" "HOME=$HOME" mise exec -- cargo test -p clankerd-guestd --test seam_b -- --nocapture 2>&1 | tee seam-b.log
+          sudo -E env "PATH=$PATH" "HOME=$HOME" mise exec -- cargo test -p libclankerd --test images --test seam_b_images -- --nocapture 2>&1 | tee -a seam-b.log
+          if grep -q '^SKIPPED' seam-b.log; then echo "seam B tests were skipped:"; grep '^SKIPPED' seam-b.log; exit 1; fi
+
       # Cross-links the darwin binaries, builds the static musl guest binary,
       # signs clankerd-vmspawn and verifies the entitlement.
       - run: mise exec -- make rust

@@ -10,6 +10,7 @@
 pub mod frame;
 pub mod guest;
 pub mod listen_fds;
+pub mod rootdisk;
 pub mod spawn;
 pub mod tunnel;
 pub mod varlink;

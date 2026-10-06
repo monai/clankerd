@@ -16,10 +16,17 @@
 //! is read-only by convention, so the host side (clankerd-vmspawn) records it
 //! from the `Exited` event instead.
 //!
+//! Population boot (`--populate`, no workload): serves only the root-disk
+//! methods (format, unpack tar, populate disk) with the static e2fsprogs from
+//! `--boot-dir` (default: next to this binary); `--lenient-ownership` is a
+//! development flag for runs without root.
+//!
 //! As PID 1 (booted by libkrun's init.krun) guestd powers the machine off once
 //! the workload has ended and subscribers have seen the result.
 
+mod rootdisk;
 mod tunnel;
+mod unpack;
 mod vsock;
 
 use std::io::BufReader;
@@ -66,6 +73,9 @@ fn main() {
     let mut host_vsock_port = None;
     let mut vsock_port = None;
     let mut loopback = None;
+    let mut populate = false;
+    let mut boot_dir = None;
+    let mut lenient = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -77,14 +87,34 @@ fn main() {
             }
             "--vsock-port" => vsock_port = Some(port_arg(args.next(), "--vsock-port")),
             "--loopback" => loopback = args.next(),
+            "--populate" => populate = true,
+            "--boot-dir" => boot_dir = args.next().map(PathBuf::from),
+            "--lenient-ownership" => lenient = true,
             other => die(&format!("unknown argument {other}")),
         }
     }
-    let config = config.unwrap_or_else(|| die("--config is required"));
-    let workload: Workload = std::fs::read(&config)
-        .map_err(|e| e.to_string())
-        .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
-        .unwrap_or_else(|e| die(&format!("reading {}: {e}", config.display())));
+    let boot_dir = boot_dir.unwrap_or_else(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("/"))
+    });
+    let disk = Arc::new(rootdisk::Ctx {
+        boot_dir,
+        populate_mode: populate,
+        lenient,
+    });
+    let workload: Option<Workload> = if populate {
+        None
+    } else {
+        let config = config.unwrap_or_else(|| die("--config is required"));
+        Some(
+            std::fs::read(&config)
+                .map_err(|e| e.to_string())
+                .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
+                .unwrap_or_else(|e| die(&format!("reading {}: {e}", config.display()))),
+        )
+    };
 
     let listener = if std::env::var("LISTEN_FDS").ok().as_deref() == Some("1") {
         // SAFETY: fd 3 is the listening socket handed to us by our parent.
@@ -114,10 +144,16 @@ fn main() {
     let shared = Arc::new(Shared {
         inner: Mutex::default(),
         cv: Condvar::new(),
-        execs: exec::Registry::new(workload.env.clone(), workload.working_dir.clone()),
+        execs: exec::Registry::new(
+            workload.as_ref().map(|w| w.env.clone()).unwrap_or_default(),
+            workload
+                .as_ref()
+                .map(|w| w.working_dir.clone())
+                .unwrap_or_default(),
+        ),
     });
-    let child = spawn_workload(&workload);
-    {
+    if let Some(workload) = &workload {
+        let child = spawn_workload(workload);
         let shared = shared.clone();
         std::thread::spawn(move || supervise(child, shared, exit_file));
     }
@@ -128,7 +164,8 @@ fn main() {
         };
         let shared = shared.clone();
         let tunnels = tunnels.clone();
-        std::thread::spawn(move || serve(conn, shared, tunnels));
+        let disk = disk.clone();
+        std::thread::spawn(move || serve(conn, shared, tunnels, disk));
     }
 }
 
@@ -243,7 +280,12 @@ fn power_off() -> ! {
     }
 }
 
-fn serve(conn: UnixStream, shared: Arc<Shared>, tunnels: Arc<tunnel::Tunnels>) {
+fn serve(
+    conn: UnixStream,
+    shared: Arc<Shared>,
+    tunnels: Arc<tunnel::Tunnels>,
+    disk: Arc<rootdisk::Ctx>,
+) {
     let Ok(mut out) = conn.try_clone() else {
         return;
     };
@@ -251,6 +293,9 @@ fn serve(conn: UnixStream, shared: Arc<Shared>, tunnels: Arc<tunnel::Tunnels>) {
     let Ok(Some(call)) = varlink::read::<Call, _>(&mut input) else {
         return;
     };
+    if rootdisk::handle(&call, &mut input, &mut out, &disk) {
+        return;
+    }
     if tunnel::handles(&call.method) {
         tunnels.handle(call, input, out);
         return;
