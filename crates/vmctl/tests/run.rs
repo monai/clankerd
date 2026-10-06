@@ -137,6 +137,7 @@ fn a_missing_helper_binary_is_reported_by_path() {
         .args(["run", "img", "true"])
         .env("CLANKERD_STATE_DIR", dir.path().join("state"))
         .env("CLANKERD_RUNTIME_DIR", dir.path().join("run"))
+        .env("CLANKERD_BOOT_DIR_ROOT", "true")
         .env("CLANKERD_VMSPAWN", "/no/such/clankerd-vmspawn")
         .env("CLANKERD_GUESTD", guestd())
         .output()
