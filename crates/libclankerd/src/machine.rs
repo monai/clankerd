@@ -282,6 +282,9 @@ fn spawn_monitor(inner: Arc<Inner>, id: String, ready: Ready) {
 
 /// Persists the end of a run. `None` means the guest vanished: status `dead`.
 fn record_exit(inner: &Inner, id: &str, code: Option<i32>) {
+    // Release host resources first: whoever sees the new state sees them gone.
+    inner.drop_tunnels(id);
+    let _ = fs::remove_file(inner.socket_path(id));
     let _ = inner.update_state(id, |s| {
         if s.status != Status::Running {
             return;
@@ -295,8 +298,6 @@ fn record_exit(inner: &Inner, id: &str, code: Option<i32>) {
         s.pid = None;
         s.finished_at = Some(SystemTime::now());
     });
-    inner.drop_tunnels(id);
-    let _ = fs::remove_file(inner.socket_path(id));
 }
 
 /// Starts the host side of the machine's tunnels and its configured bindings.

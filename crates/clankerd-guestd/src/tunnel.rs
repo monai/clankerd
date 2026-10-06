@@ -213,8 +213,8 @@ impl Tunnels {
 }
 
 /// Carries one guest connection to `target` on the host.
-fn carry<S: Duplex>(sock: S, host_socket: &PathBuf, target: &Target) {
-    let host_socket = host_socket.clone();
+fn carry<S: Duplex>(sock: S, host_socket: &std::path::Path, target: &Target) {
+    let host_socket = host_socket.to_owned();
     let target = target.clone();
     std::thread::spawn(move || {
         let Ok(mut conn) = UnixStream::connect(&host_socket) else {
