@@ -150,6 +150,10 @@ fn main() {
                 .as_ref()
                 .map(|w| w.working_dir.clone())
                 .unwrap_or_default(),
+            workload
+                .as_ref()
+                .map(|w| w.user.clone())
+                .unwrap_or_default(),
         ),
     });
     if let Some(workload) = &workload {
@@ -207,9 +211,21 @@ fn spawn_workload(w: &Workload) -> Result<std::process::Child, i32> {
         eprintln!("clankerd-guestd: no command to run");
         return Err(127);
     };
+    let user = user::lookup(&w.user).map_err(|e| {
+        eprintln!("clankerd-guestd: {e}");
+        126
+    })?;
     let mut cmd = Command::new(prog);
     cmd.args(rest).stdin(Stdio::null()).env_clear();
     cmd.env("PATH", DEFAULT_PATH);
+    // Like Docker: HOME is the user's home unless the image sets it.
+    if let Some(home) = user
+        .as_ref()
+        .and_then(|u| u.home.clone())
+        .or_else(user::root_home)
+    {
+        cmd.env("HOME", home);
+    }
     for kv in &w.env {
         if let Some((k, v)) = kv.split_once('=') {
             cmd.env(k, v);
@@ -217,6 +233,9 @@ fn spawn_workload(w: &Workload) -> Result<std::process::Child, i32> {
     }
     if !w.working_dir.is_empty() {
         cmd.current_dir(&w.working_dir);
+    }
+    if let Some(user) = &user {
+        user::drop_privileges(&mut cmd, user);
     }
     cmd.spawn().map_err(|e| {
         eprintln!("clankerd-guestd: cannot run {prog}: {e}");

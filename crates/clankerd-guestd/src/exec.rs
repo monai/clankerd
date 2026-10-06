@@ -34,6 +34,7 @@ pub type Failure = (&'static str, String);
 pub struct Registry {
     base_env: Vec<String>,
     base_cwd: String,
+    base_user: String,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
 }
 
@@ -51,10 +52,11 @@ struct SessionState {
 }
 
 impl Registry {
-    pub fn new(base_env: Vec<String>, base_cwd: String) -> Self {
+    pub fn new(base_env: Vec<String>, base_cwd: String, base_user: String) -> Self {
         Registry {
             base_env,
             base_cwd,
+            base_user,
             sessions: Mutex::new(HashMap::new()),
         }
     }
@@ -115,6 +117,7 @@ impl Registry {
             session: s,
             base_env: self.base_env.clone(),
             base_cwd: self.base_cwd.clone(),
+            base_user: self.base_user.clone(),
         })
     }
 }
@@ -203,6 +206,7 @@ pub struct ExecHandle {
     session: Arc<Session>,
     base_env: Vec<String>,
     base_cwd: String,
+    base_user: String,
 }
 
 struct Spawned {
@@ -287,13 +291,13 @@ impl ExecHandle {
 
     fn spawn(&self) -> Result<Spawned, (i32, String)> {
         let spec = &self.session.spec;
-        let resolved = if spec.user.is_empty() {
-            None
+        // Like Docker, an exec runs as the machine's user unless told otherwise.
+        let user_spec = if spec.user.is_empty() {
+            &self.base_user
         } else {
-            let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
-            let group = std::fs::read_to_string("/etc/group").unwrap_or_default();
-            Some(user::resolve(&spec.user, &passwd, &group).map_err(|e| (126, e))?)
+            &spec.user
         };
+        let resolved = user::lookup(user_spec).map_err(|e| (126, e))?;
 
         let mut cmd = Command::new(&spec.argv[0]);
         cmd.args(&spec.argv[1..]).env_clear();
@@ -319,27 +323,20 @@ impl ExecHandle {
         }
 
         let tty = spec.tty;
-        let creds = resolved.map(|r| (r.uid, r.gid, r.groups));
-        let creds_groups: Vec<libc::gid_t> = creds.as_ref().map_or(vec![], |c| c.2.clone());
         // SAFETY: only async-signal-safe libc calls between fork and exec.
         unsafe {
             cmd.pre_exec(move || {
                 if libc::setsid() < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
-                if tty && libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
+                if tty && libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
                     return Err(std::io::Error::last_os_error());
-                }
-                if let Some((uid, gid, _)) = &creds {
-                    // Non-root callers cannot change groups; the later setuid/setgid
-                    // then fail unless they are no-ops, which is the right outcome.
-                    libc::setgroups(creds_groups.len() as _, creds_groups.as_ptr());
-                    if libc::setgid(*gid) < 0 || libc::setuid(*uid) < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
                 }
                 Ok(())
             });
+        }
+        if let Some(user) = &resolved {
+            user::drop_privileges(&mut cmd, user);
         }
 
         let fail = |e: std::io::Error| {

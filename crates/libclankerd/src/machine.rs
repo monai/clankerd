@@ -105,6 +105,7 @@ impl Machine {
                 argv,
                 env: info.config.env.clone(),
                 working_dir: info.config.working_dir.clone(),
+                user: info.config.user.clone(),
             },
             cpus: info.host_config.cpus,
             memory: info.host_config.memory,

@@ -19,6 +19,10 @@ pub struct Workload {
     pub env: Vec<String>,
     #[serde(default)]
     pub working_dir: String,
+    /// Docker `user[:group]` spec resolved against the image's passwd and
+    /// group files; empty runs as root.
+    #[serde(default)]
+    pub user: String,
 }
 
 /// Parameters of each reply of [`METHOD_EVENTS`].
@@ -50,7 +54,7 @@ pub struct ExecSpec {
     pub env: Vec<String>,
     #[serde(default)]
     pub working_dir: String,
-    /// Docker `user[:group]` spec; empty means the machine's user (root).
+    /// Docker `user[:group]` spec; empty means the machine's user (the workload's).
     #[serde(default)]
     pub user: String,
     #[serde(default)]
