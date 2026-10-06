@@ -16,6 +16,12 @@ pub const HOST_VSOCK_PORT: u32 = 1025;
 pub const BOOT_GUESTD: &str = "clankerd-guestd";
 pub const BOOT_WORKLOAD: &str = "workload.json";
 
+/// Where the root disk shows up in the guest: the first virtio-blk device.
+pub const ROOT_DEVICE: &str = "/dev/vda";
+/// Where guestd keeps the boot directory inside the machine after it pivoted
+/// into the root disk (it holds the static e2fsprogs binaries).
+pub const GUEST_BOOT_MOUNT: &str = "/run/clankerd/boot";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpawnSpec {
     /// Host directory served as the guest root; holds guestd and its workload.
@@ -33,4 +39,13 @@ pub struct SpawnSpec {
     pub host_socket: PathBuf,
     pub cpus: u8,
     pub memory_mib: u32,
+    /// Raw ext4 image attached as the guest's first block device
+    /// ([`ROOT_DEVICE`]). With `populate` it is the blank disk to fill;
+    /// otherwise guestd mounts it and pivots into it.
+    #[serde(default)]
+    pub root_disk: Option<PathBuf>,
+    /// Population boot: guestd runs without a workload and serves only the
+    /// root-disk methods, then powers off.
+    #[serde(default)]
+    pub populate: bool,
 }

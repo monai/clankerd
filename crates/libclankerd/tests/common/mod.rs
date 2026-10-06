@@ -33,6 +33,26 @@ pub fn guestd_path() -> PathBuf {
     .clone()
 }
 
+/// Builds `package` (cargo only builds a package's own binaries for its tests)
+/// and returns the path of its binary.
+pub fn built(package: &str) -> PathBuf {
+    let exe = std::env::current_exe().unwrap();
+    let profile_dir = exe.parent().unwrap().parent().unwrap().to_path_buf();
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut cmd = Command::new(cargo);
+    cmd.args(["build", "-q", "-p", package]);
+    if profile_dir.file_name().is_some_and(|n| n == "release") {
+        cmd.arg("--release");
+    }
+    assert!(cmd.status().unwrap().success(), "building {package} failed");
+    profile_dir.join(package)
+}
+
+pub fn vmspawn_path() -> PathBuf {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| built("clankerd-vmspawn")).clone()
+}
+
 pub struct Env {
     pub dir: tempfile::TempDir,
 }

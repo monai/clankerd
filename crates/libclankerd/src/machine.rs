@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use clankerd_proto::guest::{Event, METHOD_KILL, METHOD_SHUTDOWN, SignalParams, Workload};
+use clankerd_proto::guest::{Clock, Event, METHOD_KILL, METHOD_SHUTDOWN, SignalParams, Workload};
 use serde::Serialize;
 
 use crate::config::{HostConfig, MachineConfig, PortBinding};
@@ -93,11 +93,13 @@ impl Machine {
         let socket = self.inner.socket_path(&self.id);
         let _ = fs::remove_file(&exit_file);
 
+        let root_disk = Some(dir.join(crate::engine::ROOT_DISK)).filter(|d| d.exists());
         let mut argv = info.config.entrypoint.clone();
         argv.extend(info.config.cmd.iter().cloned());
         let spec = BootSpec {
             machine_id: self.id.clone(),
             dir,
+            root_disk,
             guest_socket: socket.clone(),
             host_socket: self.inner.host_socket_path(&self.id),
             exit_file: exit_file.clone(),
@@ -106,6 +108,7 @@ impl Machine {
                 env: info.config.env.clone(),
                 working_dir: info.config.working_dir.clone(),
                 user: info.config.user.clone(),
+                clock: Some(Clock::now()),
             },
             cpus: info.host_config.cpus,
             memory: info.host_config.memory,

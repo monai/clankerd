@@ -9,6 +9,7 @@ mod vmspawn;
 
 pub use process::LocalProcessVmm;
 pub use vmspawn::VmspawnVmm;
+pub(crate) use vmspawn::{explain_exit, spawn_helper};
 
 use std::path::PathBuf;
 
@@ -32,6 +33,10 @@ pub struct BootSpec {
     /// so the result survives the death of the library process.
     pub exit_file: PathBuf,
     pub workload: Workload,
+    /// The machine's ext4 root disk, when it was built from an image. A VMM
+    /// that boots a real VM attaches it as the first block device and has
+    /// guestd pivot into it; the local stand-in ignores it.
+    pub root_disk: Option<PathBuf>,
     pub cpus: Option<u32>,
     pub memory: Option<u64>,
 }

@@ -23,6 +23,29 @@ pub struct Workload {
     /// group files; empty runs as root.
     #[serde(default)]
     pub user: String,
+    /// The host's wall clock when the machine was started; guestd sets the
+    /// guest clock from it when it boots a root disk.
+    #[serde(default)]
+    pub clock: Option<Clock>,
+}
+
+/// A point in time as seconds and nanoseconds since the Unix epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Clock {
+    pub secs: i64,
+    pub nanos: u32,
+}
+
+impl Clock {
+    pub fn now() -> Self {
+        let d = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        Clock {
+            secs: d.as_secs() as i64,
+            nanos: d.subsec_nanos(),
+        }
+    }
 }
 
 /// Graceful stop: signals the workload with SIGTERM and returns at once. The

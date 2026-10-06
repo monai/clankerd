@@ -93,7 +93,12 @@ impl DiskPopulator for LocalGuestdPopulator {
 }
 
 /// The host side of `PopulateDisk`: call, stream the tar, half-close, read the reply.
-fn populate_over(socket: &Path, disk: &Path, size: u64, tar: &mut dyn Read) -> Result<()> {
+pub(crate) fn populate_over(
+    socket: &Path,
+    disk: &Path,
+    size: u64,
+    tar: &mut dyn Read,
+) -> Result<()> {
     let mut conn = UnixStream::connect(socket)?;
     varlink::write(
         &mut conn,

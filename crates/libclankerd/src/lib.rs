@@ -38,6 +38,7 @@ mod state;
 mod store;
 mod tunnel;
 pub mod vmm;
+mod vmspawn_populator;
 
 pub use config::{HostConfig, MachineConfig, PortBinding, SocketBinding};
 pub use engine::{Engine, EngineConfig, ROOT_DISK};
@@ -50,3 +51,4 @@ pub use rootdisk::{DiskPopulator, LocalGuestdPopulator};
 pub use state::{MachineState, Status, WaitResult};
 pub use tunnel::{GuestBinding, PublishedPort};
 pub use vmm::Vmm;
+pub use vmspawn_populator::VmspawnPopulator;

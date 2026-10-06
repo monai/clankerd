@@ -16,6 +16,15 @@ unsafe extern "C" {
         argv: *const *const c_char,
         envp: *const *const c_char,
     ) -> i32;
+    /// Attaches a raw disk image as a virtio-blk device (`/dev/vda`, `/dev/vdb`,
+    /// ... in call order). `disk_format` 0 is raw.
+    pub fn krun_add_disk2(
+        ctx_id: u32,
+        block_id: *const c_char,
+        disk_path: *const c_char,
+        disk_format: u32,
+        read_only: bool,
+    ) -> i32;
     pub fn krun_set_console_output(ctx_id: u32, c_filepath: *const c_char) -> i32;
     /// With `listen`, libkrun binds a unix socket at `c_filepath` and forwards
     /// connections to the guest's vsock `port`.

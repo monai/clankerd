@@ -263,7 +263,9 @@ impl ExecHandle {
             std::thread::spawn(move || pump_input(input, session, stdin_tx));
         }
 
-        let status = match child.wait() {
+        let waited = child.wait();
+        crate::power::release(child.id());
+        let status = match waited {
             Ok(s) => ExecStatus {
                 exit_code: s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0)),
                 signal: s.signal(),
@@ -355,7 +357,7 @@ impl ExecHandle {
             cmd.stdin(Stdio::from(dup(&slave)?))
                 .stdout(Stdio::from(dup(&slave)?))
                 .stderr(Stdio::from(slave));
-            let child = cmd.spawn().map_err(fail)?;
+            let child = crate::power::spawn_owned(&mut cmd).map_err(fail)?;
             // The Command still owns slave dups; release them so EOF can happen.
             drop(cmd);
             let master = Arc::new(master);
@@ -375,7 +377,7 @@ impl ExecHandle {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-            let mut child = cmd.spawn().map_err(fail)?;
+            let mut child = crate::power::spawn_owned(&mut cmd).map_err(fail)?;
             let stdin = child.stdin.take().map(|p| File::from(OwnedFd::from(p)));
             let out = File::from(OwnedFd::from(child.stdout.take().unwrap()));
             let err = File::from(OwnedFd::from(child.stderr.take().unwrap()));

@@ -31,14 +31,35 @@ impl Hypervisor for Libkrun {
     fn boot(&self, spec: &SpawnSpec) -> Result<(), String> {
         let mut cfg = libkrun_sys::BootConfig::new(&spec.boot_dir, format!("/{BOOT_GUESTD}"));
         // libkrun's init passes these as the program's arguments (after argv[0]).
-        cfg.argv = vec![
-            "--config".into(),
-            format!("/{BOOT_WORKLOAD}"),
-            "--vsock-port".into(),
-            GUEST_VSOCK_PORT.to_string(),
-            "--host-vsock-port".into(),
-            HOST_VSOCK_PORT.to_string(),
-        ];
+        cfg.argv = if spec.populate {
+            // Population boot: no workload, only the root-disk methods.
+            vec![
+                "--populate".into(),
+                "--vsock-port".into(),
+                GUEST_VSOCK_PORT.to_string(),
+            ]
+        } else {
+            let mut argv = vec![
+                "--config".into(),
+                format!("/{BOOT_WORKLOAD}"),
+                "--vsock-port".into(),
+                GUEST_VSOCK_PORT.to_string(),
+                "--host-vsock-port".into(),
+                HOST_VSOCK_PORT.to_string(),
+            ];
+            if spec.root_disk.is_some() {
+                // Mount the root disk, pivot into it, then run the workload.
+                argv.push("--boot".into());
+            }
+            argv
+        };
+        if let Some(disk) = &spec.root_disk {
+            cfg.disks = vec![libkrun_sys::Disk {
+                block_id: "root".into(),
+                path: disk.clone(),
+                read_only: false,
+            }];
+        }
         // Make init.krun exec guestd as PID 1 instead of forking it.
         cfg.env = vec!["KRUN_INIT_PID1=1".into()];
         cfg.console_log = Some(spec.console_log.clone());
@@ -78,9 +99,17 @@ impl Hypervisor for DevLocal {
             .open(&spec.console_log)
             .map_err(|e| e.to_string())?;
         let mut cmd = Command::new(spec.boot_dir.join(BOOT_GUESTD));
-        cmd.arg("--config")
-            .arg(spec.boot_dir.join(BOOT_WORKLOAD))
-            .arg("--host-socket")
+        if spec.populate {
+            cmd.arg("--populate").arg("--boot-dir").arg(&spec.boot_dir);
+            // SAFETY: geteuid has no preconditions.
+            if unsafe { libc::geteuid() } != 0 {
+                // Unprivileged development runs cannot chown or mount.
+                cmd.arg("--lenient-ownership");
+            }
+        } else {
+            cmd.arg("--config").arg(spec.boot_dir.join(BOOT_WORKLOAD));
+        }
+        cmd.arg("--host-socket")
             .arg(&spec.host_socket)
             // The local process shares the host's loopback, so the guest's
             // loopback is another address (same as LocalProcessVmm).
@@ -120,8 +149,10 @@ pub fn run(
 ) -> Result<(), String> {
     let guest = spec.vsock_socket.clone();
     std::thread::spawn(move || proxy(listener, guest));
-    let (guest, exit_file) = (spec.vsock_socket.clone(), spec.exit_file.clone());
-    std::thread::spawn(move || record_exit(&guest, &exit_file));
+    if !spec.populate {
+        let (guest, exit_file) = (spec.vsock_socket.clone(), spec.exit_file.clone());
+        std::thread::spawn(move || record_exit(&guest, &exit_file));
+    }
     hypervisor.boot(spec)
 }
 

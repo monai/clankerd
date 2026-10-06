@@ -9,31 +9,12 @@ mod common;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::*;
 use libclankerd::vmm::VmspawnVmm;
 use libclankerd::{ErrorKind, Status};
-
-fn built(package: &str) -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let profile_dir = exe.parent().unwrap().parent().unwrap().to_path_buf();
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut cmd = Command::new(cargo);
-    cmd.args(["build", "-q", "-p", package]);
-    if profile_dir.file_name().is_some_and(|n| n == "release") {
-        cmd.arg("--release");
-    }
-    assert!(cmd.status().unwrap().success(), "building {package} failed");
-    profile_dir.join(package)
-}
-
-fn vmspawn_path() -> PathBuf {
-    static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| built("clankerd-vmspawn")).clone()
-}
 
 fn dev_vmm() -> Arc<VmspawnVmm> {
     Arc::new(VmspawnVmm::new(vmspawn_path(), guestd_path()).dev_local())

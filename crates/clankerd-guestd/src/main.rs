@@ -22,8 +22,15 @@
 //! development flag for runs without root.
 //!
 //! As PID 1 (booted by libkrun's init.krun) guestd powers the machine off once
-//! the workload has ended and subscribers have seen the result.
+//! the workload has ended and subscribers have seen the result: it signals
+//! and reaps every process, syncs, unmounts and powers off (`power`).
+//!
+//! With `--boot` guestd first mounts the root disk (`/dev/vda`), pivots into
+//! it, mounts /proc, /sys, /dev and cgroup2, delegates cgroup controllers,
+//! sets the clock from the host and writes `/.clankerdenv` (`boot`).
 
+mod boot;
+mod power;
 mod rootdisk;
 mod tunnel;
 mod unpack;
@@ -79,6 +86,7 @@ fn main() {
     let mut populate = false;
     let mut boot_dir = None;
     let mut lenient = false;
+    let mut boot_root = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -93,20 +101,10 @@ fn main() {
             "--populate" => populate = true,
             "--boot-dir" => boot_dir = args.next().map(PathBuf::from),
             "--lenient-ownership" => lenient = true,
+            "--boot" => boot_root = true,
             other => die(&format!("unknown argument {other}")),
         }
     }
-    let boot_dir = boot_dir.unwrap_or_else(|| {
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("/"))
-    });
-    let disk = Arc::new(rootdisk::Ctx {
-        boot_dir,
-        populate_mode: populate,
-        lenient,
-    });
     let workload: Option<Workload> = if populate {
         None
     } else {
@@ -118,6 +116,29 @@ fn main() {
                 .unwrap_or_else(|e| die(&format!("reading {}: {e}", config.display()))),
         )
     };
+
+    if boot_root {
+        // Mount the root disk and pivot into it; from here on `/` is the
+        // image. The boot directory stays reachable at its guest mount point.
+        if let Err(e) = boot::init(workload.as_ref().unwrap_or(&Workload::default())) {
+            die(&e);
+        }
+    }
+    let boot_dir = boot_dir.unwrap_or_else(|| {
+        if boot_root {
+            PathBuf::from(clankerd_proto::spawn::GUEST_BOOT_MOUNT)
+        } else {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(PathBuf::from))
+                .unwrap_or_else(|| PathBuf::from("/"))
+        }
+    });
+    let disk = Arc::new(rootdisk::Ctx {
+        boot_dir,
+        populate_mode: populate,
+        lenient,
+    });
 
     let listener = if std::env::var("LISTEN_FDS").ok().as_deref() == Some("1") {
         // SAFETY: fd 3 is the listening socket handed to us by our parent.
@@ -243,7 +264,7 @@ fn spawn_workload(w: &Workload) -> Result<std::process::Child, i32> {
     if let Some(user) = &user {
         user::drop_privileges(&mut cmd, user);
     }
-    cmd.spawn().map_err(|e| {
+    power::spawn_owned(&mut cmd).map_err(|e| {
         eprintln!("clankerd-guestd: cannot run {prog}: {e}");
         if e.kind() == std::io::ErrorKind::NotFound {
             127
@@ -260,10 +281,14 @@ fn supervise(
     exit_file: Option<PathBuf>,
 ) {
     let code = match child {
-        Ok(mut c) => match c.wait() {
-            Ok(s) => s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0)),
-            Err(_) => 255,
-        },
+        Ok(mut c) => {
+            let status = c.wait();
+            power::release(c.id());
+            match status {
+                Ok(s) => s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0)),
+                Err(_) => 255,
+            }
+        }
         Err(code) => code,
     };
     if let Some(exit_file) = exit_file {
@@ -290,23 +315,7 @@ fn supervise(
             .0;
     }
     drop(g);
-    if std::process::id() == 1 {
-        power_off();
-    }
-    std::process::exit(0);
-}
-
-/// Flushes and powers the VM off; as PID 1 returning would panic the kernel.
-fn power_off() -> ! {
-    // SAFETY: sync and reboot take no pointers.
-    unsafe {
-        libc::sync();
-        libc::reboot(libc::RB_POWER_OFF);
-    }
-    // reboot only returns on failure; PID 1 must not exit.
-    loop {
-        std::thread::sleep(Duration::from_secs(3600));
-    }
+    power::exit_machine()
 }
 
 fn serve(

@@ -135,6 +135,14 @@ pub struct VsockPort {
     pub listen: bool,
 }
 
+/// A raw disk image attached as a virtio-blk device.
+#[derive(Debug, Clone)]
+pub struct Disk {
+    pub block_id: String,
+    pub path: PathBuf,
+    pub read_only: bool,
+}
+
 /// Everything libkrun needs to boot one guest.
 #[derive(Debug, Clone)]
 pub struct BootConfig {
@@ -148,6 +156,8 @@ pub struct BootConfig {
     /// Receives the kernel and init console output.
     pub console_log: Option<PathBuf>,
     pub vsock_ports: Vec<VsockPort>,
+    /// Block devices in order: the first is `/dev/vda`.
+    pub disks: Vec<Disk>,
     pub cpus: u8,
     pub memory_mib: u32,
 }
@@ -161,6 +171,7 @@ impl BootConfig {
             env: Vec::new(),
             console_log: None,
             vsock_ports: Vec::new(),
+            disks: Vec::new(),
             cpus: 1,
             memory_mib: 512,
         }
@@ -236,6 +247,14 @@ pub fn boot(config: &BootConfig) -> Result<std::convert::Infallible, Error> {
             check(
                 "krun_set_console_output",
                 ffi::krun_set_console_output(ctx, log.as_ptr()),
+            )?;
+        }
+        for d in &config.disks {
+            let id = cstr(&d.block_id, "block id")?;
+            let disk = path(&d.path, "disk path")?;
+            check(
+                "krun_add_disk2",
+                ffi::krun_add_disk2(ctx, id.as_ptr(), disk.as_ptr(), 0, d.read_only),
             )?;
         }
         for p in &config.vsock_ports {
