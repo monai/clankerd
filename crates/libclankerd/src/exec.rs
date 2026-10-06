@@ -19,11 +19,11 @@ use clankerd_proto::guest::{
 use crate::error::{Error, Result};
 use crate::guest;
 
+/// Snapshot returned by [`Exec::inspect`].
+pub use clankerd_proto::guest::ExecState as ExecInfo;
 /// Exit status of an exec; `signal` is set when the process died from one
 /// (`exit_code` is then 128 + signal, as in Docker).
 pub use clankerd_proto::guest::ExecStatus;
-/// Snapshot returned by [`Exec::inspect`].
-pub use clankerd_proto::guest::ExecState as ExecInfo;
 
 /// What to run (Docker's `ExecCreate` body).
 #[derive(Debug, Clone, Default)]
@@ -87,7 +87,9 @@ impl Exec {
         let reader = guest::upgrade(
             &self.socket,
             METHOD_EXEC_START,
-            &ExecRef { id: self.id.clone() },
+            &ExecRef {
+                id: self.id.clone(),
+            },
         )?;
         let writer = reader.get_ref().try_clone()?;
         let (out_tx, out_rx) = mpsc::channel();
@@ -130,7 +132,9 @@ impl Exec {
         let v = guest::call(
             &self.socket,
             METHOD_EXEC_INSPECT,
-            &ExecRef { id: self.id.clone() },
+            &ExecRef {
+                id: self.id.clone(),
+            },
         )?;
         Ok(serde_json::from_value(v)?)
     }
@@ -233,6 +237,13 @@ impl ExecOutput {
             pending: Vec::new(),
             pos: 0,
         }
+    }
+}
+
+impl ExecOutput {
+    /// An output that is already at end of file.
+    pub fn empty() -> Self {
+        ExecOutput::new(mpsc::channel().1)
     }
 }
 

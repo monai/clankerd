@@ -437,7 +437,11 @@ fn spawn_stdin_writer(mut file: File, tty: bool) -> Sender<Vec<u8>> {
 }
 
 /// Handles frames from the host until the connection ends.
-fn pump_input(mut input: BufReader<UnixStream>, session: Arc<Session>, mut stdin: Option<Sender<Vec<u8>>>) {
+fn pump_input(
+    mut input: BufReader<UnixStream>,
+    session: Arc<Session>,
+    mut stdin: Option<Sender<Vec<u8>>>,
+) {
     loop {
         match frame::read_frame(&mut input) {
             Ok(Some(f)) => match f.channel {

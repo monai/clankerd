@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+mod exec;
+
 use clap::{Args, Parser, Subcommand};
 use libclankerd::vmm::LocalProcessVmm;
 use libclankerd::{Engine, EngineConfig, Error, HostConfig, MachineConfig, MachineInfo, Status};
@@ -41,6 +43,8 @@ enum Command {
     },
     /// Show machine configuration and state as JSON.
     Inspect { machines: Vec<String> },
+    /// Run a command in a running machine.
+    Exec(exec::ExecArgs),
     /// Remove machines.
     Rm {
         /// Remove running machines too.
@@ -130,6 +134,7 @@ fn run(cli: Cli) -> Result<u8, Error> {
             // Exit codes are 0..=255 on the host.
             Ok(m.wait()?.exit_code as u8)
         }
+        Command::Exec(args) => exec::run(&engine, args),
         Command::Create(args) => {
             println!("{}", create(&engine, args)?.id());
             Ok(0)

@@ -137,7 +137,10 @@ fn kill_delivers_signals_and_reports_signal_deaths() {
     assert_eq!(exec.inspect().unwrap().signal, Some(libc::SIGTERM));
 
     // A finished exec cannot be signalled.
-    assert_eq!(exec.kill(libc::SIGTERM).unwrap_err().kind(), ErrorKind::Conflict);
+    assert_eq!(
+        exec.kill(libc::SIGTERM).unwrap_err().kind(),
+        ErrorKind::Conflict
+    );
 }
 
 #[test]
@@ -233,8 +236,14 @@ fn four_sessions_run_concurrently_and_independently() {
                 writeln!(stdin, "input{i}").unwrap();
                 let status = streams.wait().unwrap();
                 assert_eq!(status.exit_code, i);
-                assert_eq!(read_all(&mut streams.stdout), format!("s{i}:input{i}\n").as_bytes());
-                assert_eq!(read_all(&mut streams.stderr), format!("err{i}\n").as_bytes());
+                assert_eq!(
+                    read_all(&mut streams.stdout),
+                    format!("s{i}:input{i}\n").as_bytes()
+                );
+                assert_eq!(
+                    read_all(&mut streams.stderr),
+                    format!("err{i}\n").as_bytes()
+                );
             })
         })
         .collect();

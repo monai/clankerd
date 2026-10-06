@@ -61,7 +61,9 @@ pub fn resolve(spec: &str, passwd: &str, group: &str) -> Result<Resolved, String
         Err(_) => Some(
             passwd_entries(passwd)
                 .find(|p| p.name == user)
-                .ok_or_else(|| format!("unable to find user {user}: no matching entry in passwd file"))?,
+                .ok_or_else(|| {
+                    format!("unable to find user {user}: no matching entry in passwd file")
+                })?,
         ),
     };
     let uid = match (&entry, user.parse::<u32>()) {
@@ -101,7 +103,8 @@ pub fn resolve(spec: &str, passwd: &str, group: &str) -> Result<Resolved, String
 mod tests {
     use super::*;
 
-    const PASSWD: &str = "root:x:0:0:root:/root:/bin/sh\nalice:x:1000:100:Alice:/home/alice:/bin/sh\n";
+    const PASSWD: &str =
+        "root:x:0:0:root:/root:/bin/sh\nalice:x:1000:100:Alice:/home/alice:/bin/sh\n";
     const GROUP: &str = "root:x:0:\nusers:x:100:\nwheel:x:10:alice\naudio:x:29:alice,bob\n";
 
     #[test]
