@@ -38,9 +38,6 @@ func (c *ctl) smol(args []string) error {
 	if err != nil {
 		return err
 	}
-	if t.kind.Sandboxed() {
-		return fmt.Errorf("smol commands run on the host, not in a %s", t.kind)
-	}
 	vm := backend.NewSmolvm(t.cfg.VM)
 	ctx := context.Background()
 	if sub != "status" {
@@ -87,7 +84,7 @@ func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 func (c *ctl) startDaemon(t *target) error {
 	bin, err := daemonBinary()
 	if err != nil {
-		return errors.New("clankerd not found next to clankerctl or on PATH")
+		return errors.New("clankerd not found next to hostctl or on PATH")
 	}
 	cmd := exec.Command(bin, append([]string{"run"}, t.cf.Args()...)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -153,7 +150,7 @@ func reconcile(ctx context.Context, cfg *config.Config, vm backend.Backend, spec
 	prev, ok := backend.ParseSpec(b)
 	if err != nil || !ok {
 		return fmt.Errorf("vm %q exists but was not created from the current configuration "+
-			"(config changed, or the VM came from elsewhere); recreate it with `clankerctl smol down` then `smol up`", cfg.VM)
+			"(config changed, or the VM came from elsewhere); recreate it with `hostctl smol down` then `smol up`", cfg.VM)
 	}
 	if fixed := prev.Fixed(spec); len(fixed) > 0 {
 		for i, f := range fixed {
@@ -185,7 +182,7 @@ func (c *ctl) bringUp(ctx context.Context, t *target, vm backend.Backend, verb s
 		return err
 	}
 	if st == backend.Missing && !create {
-		return fmt.Errorf("vm %q does not exist; create it with `clankerctl smol up`", cfg.VM)
+		return fmt.Errorf("vm %q does not exist; create it with `hostctl smol up`", cfg.VM)
 	}
 	switch st {
 	case backend.Missing:

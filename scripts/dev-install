@@ -4,10 +4,10 @@ set -eu
 vm=${CLANKERD_VM:-sandbox}
 mount=${CLANKERD_WORKSPACE_MOUNT:-/mnt/workspace}
 root=$(cd "$(dirname "$0")/../.." && pwd)
-src=clankerd/build/linux-arm64/clankerctl
+src=clankerd/build/linux-arm64/guestctl
 
 (cd "$root/clankerd" && make build)
 [ -f "$root/$src" ] || { echo "dev-install: $src was not built" >&2; exit 1; }
 
-smolvm machine exec --name "$vm" -- sudo install -m 0755 "$mount/$src" /usr/local/bin/clankerctl
-smolvm machine exec --name "$vm" -- clankerctl version
+smolvm machine exec --name "$vm" -- sudo install -m 0755 "$mount/$src" /usr/local/bin/guestctl
+smolvm machine exec --name "$vm" -- guestctl version

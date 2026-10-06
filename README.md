@@ -1,32 +1,35 @@
-# clankerd and clankerctl
+# clankerd, hostctl and guestctl
 
 Wires coding agents in one smolvm VM to apps, `.local` names and Chrome on the host.
 
 - `clankerd`: host-only daemon, one per VM. Owns all state; answers mDNS, forwards TCP, runs Chrome, drives `smolvm`.
-- `clankerctl`: client, on the host and in the VM (through the socket smolvm mounts at `/run/clankerd/ctl.sock`).
+- `hostctl`: host-side client. Manages the VM and the daemon, and inspects or releases leases.
+- `guestctl`: VM-side client, talking to the daemon through the socket smolvm mounts at `/run/clankerd/ctl.sock`.
+  Acquires leases and starts browsers.
 
 Vocabulary: *coding agent* (an AI tool in the VM), *lease* (an exclusive named reservation of ports and `.local`
-names), *relay* (a TCP forwarder; the VM-side one is `clankerctl relay`), *host*, *VM*.
+names), *relay* (a TCP forwarder; the VM-side one is `guestctl relay`), *host*, *VM*.
 
 ```sh
-clankerctl smol up|down|status|start|stop
-eval "$(clankerctl lease acquire shop console.shop.local)"   # CLANKER_LEASE_APP_PORT CLANKER_LEASE_CDP_URL CLANKER_LEASE_HOSTS
-clankerctl browser start shop                                 # host Chrome, CDP at $CLANKER_LEASE_CDP_URL
-clankerctl lease release shop [--purge]
-```
+# host
+hostctl smol up|down|status|start|stop
+hostctl lease list | show NAME | release NAME [--purge]
 
-`clankerctl` works out which side it is on from the platform: a smolvm guest (`SMOLVM_MACHINE_NAME` on the kernel
-command line) or a Docker container (`/.dockerenv`) talks to the daemon through the mounted socket; anything else is the host.
+# VM
+eval "$(guestctl lease acquire shop console.shop.local)"   # CLANKER_LEASE_APP_PORT CLANKER_LEASE_CDP_URL CLANKER_LEASE_HOSTS
+guestctl browser start shop                                 # host Chrome, CDP at $CLANKER_LEASE_CDP_URL
+guestctl lease show shop | browser stop shop
+```
 
 ## Build
 
 ```sh
-mise install && mise exec -- make build   # build/{darwin,linux}-arm64/{clankerd,clankerctl}
+mise install && mise exec -- make build   # build/{darwin,linux}-arm64/{clankerd,hostctl}, build/linux-arm64/guestctl
 mise exec -- make test
 ```
 
-`scripts/dev-install` builds `linux-arm64/clankerctl` and installs it as `/usr/local/bin/clankerctl` in the running VM
-(the same place the image bakes it). Rerun it after each rebuild; it ends by printing the VM's `clankerctl version`.
+`scripts/dev-install` builds `linux-arm64/guestctl` and installs it as `/usr/local/bin/guestctl` in the running VM
+(the same place the image bakes it). Rerun it after each rebuild; it ends by printing the VM's `guestctl version`.
 
 ## Configuration
 

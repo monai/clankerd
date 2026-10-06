@@ -6,7 +6,9 @@ TARGETS := darwin-arm64 linux-arm64
 .PHONY: build test vet clean
 build:
 	@for t in $(TARGETS); do \
-	  for p in clankerd clankerctl; do \
+	  progs="clankerd hostctl"; \
+	  [ $$t = linux-arm64 ] && progs="$$progs guestctl"; \
+	  for p in $$progs; do \
 	    GOOS=$${t%-*} GOARCH=$${t#*-} go build -trimpath -ldflags "$(LDFLAGS)" -o build/$$t/$$p ./cmd/$$p || exit 1; \
 	  done; \
 	done

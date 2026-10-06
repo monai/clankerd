@@ -129,8 +129,8 @@ func Call(sock string, req Request) (*Response, error) {
 		return nil, fmt.Errorf("malformed reply: %w", err)
 	}
 	if resp.V != Version {
-		return nil, fmt.Errorf("protocol version mismatch: clankerctl speaks %d, clankerd speaks %d; "+
-			"run the same build on host and VM (`clankerctl smol up` relinks the VM's copy)", Version, resp.V)
+		return nil, fmt.Errorf("protocol version mismatch: client speaks %d, clankerd speaks %d; "+
+			"run the same build on host and VM", Version, resp.V)
 	}
 	if !resp.OK {
 		return &resp, errors.New(resp.Error)

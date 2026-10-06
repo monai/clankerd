@@ -288,7 +288,7 @@ func (d *Daemon) syncForwarders(h *held) []string {
 const startRelayScript = `pf=$1
 if [ -f "$pf" ] && kill -0 "$(cat "$pf")" 2>/dev/null; then exit 0; fi
 mkdir -p "$(dirname "$pf")" || exit 1
-setsid -f clankerctl relay --pidfile "$pf" --listen "$2" --listen "$3" --target "$4" </dev/null >/dev/null 2>&1
+setsid -f guestctl relay --pidfile "$pf" --listen "$2" --listen "$3" --target "$4" </dev/null >/dev/null 2>&1
 `
 
 const stopRelayScript = `pf=$1
@@ -303,7 +303,7 @@ func (d *Daemon) vmRunning() error {
 		return err
 	}
 	if st != backend.Running {
-		return fmt.Errorf("vm %q is %s, not running; start it with `clankerctl smol up`", d.cfg.VM, st)
+		return fmt.Errorf("vm %q is %s, not running; start it with `hostctl smol up`", d.cfg.VM, st)
 	}
 	return nil
 }

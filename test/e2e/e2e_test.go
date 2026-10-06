@@ -44,8 +44,8 @@ func TestSmolUpDownStatus(t *testing.T) {
 		"machine create", "--name sandbox",
 		fmt.Sprintf("-p %d-%d:%d-%d", r.appBase, r.appBase+slots-1, r.appBase, r.appBase+slots-1),
 		"--mount-socket "+r.sock()+":/run/clankerd/ctl.sock",
-		"--image ghcr.io/monai/clankers:slim", "--user agent", "--env HOST_UID=", "--env HOME=/home/agent",
-		"--init", "-- sudo dockerd --data-root=/storage/docker -G agent", "machine start")
+		"--image ghcr.io/monai/clankers:slim", "--user agent", "--env HOME=/home/agent",
+		"--init mkdir -p /storage/docker", "machine start")
 	for _, flag := range []string{"--cpus", "--mem", "--storage", "--net"} {
 		if strings.Contains(calls, flag) {
 			t.Errorf("contrib profile passes %s; smolvm's default should apply", flag)
@@ -108,7 +108,7 @@ func TestSmolUpPassesOnlyWhatIsConfigured(t *testing.T) {
 func TestLeaseAcquireOutput(t *testing.T) {
 	r := newRig(t)
 	r.up()
-	out := r.ok("lease", "acquire", "shop", "console.shop.local")
+	out := r.gok("lease", "acquire", "shop", "console.shop.local")
 	contains(t, out,
 		fmt.Sprintf("export CLANKER_LEASE_APP_PORT=%d\n", r.appBase),
 		fmt.Sprintf("export CLANKER_LEASE_CDP_URL=http://localhost:%d\n", r.cdpBase),
@@ -148,37 +148,37 @@ func TestLeaseAcquireOutput(t *testing.T) {
 func TestLeaseValidationAndExhaustion(t *testing.T) {
 	r := newRig(t)
 	r.up()
-	contains(t, r.fail("lease", "acquire", "Bad_Name"), "invalid lease name")
-	contains(t, r.fail("lease", "acquire", ""), "invalid lease name")
-	contains(t, r.fail("lease", "acquire", "ok", "host.example.com"), "must end in .local")
-	contains(t, r.fail("lease", "acquire", "ok", "UP.local"), "invalid hostname")
-	contains(t, r.fail("lease", "acquire", "ok", "a b.local"), "invalid hostname")
+	contains(t, r.gfail("lease", "acquire", "Bad_Name"), "invalid lease name")
+	contains(t, r.gfail("lease", "acquire", ""), "invalid lease name")
+	contains(t, r.gfail("lease", "acquire", "ok", "host.example.com"), "must end in .local")
+	contains(t, r.gfail("lease", "acquire", "ok", "UP.local"), "invalid hostname")
+	contains(t, r.gfail("lease", "acquire", "ok", "a b.local"), "invalid hostname")
 	if out := r.ok("lease", "list"); strings.Contains(out, "ok") {
 		t.Fatalf("invalid acquire leaked a lease: %s", out)
 	}
 	r.acquire("a")
 	r.acquire("b")
 	r.acquire("c")
-	msg := r.fail("lease", "acquire", "d")
+	msg := r.gfail("lease", "acquire", "d")
 	contains(t, msg, "no free lease", fmt.Sprintf("%d", slots))
 	r.ok("lease", "release", "b")
 	if l := r.acquire("d"); l.Slot != 1 {
 		t.Fatalf("freed slot not reused: %+v", l)
 	}
-	contains(t, r.fail("lease", "acquire", "e", "a.local"), "already used by lease")
+	contains(t, r.gfail("lease", "acquire", "e", "a.local"), "already used by lease")
 }
 
 func TestVMNotRunning(t *testing.T) {
 	r := newRig(t)
 	r.up()
 	os.Remove(filepath.Join(r.smolDir, "running"))
-	contains(t, r.fail("lease", "acquire", "shop"), "not running")
+	contains(t, r.gfail("lease", "acquire", "shop"), "not running")
 	if out := r.ok("lease", "list"); strings.Contains(out, "shop") {
 		t.Fatalf("failed acquire left a lease: %s", out)
 	}
 }
 
-func TestAcquireFromVMAndHostStartRelay(t *testing.T) {
+func TestAcquireStartsVMRelay(t *testing.T) {
 	r := newRig(t)
 	r.up()
 	echoServer(t, fmt.Sprintf("127.0.0.1:%d", r.chromeBas))
@@ -194,12 +194,12 @@ func TestAcquireFromVMAndHostStartRelay(t *testing.T) {
 		return out
 	}
 
-	r.acquire("hostside")
+	r.acquire("shop")
 	if len(execs()) != 1 {
 		t.Fatalf("relay exec calls: %v", r.smolCalls())
 	}
 	contains(t, execs()[0], "127.0.0.1:"+fmt.Sprint(r.cdpBase), "127.0.0.2")
-	eventually(t, "VM relay (host acquire)", func() error {
+	eventually(t, "VM relay", func() error {
 		return throughput(t, fmt.Sprintf("127.0.0.1:%d", r.cdpBase))
 	})
 	eventually(t, "VM relay over IPv6", func() error {
@@ -209,19 +209,19 @@ func TestAcquireFromVMAndHostStartRelay(t *testing.T) {
 		t.Fatalf("daemon relay: %v", err)
 	}
 
-	res := r.vm("lease", "acquire", "vmside")
+	res := r.guest("lease", "acquire", "blog")
 	if res.code != 0 {
-		t.Fatalf("vm acquire: %+v", res)
+		t.Fatalf("second acquire: %+v", res)
 	}
 	contains(t, res.out, fmt.Sprintf("export CLANKER_LEASE_APP_PORT=%d", r.appBase+1))
 	if len(execs()) != 2 {
 		t.Fatalf("relay exec calls: %v", r.smolCalls())
 	}
-	eventually(t, "VM relay (vm acquire)", func() error {
+	eventually(t, "VM relay for second lease", func() error {
 		return throughput(t, fmt.Sprintf("127.0.0.1:%d", r.cdpBase+1))
 	})
 
-	pidFile := filepath.Join(r.smolDir, "guest", "relay-hostside.pid")
+	pidFile := filepath.Join(r.smolDir, "guest", "relay-shop.pid")
 	b, err := os.ReadFile(pidFile)
 	if err != nil {
 		t.Fatal(err)
@@ -230,12 +230,12 @@ func TestAcquireFromVMAndHostStartRelay(t *testing.T) {
 	fmt.Sscan(string(b), &pid)
 	syscall.Kill(pid, syscall.SIGKILL)
 	waitFor(t, "relay death", func() bool { return throughput(t, fmt.Sprintf("127.0.0.1:%d", r.cdpBase)) != nil })
-	r.acquire("hostside")
+	r.acquire("shop")
 	eventually(t, "restarted relay", func() error {
 		return throughput(t, fmt.Sprintf("127.0.0.1:%d", r.cdpBase))
 	})
 
-	r.ok("lease", "release", "hostside")
+	r.ok("lease", "release", "shop")
 	eventually(t, "relay closed", func() error {
 		if throughput(t, fmt.Sprintf("127.0.0.1:%d", r.cdpBase)) == nil {
 			return fmt.Errorf("still forwarding")
@@ -346,7 +346,7 @@ func TestNoSubnetsAnnouncesNothingAndWarns(t *testing.T) {
 	r := newRig(t)
 	r.env["CLANKERD_MDNS_SUBNETS"] = ""
 	r.up()
-	res := r.run("lease", "acquire", "shop")
+	res := r.guest("lease", "acquire", "shop")
 	if res.code != 0 {
 		t.Fatalf("%+v", res)
 	}
@@ -362,12 +362,12 @@ func TestNoSubnetsAnnouncesNothingAndWarns(t *testing.T) {
 func TestBrowser(t *testing.T) {
 	r := newRig(t)
 	r.up()
-	contains(t, r.fail("browser", "start", "shop"), "unknown lease")
+	contains(t, r.gfail("browser", "start", "shop"), "unknown lease")
 	if out := r.ok("lease", "list"); strings.Contains(out, "shop") {
 		t.Fatalf("browser start allocated a lease: %s", out)
 	}
 	l := r.acquire("shop")
-	r.ok("browser", "start", "shop")
+	r.gok("browser", "start", "shop")
 	waitFor(t, "chrome", func() bool { return len(r.chromeStarts()) == 1 })
 	line := r.chromeStarts()[0]
 	profile := filepath.Join(r.home, "state", "sandbox", "profiles", "shop")
@@ -384,15 +384,15 @@ func TestBrowser(t *testing.T) {
 		t.Fatal("lease show does not report chrome")
 	}
 
-	r.ok("browser", "start", "shop")
+	r.gok("browser", "start", "shop")
 	time.Sleep(200 * time.Millisecond)
 	if n := len(r.chromeStarts()); n != 1 {
 		t.Fatalf("chrome started %d times", n)
 	}
 
-	r.ok("browser", "stop", "shop")
+	r.gok("browser", "stop", "shop")
 	waitFor(t, "chrome exit", func() bool { return !alive(pid) })
-	r.ok("browser", "stop", "shop")
+	r.gok("browser", "stop", "shop")
 
 	os.MkdirAll(profile, 0o755)
 	os.WriteFile(filepath.Join(profile, "Cookies"), []byte("x"), 0o644)
@@ -419,7 +419,7 @@ func TestReleaseStopsChrome(t *testing.T) {
 	r := newRig(t)
 	r.up()
 	r.acquire("shop")
-	r.ok("browser", "start", "shop")
+	r.gok("browser", "start", "shop")
 	waitFor(t, "chrome", func() bool { return len(r.chromeStarts()) == 1 })
 	var pid int
 	fmt.Sscanf(r.chromeStarts()[0], "pid=%d", &pid)
@@ -433,7 +433,7 @@ func TestStateSurvivesDaemonRestart(t *testing.T) {
 	echoServer(t, fmt.Sprintf("127.0.0.1:%d", r.chromeBas+1))
 	r.acquire("shop", "console.shop.local")
 	r.acquire("blog")
-	r.ok("browser", "start", "blog")
+	r.gok("browser", "start", "blog")
 	waitFor(t, "chrome", func() bool { return len(r.chromeStarts()) == 1 })
 
 	pid := r.daemonPID()
@@ -453,7 +453,7 @@ func TestStateSurvivesDaemonRestart(t *testing.T) {
 	eventually(t, "cdp relay restored", func() error {
 		return throughput(t, fmt.Sprintf("127.0.0.2:%d", r.cdpBase+1))
 	})
-	r.ok("browser", "start", "blog")
+	r.gok("browser", "start", "blog")
 	time.Sleep(200 * time.Millisecond)
 	if n := len(r.chromeStarts()); n != 1 {
 		t.Fatalf("running chrome was not re-adopted: %d starts", n)
@@ -515,23 +515,21 @@ func TestConfigLayering(t *testing.T) {
 	os.WriteFile(filepath.Join(r.home, "config.toml"), []byte("[ports]\nslots = 1\n"), 0o644)
 	r.up()
 	r.acquire("a")
-	contains(t, r.fail("lease", "acquire", "b"), "no free lease")
+	contains(t, r.gfail("lease", "acquire", "b"), "no free lease")
 	r.ok("smol", "down")
 
 	r.env["CLANKERD_SLOTS"] = "2"
 	r.up()
 	r.acquire("a")
 	r.acquire("b")
-	contains(t, r.fail("lease", "acquire", "c"), "no free lease")
+	contains(t, r.gfail("lease", "acquire", "c"), "no free lease")
 	r.ok("smol", "down")
 
-	r.up2("--slots", "3")
+	r.ok("smol", "up", "--slots", "3")
 	r.acquire("a")
 	r.acquire("b")
 	r.acquire("c")
 }
-
-func (r *rig) up2(flags ...string) { r.ok(append([]string{"smol", "up"}, flags...)...) }
 
 func TestProjectConfigFoundByWalkingUp(t *testing.T) {
 	r := newRig(t)
@@ -544,15 +542,72 @@ func TestProjectConfigFoundByWalkingUp(t *testing.T) {
 	os.MkdirAll(deep, 0o755)
 	os.WriteFile(filepath.Join(proj, ".clankerd", "config.toml"), []byte("[vm]\nname = \"projvm\"\n[ports]\nslots = 1\n"), 0o644)
 	r.work = deep
-	r.ok("smol", "up")
-	r.ok("lease", "acquire", "a")
-	contains(t, r.fail("lease", "acquire", "b"), "no free lease")
+	up := r.ok("smol", "up")
+	i := strings.Index(up, "ctl=")
+	if i < 0 {
+		t.Fatalf("smol up does not report the control socket: %s", up)
+	}
+	r.env["CLANKERD_GUEST_SOCKET"] = strings.TrimSpace(up[i+len("ctl="):])
+	r.gok("lease", "acquire", "a")
+	contains(t, r.gfail("lease", "acquire", "b"), "no free lease")
 	contains(t, strings.Join(r.smolCalls(), "\n"), "--name projvm")
 }
 
 func TestVersion(t *testing.T) {
 	r := newRig(t)
-	contains(t, r.ok("version"), "clankerctl")
+	h, g := r.ok("version"), r.gok("version")
+	contains(t, h, "hostctl")
+	contains(t, g, "guestctl")
+	if h[strings.Index(h, "("):] != g[strings.Index(g, "("):] {
+		t.Fatalf("protocol differs: %q vs %q", h, g)
+	}
+}
+
+func TestEachSideOffersOnlyItsCommands(t *testing.T) {
+	r := newRig(t)
+	r.up()
+	r.gok("lease", "acquire", "shop")
+	for _, args := range [][]string{
+		{"lease", "acquire", "x"}, {"browser", "start", "shop"}, {"browser", "stop", "shop"}, {"relay"}, {"nope"},
+	} {
+		if res := r.host(args...); res.code != 64 {
+			t.Errorf("hostctl %v: exit %d, want 64", args, res.code)
+		}
+	}
+	for _, args := range [][]string{
+		{"smol", "status"}, {"lease", "list"}, {"lease", "release", "shop"}, {"nope"},
+	} {
+		if res := r.guest(args...); res.code != 64 {
+			t.Errorf("guestctl %v: exit %d, want 64", args, res.code)
+		}
+	}
+	contains(t, r.ok("lease", "list"), "shop")
+}
+
+func TestGuestCtlWithoutControlSocket(t *testing.T) {
+	r := newRig(t)
+	r.env["CLANKERD_GUEST_SOCKET"] = filepath.Join(r.work, "absent.sock")
+	contains(t, r.gfail("lease", "acquire", "shop"), "control socket", "is missing", "hostctl smol down")
+}
+
+func TestCtlWhenDaemonIsDown(t *testing.T) {
+	r := newRig(t)
+	r.up()
+	pid := r.daemonPID()
+	syscall.Kill(pid, syscall.SIGTERM)
+	waitFor(t, "daemon exit", func() bool { return !alive(pid) })
+	contains(t, r.fail("lease", "list"), "not running", "hostctl smol up")
+
+	// The VM keeps its mount of the socket after the daemon dies.
+	stale := filepath.Join(r.work, "stale.sock")
+	ln, err := net.Listen("unix", stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	ln.Close()
+	r.env["CLANKERD_GUEST_SOCKET"] = stale
+	contains(t, r.gfail("lease", "acquire", "shop"), "not running", "hostctl smol up")
 }
 
 func (r *rig) config(toml string) {
@@ -688,35 +743,11 @@ func TestSmolUpRefusesAVMItDidNotRecord(t *testing.T) {
 	contains(t, r.fail("smol", "up"), "not created from the current configuration")
 }
 
-func TestSandboxDetection(t *testing.T) {
-	r := newRig(t)
-	r.env["CLANKERD_CMDLINE_PATH"] = r.fakeSmolvmCmdline()
-	r.env["CLANKERD_GUEST_SOCKET"] = filepath.Join(r.work, "absent.sock")
-	contains(t, r.fail("lease", "acquire", "shop"), "running in a smolmachine", "control socket", "is missing")
-	contains(t, r.fail("smol", "up"), "running in a smolmachine", "is missing")
-
-	r.env["CLANKERD_CMDLINE_PATH"] = filepath.Join(r.work, "no-cmdline")
-	dockerenv := filepath.Join(r.work, "dockerenv")
-	os.WriteFile(dockerenv, nil, 0o644)
-	r.env["CLANKERD_DOCKERENV_PATH"] = dockerenv
-	contains(t, r.fail("lease", "acquire", "shop"), "running in a docker", "is missing")
-
-	os.Remove(dockerenv)
-	delete(r.env, "CLANKERD_GUEST_SOCKET")
-	contains(t, r.fail("lease", "acquire", "shop"), "clankerd is not running", "smol up")
-}
-
-func TestSmolRefusesInsideTheVM(t *testing.T) {
-	r := newRig(t)
-	r.up()
-	contains(t, r.vm("smol", "status").err, "run on the host, not in a smolmachine")
-}
-
 func TestStalePIDOfAnotherProcessIsNotKilled(t *testing.T) {
 	r := newRig(t)
 	r.up()
 	r.acquire("shop")
-	r.ok("browser", "start", "shop")
+	r.gok("browser", "start", "shop")
 	waitFor(t, "chrome", func() bool { return len(r.chromeStarts()) == 1 })
 	var chromePID int
 	fmt.Sscanf(r.chromeStarts()[0], "pid=%d", &chromePID)
@@ -759,7 +790,7 @@ func TestOperationsRunConcurrently(t *testing.T) {
 		err string
 	}
 	acquire := func(name string, ch chan<- out) {
-		res := r.run("lease", "acquire", "--json", name)
+		res := r.guest("lease", "acquire", "--json", name)
 		var l lease
 		json.Unmarshal([]byte(res.out), &l)
 		ch <- out{l, res.err}
@@ -801,7 +832,7 @@ func TestOperationsRunConcurrently(t *testing.T) {
 	}
 
 	rel := make(chan result, 1)
-	go func() { rel <- r.run("lease", "release", "b") }()
+	go func() { rel <- r.host("lease", "release", "b") }()
 	go acquire("b", ch)
 	if res := <-rel; res.code != 0 {
 		t.Fatalf("release: %+v", res)
@@ -816,7 +847,7 @@ func TestConcurrentSmolUpAndDown(t *testing.T) {
 	r := newRig(t)
 	results := make(chan result, 8)
 	for i := 0; i < 8; i++ {
-		go func() { results <- r.run("smol", "up") }()
+		go func() { results <- r.host("smol", "up") }()
 	}
 	for i := 0; i < 8; i++ {
 		if res := <-results; res.code != 0 {
@@ -837,7 +868,7 @@ func TestConcurrentSmolUpAndDown(t *testing.T) {
 	}
 
 	for i := 0; i < 4; i++ {
-		go func() { results <- r.run("smol", "down") }()
+		go func() { results <- r.host("smol", "down") }()
 	}
 	for i := 0; i < 4; i++ {
 		if res := <-results; res.code != 0 {

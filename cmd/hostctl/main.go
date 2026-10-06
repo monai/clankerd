@@ -6,4 +6,4 @@ import (
 	"github.com/monai/clankers/clankerd/internal/cli"
 )
 
-func main() { os.Exit(cli.Ctl(os.Args[1:], os.Stdout, os.Stderr)) }
+func main() { os.Exit(cli.Host(os.Args[1:], os.Stdout, os.Stderr)) }

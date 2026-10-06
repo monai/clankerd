@@ -1,4 +1,4 @@
-// Package e2e drives the real clankerd and clankerctl binaries. Only what is outside our code is
+// Package e2e drives the real clankerd, hostctl and guestctl binaries. Only what is outside our code is
 // faked: smolvm and Chrome are small shell scripts on PATH, and the mDNS group is a loopback address.
 package e2e
 
@@ -60,7 +60,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	binDir = dir
-	for _, p := range []string{"clankerd", "clankerctl"} {
+	for _, p := range []string{"clankerd", "hostctl", "guestctl"} {
 		args := []string{"build"}
 		if os.Getenv("E2E_RACE") != "" {
 			args = append(args, "-race")
@@ -149,12 +149,10 @@ func newRig(t *testing.T) *rig {
 		"CLANKERD_MDNS_GROUP6":      fmt.Sprintf("[::1]:%d", r.udp),
 		"CLANKERD_CHROME_BIN":       filepath.Join(binDir, "fake-chrome"),
 		"CLANKERD_GUEST_DIR":        filepath.Join(r.smolDir, "guest"),
-		"CLANKERD_CMDLINE_PATH":     filepath.Join(r.work, "no-cmdline"),
-		"CLANKERD_DOCKERENV_PATH":   filepath.Join(r.work, "no-dockerenv"),
 		"FAKE_SMOLVM_DIR":           r.smolDir,
 		"FAKE_CHROME_LOG":           r.chromeLog,
 	}
-	t.Cleanup(func() { r.run("smol", "down") })
+	t.Cleanup(func() { r.host("smol", "down") })
 	return r
 }
 
@@ -171,11 +169,25 @@ type result struct {
 	code     int
 }
 
-func (r *rig) run(args ...string) result {
+func (r *rig) host(args ...string) result { r.t.Helper(); return r.run("hostctl", r.environ(), args) }
+
+// guest runs guestctl as an agent in the VM would see it: the control socket and nothing else.
+func (r *rig) guest(args ...string) result {
 	r.t.Helper()
-	cmd := exec.Command(filepath.Join(binDir, "clankerctl"), args...)
+	env := []string{"PATH=" + r.env["PATH"], "HOME=" + r.work}
+	if sock, ok := r.env["CLANKERD_GUEST_SOCKET"]; ok {
+		env = append(env, "CLANKERD_GUEST_SOCKET="+sock)
+	} else {
+		env = append(env, "CLANKERD_GUEST_SOCKET="+r.sock())
+	}
+	return r.run("guestctl", env, args)
+}
+
+func (r *rig) run(bin string, env []string, args []string) result {
+	r.t.Helper()
+	cmd := exec.Command(filepath.Join(binDir, bin), args...)
 	cmd.Dir = r.work
-	cmd.Env = r.environ()
+	cmd.Env = env
 	var so, se bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &so, &se
 	done := make(chan error, 1)
@@ -194,42 +206,42 @@ func (r *rig) run(args ...string) result {
 		return result{so.String(), se.String(), code}
 	case <-time.After(30 * time.Second):
 		cmd.Process.Kill()
-		r.t.Fatalf("clankerctl %v timed out", args)
+		r.t.Fatalf("%s %v timed out", bin, args)
 		return result{}
 	}
 }
 
 func (r *rig) ok(args ...string) string {
 	r.t.Helper()
-	res := r.run(args...)
+	return mustOK(r.t, "hostctl", r.host(args...), args)
+}
+func (r *rig) gok(args ...string) string {
+	r.t.Helper()
+	return mustOK(r.t, "guestctl", r.guest(args...), args)
+}
+func (r *rig) fail(args ...string) string {
+	r.t.Helper()
+	return mustFail(r.t, "hostctl", r.host(args...), args)
+}
+func (r *rig) gfail(args ...string) string {
+	r.t.Helper()
+	return mustFail(r.t, "guestctl", r.guest(args...), args)
+}
+
+func mustOK(t *testing.T, bin string, res result, args []string) string {
+	t.Helper()
 	if res.code != 0 {
-		r.t.Fatalf("clankerctl %v: exit %d\nstdout: %s\nstderr: %s", args, res.code, res.out, res.err)
+		t.Fatalf("%s %v: exit %d\nstdout: %s\nstderr: %s", bin, args, res.code, res.out, res.err)
 	}
 	return res.out
 }
 
-func (r *rig) fail(args ...string) string {
-	r.t.Helper()
-	res := r.run(args...)
+func mustFail(t *testing.T, bin string, res result, args []string) string {
+	t.Helper()
 	if res.code == 0 {
-		r.t.Fatalf("clankerctl %v: expected failure, got\n%s", args, res.out)
+		t.Fatalf("%s %v: expected failure, got\n%s", bin, args, res.out)
 	}
 	return res.err
-}
-
-func (r *rig) vm(args ...string) result {
-	r.t.Helper()
-	r.env["CLANKERD_CMDLINE_PATH"] = r.fakeSmolvmCmdline()
-	r.env["CLANKERD_GUEST_SOCKET"] = r.sock()
-	defer func() {
-		r.env["CLANKERD_CMDLINE_PATH"] = filepath.Join(r.work, "no-cmdline")
-		delete(r.env, "CLANKERD_GUEST_SOCKET")
-	}()
-	for _, k := range []string{"CLANKERD_HOME", "CLANKERD_SLOTS"} {
-		defer func(k, v string) { r.env[k] = v }(k, r.env[k])
-		delete(r.env, k)
-	}
-	return r.run(args...)
 }
 
 func (r *rig) sock() string { return filepath.Join(r.home, "run", "sandbox.sock") }
@@ -274,7 +286,7 @@ type lease struct {
 
 func (r *rig) acquire(args ...string) lease {
 	r.t.Helper()
-	out := r.ok(append([]string{"lease", "acquire", "--json"}, args...)...)
+	out := r.gok(append([]string{"lease", "acquire", "--json"}, args...)...)
 	var l lease
 	if err := json.Unmarshal([]byte(out), &l); err != nil {
 		r.t.Fatalf("bad json %q: %v", out, err)
@@ -357,10 +369,4 @@ func eventually(t *testing.T, what string, f func() error) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("%s: %v", what, err)
-}
-
-func (r *rig) fakeSmolvmCmdline() string {
-	p := filepath.Join(r.work, "cmdline")
-	os.WriteFile(p, []byte(`reboot=k init=/init.krun "SMOLVM_MACHINE_NAME=sandbox" maxcpus=4`), 0o644)
-	return p
 }

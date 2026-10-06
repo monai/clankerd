@@ -22,8 +22,7 @@ func (d *Daemon) handle(c net.Conn) {
 	}
 	if req.V != wire.Version {
 		wire.WriteResponse(c, &wire.Response{Error: fmt.Sprintf(
-			"protocol version mismatch: client speaks %d, clankerd speaks %d; run the same build on host and VM "+
-				"(`clankerctl smol up` relinks the VM's copy)", req.V, wire.Version)})
+			"protocol version mismatch: client speaks %d, clankerd speaks %d; run the same build on host and VM", req.V, wire.Version)})
 		return
 	}
 	resp, err := d.dispatch(req)
@@ -65,7 +64,7 @@ func (d *Daemon) dispatch(req *wire.Request) (*wire.Response, error) {
 }
 
 func errUnknown(name string) error {
-	return fmt.Errorf("unknown lease %q; run `clankerctl lease acquire %s` first", name, name)
+	return fmt.Errorf("unknown lease %q; run `guestctl lease acquire %s` first", name, name)
 }
 
 func (d *Daemon) find(name string) (*lease, error) {

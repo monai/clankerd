@@ -38,7 +38,9 @@ jobs:
           mkdir -p dist
           for t in build/*/; do
             t=$(basename "$t")
-            tar -C "build/$t" -czf "dist/clankerd-$t.tar.gz" clankerd clankerctl
+            files="clankerd hostctl"
+            if [ "$t" = linux-arm64 ]; then files="$files guestctl"; fi
+            tar -C "build/$t" -czf "dist/clankerd-$t.tar.gz" $files
           done
           (cd dist && sha256sum *.tar.gz > SHA256SUMS)
 

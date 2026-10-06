@@ -1,5 +1,5 @@
 // Package relay forwards TCP connections. The daemon uses it for app and CDP forwarders;
-// `clankerctl relay` uses it inside the VM. IPv4 and IPv6 are treated alike: listeners are bound
+// `guestctl relay` uses it inside the VM. IPv4 and IPv6 are treated alike: listeners are bound
 // per address, and outgoing connections follow RFC 8305 (Happy Eyeballs v2).
 package relay
 
