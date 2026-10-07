@@ -36,10 +36,7 @@ case "$*" in *"$STUB_FAIL_ON"*) [ -n "$STUB_FAIL_ON" ] && { echo "stub: failing 
 exit 0
 "#,
     );
-    executable(
-        &bin.join("curl"),
-        "#!/bin/sh\necho 'Welcome to nginx!'\n",
-    );
+    executable(&bin.join("curl"), "#!/bin/sh\necho 'Welcome to nginx!'\n");
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
     let out = Command::new("bash")
         .arg(script())
@@ -69,8 +66,12 @@ fn a_clean_run_walks_the_whole_prototype_and_cleans_up() {
         "-v smoke-data:/storage",
         "stop smoke",
         "start smoke",
-            ] {
-        assert!(r.calls.contains(expected), "missing `{expected}` in:\n{}", r.calls);
+    ] {
+        assert!(
+            r.calls.contains(expected),
+            "missing `{expected}` in:\n{}",
+            r.calls
+        );
     }
     assert!(
         r.calls.contains("volume rm smoke-data"),

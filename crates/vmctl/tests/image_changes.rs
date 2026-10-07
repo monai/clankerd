@@ -63,10 +63,17 @@ const READY_DOCKERD: &str = r#"echo "$@" > "$ARGS_FILE"; : > "$DOCKER_SOCK"; sle
 fn dockerd_starts_when_the_clankerdenv_marker_exists() {
     let sb = Sandbox::new(READY_DOCKERD);
     let out = sb.start(true);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(sb.path("docker.sock").exists());
     let args = fs::read_to_string(sb.path("args")).unwrap();
-    assert!(args.contains("--config-file=/etc/docker/daemon.json"), "{args}");
+    assert!(
+        args.contains("--config-file=/etc/docker/daemon.json"),
+        "{args}"
+    );
 }
 
 #[test]
@@ -74,7 +81,10 @@ fn nothing_starts_without_the_marker() {
     let sb = Sandbox::new(READY_DOCKERD);
     let out = sb.start(false);
     assert!(out.status.success());
-    assert!(!sb.path("args").exists(), "dockerd ran outside a clankerd machine");
+    assert!(
+        !sb.path("args").exists(),
+        "dockerd ran outside a clankerd machine"
+    );
 }
 
 #[test]
