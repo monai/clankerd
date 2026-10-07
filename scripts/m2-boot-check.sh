@@ -2,7 +2,7 @@
 # Real boots on the M2 (tickets 03 and 05). Run on the Mac after `make rust`.
 # See docs/libkrun-first-boot.md. Exits non-zero on the first failed check.
 #
-#   scripts/m2-boot-check.sh [boot|image|all]      (default: all)
+#   scripts/m2-boot-check.sh [boot|image|net|all]   (default: all)
 #   OUT=build/rust IMAGE=ghcr.io/monai/clankers:slim scripts/m2-boot-check.sh
 #
 # boot  (ticket 03): the guest's root is only the boot directory
@@ -14,6 +14,11 @@
 #       builds the base disk with a population boot, which takes a while) and
 #       checks workload user/workdir/env, /.clankerdenv, cgroup delegation,
 #       exit codes, graceful stop, kill fallback and the cached second create.
+# net   (ticket 08): boots IMAGE with its gvproxy sidecar and checks DHCP on
+#       eth0, DNS, an HTTPS fetch, the forwarding sysctls, that gvproxy's
+#       control API (192.168.127.1:80) and the host-loopback alias
+#       (192.168.127.254) are unreachable, and that gvproxy ends with the
+#       machine. Needs network access on the Mac (first run downloads gvproxy).
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -27,7 +32,7 @@ state=$(mktemp -d /tmp/clankerd-boot-check.XXXXXX)
 export CLANKERD_STATE_DIR=$state/state
 export CLANKERD_RUNTIME_DIR=$state/run
 cleanup() {
-  for m in dev probe override stubborn second; do
+  for m in net dev probe override stubborn second; do
     "$vmctl" rm -f "$m" >/dev/null 2>&1 || true
   done
   rm -rf "$state"
@@ -37,7 +42,7 @@ trap cleanup EXIT
 step() { printf '\n== %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
-case "$mode" in boot | image | all) ;; *) fail "usage: $0 [boot|image|all]" ;; esac
+case "$mode" in boot | image | net | all) ;; *) fail "usage: $0 [boot|image|all]" ;; esac
 
 step "prerequisites"
 [ "$(uname -sm)" = "Darwin arm64" ] || fail "run this on the Apple Silicon Mac"
@@ -179,10 +184,43 @@ image_check() {
   [ "$took" -le 10 ] || fail "second create took ${took}s (is the base disk cloned?)"
 }
 
+net_check() {
+  step "net: boot IMAGE with a gvproxy sidecar"
+  "$vmctl" run -d --name net --entrypoint sleep "$image" infinity
+  wait_exec net
+
+  step "net: eth0 got 192.168.127.2 by DHCP"
+  "$vmctl" exec net sh -c 'ip -4 addr show eth0 || ifconfig eth0' | tee /dev/stderr | grep -q 192.168.127.2 \
+    || fail "eth0 has no DHCP address"
+
+  step "net: DNS resolves and HTTPS works"
+  "$vmctl" exec net cat /etc/resolv.conf
+  "$vmctl" exec net sh -c 'getent hosts example.com || nslookup example.com' || fail "DNS lookup failed"
+  "$vmctl" exec net sh -c 'wget -qO- https://example.com | head -c 200 || curl -fsS https://example.com | head -c 200' \
+    || fail "HTTPS fetch failed"
+
+  step "net: forwarding sysctls are set"
+  [ "$("$vmctl" exec net cat /proc/sys/net/ipv4/ip_forward)" = 1 ] || fail "net.ipv4.ip_forward is not 1"
+
+  step "net: gvproxy's control API and the host-loopback alias are unreachable"
+  if "$vmctl" exec net sh -c 'wget -T 3 -qO- http://192.168.127.1/services/forwarder/all || curl -m 3 -fsS http://192.168.127.1/services/forwarder/all'; then
+    fail "the guest reached gvproxy's control API"
+  fi
+  if "$vmctl" exec net sh -c 'wget -T 3 -qO- http://192.168.127.254:22 || curl -m 3 -sS http://192.168.127.254:22'; then
+    fail "the guest reached the host loopback alias"
+  fi
+
+  step "net: gvproxy stops with the machine"
+  pgrep -f "gvproxy.*$state" >/dev/null || fail "no gvproxy sidecar is running"
+  "$vmctl" rm -f net >/dev/null
+  ! pgrep -f "gvproxy.*$state" >/dev/null || fail "gvproxy outlived its machine"
+}
+
 case "$mode" in
   boot) boot_check ;;
   image) image_check ;;
-  all) boot_check; image_check ;;
+  net) net_check ;;
+  all) boot_check; image_check; net_check ;;
 esac
 
 step "done"
