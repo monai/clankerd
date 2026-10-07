@@ -143,6 +143,14 @@ pub struct Disk {
     pub read_only: bool,
 }
 
+/// A host directory shared with the guest over virtio-fs.
+#[derive(Debug, Clone)]
+pub struct Share {
+    /// What the guest passes to `mount -t virtiofs`.
+    pub tag: String,
+    pub path: PathBuf,
+}
+
 /// Everything libkrun needs to boot one guest.
 #[derive(Debug, Clone)]
 pub struct BootConfig {
@@ -158,6 +166,8 @@ pub struct BootConfig {
     pub vsock_ports: Vec<VsockPort>,
     /// Block devices in order: the first is `/dev/vda`.
     pub disks: Vec<Disk>,
+    /// Extra virtio-fs shares (the root directory is separate).
+    pub shares: Vec<Share>,
     pub cpus: u8,
     pub memory_mib: u32,
 }
@@ -172,6 +182,7 @@ impl BootConfig {
             console_log: None,
             vsock_ports: Vec::new(),
             disks: Vec::new(),
+            shares: Vec::new(),
             cpus: 1,
             memory_mib: 512,
         }
@@ -255,6 +266,14 @@ pub fn boot(config: &BootConfig) -> Result<std::convert::Infallible, Error> {
             check(
                 "krun_add_disk2",
                 ffi::krun_add_disk2(ctx, id.as_ptr(), disk.as_ptr(), 0, d.read_only),
+            )?;
+        }
+        for s in &config.shares {
+            let tag = cstr(&s.tag, "share tag")?;
+            let dir = path(&s.path, "share path")?;
+            check(
+                "krun_add_virtiofs",
+                ffi::krun_add_virtiofs(ctx, tag.as_ptr(), dir.as_ptr()),
             )?;
         }
         for p in &config.vsock_ports {

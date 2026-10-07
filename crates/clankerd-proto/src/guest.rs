@@ -27,6 +27,29 @@ pub struct Workload {
     /// guest clock from it when it boots a root disk.
     #[serde(default)]
     pub clock: Option<Clock>,
+    /// Volume and bind mounts guestd sets up after pivoting into the root disk.
+    #[serde(default)]
+    pub mounts: Vec<GuestMount>,
+}
+
+/// One mount guestd performs at boot (`--boot` only).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum GuestMount {
+    /// A sparse raw ext4 file attached as a block device: formatted when
+    /// blank, grown to `size` bytes when smaller, mounted at `target`.
+    Volume {
+        device: String,
+        target: String,
+        size: u64,
+    },
+    /// A host directory shared over virtio-fs under `tag`.
+    Bind {
+        tag: String,
+        target: String,
+        #[serde(default)]
+        read_only: bool,
+    },
 }
 
 /// A point in time as seconds and nanoseconds since the Unix epoch.

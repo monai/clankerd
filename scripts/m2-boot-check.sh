@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Real boots on the M2 (tickets 03 and 05). Run on the Mac after `make rust`.
+# Real boots on the M2 (tickets 03, 05 and 09). Run on the Mac after `make rust`.
 # See docs/libkrun-first-boot.md. Exits non-zero on the first failed check.
 #
-#   scripts/m2-boot-check.sh [boot|image|all]      (default: all)
+#   scripts/m2-boot-check.sh [boot|image|volume|all]      (default: all)
 #   OUT=build/rust IMAGE=ghcr.io/monai/clankers:slim scripts/m2-boot-check.sh
 #
 # boot  (ticket 03): the guest's root is only the boot directory
@@ -14,6 +14,10 @@
 #       builds the base disk with a population boot, which takes a while) and
 #       checks workload user/workdir/env, /.clankerdenv, cgroup delegation,
 #       exit codes, graceful stop, kill fallback and the cached second create.
+# volume (ticket 09): a named volume (sparse raw ext4, formatted by guestd on
+#       first use, mounted at /storage), persistence across stop/start and
+#       `rm` without -v, growth at the next start, `rm -v`, and a virtio-fs
+#       bind mount that is readable and writable from both sides.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -27,9 +31,10 @@ state=$(mktemp -d /tmp/clankerd-boot-check.XXXXXX)
 export CLANKERD_STATE_DIR=$state/state
 export CLANKERD_RUNTIME_DIR=$state/run
 cleanup() {
-  for m in dev probe override stubborn second; do
+  for m in dev probe override stubborn second vol1 vol2 binds; do
     "$vmctl" rm -f "$m" >/dev/null 2>&1 || true
   done
+  "$vmctl" volume rm data >/dev/null 2>&1 || true
   rm -rf "$state"
 }
 trap cleanup EXIT
@@ -37,7 +42,7 @@ trap cleanup EXIT
 step() { printf '\n== %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
-case "$mode" in boot | image | all) ;; *) fail "usage: $0 [boot|image|all]" ;; esac
+case "$mode" in boot | image | volume | all) ;; *) fail "usage: $0 [boot|image|volume|all]" ;; esac
 
 step "prerequisites"
 [ "$(uname -sm)" = "Darwin arm64" ] || fail "run this on the Apple Silicon Mac"
@@ -179,10 +184,69 @@ image_check() {
   [ "$took" -le 10 ] || fail "second create took ${took}s (is the base disk cloned?)"
 }
 
+volume_check() {
+  [ -x "$out/linux-arm64/mke2fs" ] && [ -x "$out/linux-arm64/resize2fs" ] \
+    || fail "mke2fs/resize2fs missing in $out/linux-arm64: run make rust (it builds e2fsprogs)"
+
+  "$vmctl" pull "$image" >/dev/null
+
+  step "new volume: sparse on the host, formatted and mounted by guestd"
+  "$vmctl" run -d --name vol1 -v data:/storage --volume-size 1G "$image" sleep infinity
+  wait_exec vol1
+  volfile=$CLANKERD_STATE_DIR/volumes/data/data.ext4
+  [ "$(stat -f %z "$volfile")" -eq 1073741824 ] || fail "volume file is not 1G"
+  echo "allocated on the host: $(du -h "$volfile" | cut -f1) of 1G apparent (formatting should have touched only a little)"
+  "$vmctl" exec vol1 sh -c 'grep " /storage " /proc/mounts; df -h /storage'
+  "$vmctl" exec vol1 sh -c 'grep " /storage " /proc/mounts | grep -q ext4' || fail "/storage is not an ext4 mount"
+  logs_have vol1 "formatted new volume"
+  "$vmctl" exec vol1 sh -c 'echo persisted > /storage/marker && sync'
+
+  step "the data survives stop/start (no reformat)"
+  "$vmctl" stop vol1
+  "$vmctl" start vol1
+  wait_exec vol1
+  [ "$("$vmctl" exec vol1 cat /storage/marker)" = persisted ] || fail "marker lost across stop/start"
+
+  step "the data survives rm without -v, and a new machine reuses the volume"
+  "$vmctl" stop vol1
+  "$vmctl" rm vol1
+  "$vmctl" volume ls | grep -q '^data ' || fail "volume was removed by plain rm"
+
+  step "a larger size takes effect at the next start (resize2fs)"
+  before=$(stat -f %z "$volfile")
+  "$vmctl" run -d --name vol2 -v data:/storage:size=2G "$image" sleep infinity
+  wait_exec vol2
+  [ "$(stat -f %z "$volfile")" -eq 2147483648 ] || fail "volume file did not grow to 2G (was $before)"
+  logs_have vol2 "grew volume"
+  total=$("$vmctl" exec vol2 sh -c 'stat -f -c "%b * %S" /storage' | bc)
+  echo "filesystem bytes: $total"
+  [ "$total" -gt 1900000000 ] || fail "filesystem did not grow (total $total)"
+  [ "$("$vmctl" exec vol2 cat /storage/marker)" = persisted ] || fail "marker lost after growing"
+
+  step "rm -v deletes the volume"
+  "$vmctl" rm -f -v vol2
+  [ ! -e "$volfile" ] || fail "volume file still exists after rm -v"
+
+  step "bind mount: readable and writable from both sides"
+  hostdir=$state/shared
+  mkdir -p "$hostdir"
+  echo from-host > "$hostdir/host.txt"
+  "$vmctl" run -d --name binds -v "$hostdir":/shared "$image" sleep infinity
+  wait_exec binds
+  [ "$("$vmctl" exec binds cat /shared/host.txt)" = from-host ] || fail "guest cannot read the host file"
+  "$vmctl" exec binds sh -c 'echo from-guest > /shared/guest.txt && sync'
+  [ "$(cat "$hostdir/guest.txt")" = from-guest ] || fail "host cannot read the guest's file"
+  echo host-update > "$hostdir/host.txt"
+  [ "$("$vmctl" exec binds cat /shared/host.txt)" = host-update ] || fail "guest does not see the host's update"
+  "$vmctl" exec binds sh -c 'ls -ln /shared; id -u'
+  "$vmctl" rm -f binds
+}
+
 case "$mode" in
   boot) boot_check ;;
   image) image_check ;;
-  all) boot_check; image_check ;;
+  volume) volume_check ;;
+  all) boot_check; image_check; volume_check ;;
 esac
 
 step "done"

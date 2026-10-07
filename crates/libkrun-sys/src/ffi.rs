@@ -25,6 +25,11 @@ unsafe extern "C" {
         disk_format: u32,
         read_only: bool,
     ) -> i32;
+    /// Shares host directory `c_path` with the guest as a virtio-fs device the
+    /// guest mounts with `mount -t virtiofs <c_tag> <dir>`. ASSUMED signature
+    /// `(ctx, tag, path)` from the 1.19 header notes (memory/research-libkrun.md);
+    /// unverified on the M2. Read-only is enforced by the guest's mount flags.
+    pub fn krun_add_virtiofs(ctx_id: u32, c_tag: *const c_char, c_path: *const c_char) -> i32;
     pub fn krun_set_console_output(ctx_id: u32, c_filepath: *const c_char) -> i32;
     /// With `listen`, libkrun binds a unix socket at `c_filepath` and forwards
     /// connections to the guest's vsock `port`.

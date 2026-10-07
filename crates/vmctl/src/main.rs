@@ -12,7 +12,7 @@ use clap::{Args, Parser, Subcommand};
 use libclankerd::vmm::{LocalProcessVmm, VmspawnVmm};
 use libclankerd::{
     Engine, EngineConfig, Error, HostConfig, ImageInfo, LocalGuestdPopulator, MachineConfig,
-    MachineInfo, PortBinding, Status, VmspawnPopulator,
+    MachineInfo, Mount, PortBinding, Status, VmspawnPopulator, VolumeInfo,
 };
 
 #[derive(Parser)]
@@ -97,13 +97,36 @@ enum Command {
     Logs { machine: String },
     /// Run a command in a running machine.
     Exec(exec::ExecArgs),
-    /// Remove machines.
+    /// Remove machines. Their named volume is kept unless -v is given.
     Rm {
         /// Remove running machines too.
         #[arg(short, long)]
         force: bool,
+        /// Also delete the machine's named volume.
+        #[arg(short = 'v', long = "volumes")]
+        volumes: bool,
         machines: Vec<String>,
     },
+    /// Manage named volumes.
+    #[command(subcommand)]
+    Volume(VolumeCommand),
+}
+
+#[derive(Subcommand)]
+enum VolumeCommand {
+    /// List volumes.
+    Ls,
+    /// Create a sparse volume ahead of time (machines also create theirs).
+    Create {
+        /// Size, e.g. 20G (default 16G).
+        #[arg(long)]
+        size: Option<String>,
+        name: String,
+    },
+    /// Show volumes as JSON.
+    Inspect { names: Vec<String> },
+    /// Delete volumes and their data (not while a machine mounts them).
+    Rm { names: Vec<String> },
 }
 
 #[derive(Args)]
@@ -131,6 +154,13 @@ struct CreateArgs {
     /// Publish a guest port on host loopback: [IP:]HOST_PORT:GUEST_PORT.
     #[arg(short = 'p', long = "publish", value_parser = parse_publish)]
     publish: Vec<PortBinding>,
+    /// Mount a named volume (`data:/storage[:size=20G]`) or a host directory
+    /// (`./dir:/path[:ro]`; a source starting with `.`, `/` or `~` is a path).
+    #[arg(short = 'v', long = "volume", value_parser = parse_mount)]
+    volume: Vec<Mount>,
+    /// Size of the named volume, e.g. 20G (it only ever grows).
+    #[arg(long = "volume-size")]
+    volume_size: Option<String>,
     image: String,
     /// Command and arguments.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -230,11 +260,73 @@ fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error>
         working_dir: a.workdir.unwrap_or_default(),
         ..Default::default()
     };
+    let mut mounts = a.volume;
+    if let Some(size) = &a.volume_size {
+        let bytes = libclankerd::parse_size(size)?;
+        let volume = mounts
+            .iter_mut()
+            .find(|m| matches!(m, Mount::Volume { .. }))
+            .ok_or_else(|| Error::invalid_parameter("--volume-size needs a named volume (-v)"))?;
+        *volume = volume.clone().with_size(bytes);
+    }
     let host_config = HostConfig {
         port_bindings: a.publish,
+        mounts,
         ..Default::default()
     };
     engine.create(a.name.as_deref(), config, host_config)
+}
+
+/// Parses `SOURCE:TARGET[:OPTIONS]` where OPTIONS are comma-separated `ro` and
+/// `size=N`. A source starting with `.`, `/` or `~` is a host directory (made
+/// absolute against the current directory); anything else is a volume name.
+fn parse_mount(s: &str) -> Result<Mount, String> {
+    let parts: Vec<&str> = s.split(':').collect();
+    let (source, target, options) = match parts.as_slice() {
+        [source, target] => (*source, *target, ""),
+        [source, target, options] => (*source, *target, *options),
+        _ => return Err("expected SOURCE:TARGET[:OPTIONS]".into()),
+    };
+    if source.is_empty() || !target.starts_with('/') {
+        return Err("expected SOURCE:/ABSOLUTE/TARGET[:OPTIONS]".into());
+    }
+    let (mut read_only, mut size) = (false, None);
+    for opt in options.split(',').filter(|o| !o.is_empty()) {
+        match opt.split_once('=') {
+            None if opt == "ro" => read_only = true,
+            None if opt == "rw" => read_only = false,
+            Some(("size", v)) => {
+                size = Some(libclankerd::parse_size(v).map_err(|e| e.message().to_owned())?)
+            }
+            _ => return Err(format!("unknown mount option \"{opt}\" (use ro or size=N)")),
+        }
+    }
+    if source.starts_with(['.', '/', '~']) {
+        if size.is_some() {
+            return Err("size= only applies to named volumes".into());
+        }
+        let expanded = match source.strip_prefix("~/") {
+            Some(rest) => PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(rest),
+            None => PathBuf::from(source),
+        };
+        let absolute = std::path::absolute(&expanded).map_err(|e| e.to_string())?;
+        // Resolve `..` and symlinks when the directory exists; the library
+        // reports a missing one.
+        let source = absolute.canonicalize().unwrap_or(absolute);
+        return Ok(Mount::Bind {
+            source,
+            target: target.into(),
+            read_only,
+        });
+    }
+    if read_only {
+        return Err("ro only applies to host directories".into());
+    }
+    let mount = Mount::volume(source, target);
+    Ok(match size {
+        Some(bytes) => mount.with_size(bytes),
+        None => mount,
+    })
 }
 
 /// Parses `[IP:]HOST_PORT:GUEST_PORT`. The library rejects non-loopback IPs.
@@ -353,11 +445,72 @@ fn run(cli: Cli) -> Result<u8, Error> {
             std::io::stdout().write_all(&bytes).map_err(Error::from)?;
             Ok(0)
         }
-        Command::Rm { force, machines } => Ok(each(&machines, |n| {
-            engine.get(n)?.remove(force)?;
+        Command::Rm {
+            force,
+            volumes,
+            machines,
+        } => Ok(each(&machines, |n| {
+            let m = engine.get(n)?;
+            if volumes {
+                m.remove_with_volumes(force)?;
+            } else {
+                m.remove(force)?;
+            }
+            Ok(n.to_owned())
+        })),
+        Command::Volume(cmd) => volume(&engine, cmd),
+    }
+}
+
+fn volume(engine: &Engine, cmd: VolumeCommand) -> Result<u8, Error> {
+    match cmd {
+        VolumeCommand::Ls => {
+            println!("{:<32}SIZE", "VOLUME NAME");
+            for v in engine.volumes()? {
+                println!("{:<32}{}", v.name, binary_size(v.size));
+            }
+            Ok(0)
+        }
+        VolumeCommand::Create { size, name } => {
+            let size = size.as_deref().map(libclankerd::parse_size).transpose()?;
+            println!("{}", engine.create_volume(&name, size)?.name);
+            Ok(0)
+        }
+        VolumeCommand::Inspect { names } => {
+            let mut infos: Vec<VolumeInfo> = Vec::new();
+            let mut code = 0;
+            for n in &names {
+                match engine.volume(n) {
+                    Ok(i) => infos.push(i),
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        code = 1;
+                    }
+                }
+            }
+            println!("{}", serde_json::to_string_pretty(&infos).unwrap());
+            Ok(code)
+        }
+        VolumeCommand::Rm { names } => Ok(each(&names, |n| {
+            engine.remove_volume(n)?;
             Ok(n.to_owned())
         })),
     }
+}
+
+/// Bytes in powers of 1024: `8M`, `16G`.
+fn binary_size(bytes: u64) -> String {
+    for (shift, unit) in [(40, "T"), (30, "G"), (20, "M"), (10, "K")] {
+        if bytes >= 1 << shift {
+            let v = bytes as f64 / (1u64 << shift) as f64;
+            return if v.fract() == 0.0 {
+                format!("{v:.0}{unit}")
+            } else {
+                format!("{v:.1}{unit}")
+            };
+        }
+    }
+    format!("{bytes}B")
 }
 
 /// `KILL`, `SIGKILL`, `kill` or `9`.

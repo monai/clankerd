@@ -53,13 +53,29 @@ impl Hypervisor for Libkrun {
             }
             argv
         };
+        // Order matters: the first disk is /dev/vda (root), the next /dev/vdb.
         if let Some(disk) = &spec.root_disk {
-            cfg.disks = vec![libkrun_sys::Disk {
+            cfg.disks.push(libkrun_sys::Disk {
                 block_id: "root".into(),
                 path: disk.clone(),
                 read_only: false,
-            }];
+            });
         }
+        if let Some(disk) = &spec.volume_disk {
+            cfg.disks.push(libkrun_sys::Disk {
+                block_id: "volume".into(),
+                path: disk.clone(),
+                read_only: false,
+            });
+        }
+        cfg.shares = spec
+            .shares
+            .iter()
+            .map(|s| libkrun_sys::Share {
+                tag: s.tag.clone(),
+                path: s.path.clone(),
+            })
+            .collect();
         // Make init.krun exec guestd as PID 1 instead of forking it.
         cfg.env = vec!["KRUN_INIT_PID1=1".into()];
         cfg.console_log = Some(spec.console_log.clone());

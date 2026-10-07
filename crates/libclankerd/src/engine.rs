@@ -16,6 +16,7 @@ use crate::state::MachineState;
 use crate::store::{Record, Store};
 use crate::tunnel::{MachineTunnels, validate_host_config};
 use crate::vmm::{UnavailableVmm, Vmm};
+use crate::volumes::{VolumeInfo, VolumeStore};
 
 /// File name of a machine's root disk inside its state directory.
 pub const ROOT_DISK: &str = "root.ext4";
@@ -223,6 +224,7 @@ impl Engine {
             return Err(Error::invalid_parameter("no command specified"));
         }
         validate_host_config(&host_config)?;
+        crate::mount::validate(&host_config.mounts)?;
         if let Some(name) = name {
             validate_name(name)?;
         }
@@ -252,6 +254,7 @@ impl Engine {
             None => None,
         };
 
+        let mut new_volume = None;
         {
             let _g = self.inner.lock();
             for existing in self.inner.store.ids()? {
@@ -263,6 +266,10 @@ impl Engine {
                     )));
                 }
             }
+            let volumes = self.volume_store();
+            if crate::mount::ensure_volume(&volumes, &host_config.mounts)? {
+                new_volume = crate::mount::volume_name(&host_config.mounts).map(str::to_owned);
+            }
             let record = Record {
                 id: id.clone(),
                 name,
@@ -272,7 +279,12 @@ impl Engine {
                 image_id: base.as_ref().map(|(id, _)| id.clone()).unwrap_or_default(),
                 image_config,
             };
-            self.inner.store.create(&record, &MachineState::created())?;
+            if let Err(e) = self.inner.store.create(&record, &MachineState::created()) {
+                if let Some(v) = &new_volume {
+                    let _ = volumes.remove(v);
+                }
+                return Err(e);
+            }
         }
         if let Some((_, base)) = base {
             // The machine's root disk: `root.ext4` in its directory, a clone of the
@@ -280,6 +292,9 @@ impl Engine {
             let disk = self.inner.store.machine_dir(&id).join(ROOT_DISK);
             if let Err(e) = clone_file(&base, &disk) {
                 let _ = self.inner.store.remove(&id);
+                if let Some(v) = &new_volume {
+                    let _ = self.volume_store().remove(v);
+                }
                 return Err(e);
             }
         }
@@ -310,6 +325,40 @@ impl Engine {
             Some(image) => Ok(image),
             None => store.pull(reference),
         }
+    }
+
+    fn volume_store(&self) -> VolumeStore {
+        VolumeStore::new(self.inner.store.volumes_dir())
+    }
+
+    /// Lists named volumes by name.
+    pub fn volumes(&self) -> Result<Vec<VolumeInfo>> {
+        self.volume_store().list()
+    }
+
+    /// Inspects a named volume.
+    pub fn volume(&self, name: &str) -> Result<VolumeInfo> {
+        self.volume_store().get(name)
+    }
+
+    /// Creates a sparse volume (`size` bytes, default 16 GiB). Machines also
+    /// create theirs on demand; this is for volumes made ahead of time.
+    pub fn create_volume(&self, name: &str, size: Option<u64>) -> Result<VolumeInfo> {
+        let _g = self.inner.lock();
+        self.volume_store().create(name, size)
+    }
+
+    /// Deletes a volume and its data. Refused while a machine mounts it.
+    pub fn remove_volume(&self, name: &str) -> Result<()> {
+        let _g = self.inner.lock();
+        let store = self.volume_store();
+        store.get(name)?;
+        if let Some(user) = crate::volumes::users_of(&self.inner, name, None)?.first() {
+            return Err(Error::conflict(format!(
+                "volume \"{name}\" is in use by machine {user}"
+            )));
+        }
+        store.remove(name)
     }
 
     /// Looks a machine up by name, id or unique id prefix.

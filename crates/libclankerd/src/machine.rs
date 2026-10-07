@@ -17,6 +17,7 @@ use crate::image_config::ImageConfig;
 use crate::state::{MachineState, Status, WaitResult};
 use crate::tunnel::{GuestBinding, MachineTunnels, PublishedPort, validate_port_binding};
 use crate::vmm::BootSpec;
+use crate::volumes::VolumeStore;
 
 /// Everything `inspect` reports: the creation-time record plus current state.
 #[derive(Debug, Clone, Serialize)]
@@ -79,12 +80,39 @@ impl Machine {
                     info.name
                 )));
             }
+            if let Some(name) = crate::mount::volume_name(&info.host_config.mounts) {
+                self.check_volume_free(&starting, name)?;
+            }
             starting.insert(self.id.clone());
         }
         let result = self.boot(&info);
         self.inner.lock().remove(&self.id);
         self.inner.changed.notify_all();
         result
+    }
+
+    /// A volume is one filesystem: only one machine may run on it at a time.
+    fn check_volume_free(
+        &self,
+        starting: &std::collections::HashSet<String>,
+        volume: &str,
+    ) -> Result<()> {
+        for id in self.inner.store.ids()? {
+            if id == self.id {
+                continue;
+            }
+            let Ok((record, state)) = self.inner.store.load(&id) else {
+                continue;
+            };
+            let busy = state.status == Status::Running || starting.contains(&id);
+            if busy && crate::mount::volume_name(&record.host_config.mounts) == Some(volume) {
+                return Err(Error::conflict(format!(
+                    "volume \"{volume}\" is in use by running machine {}",
+                    record.name
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn boot(&self, info: &MachineInfo) -> Result<()> {
@@ -94,6 +122,12 @@ impl Machine {
         let _ = fs::remove_file(&exit_file);
 
         let root_disk = Some(dir.join(crate::engine::ROOT_DISK)).filter(|d| d.exists());
+        // Grows the volume file if its size increased; binds are checked here.
+        let plan = crate::mount::plan(
+            &VolumeStore::new(self.inner.store.volumes_dir()),
+            &info.host_config.mounts,
+            root_disk.is_some(),
+        )?;
         let mut argv = info.config.entrypoint.clone();
         argv.extend(info.config.cmd.iter().cloned());
         let spec = BootSpec {
@@ -109,9 +143,12 @@ impl Machine {
                 working_dir: info.config.working_dir.clone(),
                 user: info.config.user.clone(),
                 clock: Some(Clock::now()),
+                mounts: plan.guest,
             },
             cpus: info.host_config.cpus,
             memory: info.host_config.memory,
+            volume_disk: plan.volume_disk,
+            shares: plan.shares,
         };
 
         let fail = |err: Error| {
@@ -308,7 +345,28 @@ impl Machine {
         }
     }
 
-    /// Deletes the machine and its state. A running machine needs `force`.
+    /// Like [`Machine::remove`], and deletes the machine's named volume too.
+    /// Refuses (removing nothing) while another machine uses the volume.
+    pub fn remove_with_volumes(&self, force: bool) -> Result<()> {
+        let info = self.inspect()?;
+        let Some(volume) = crate::mount::volume_name(&info.host_config.mounts) else {
+            return self.remove(force);
+        };
+        if let Some(other) = crate::volumes::users_of(&self.inner, volume, Some(&self.id))?.first()
+        {
+            return Err(Error::conflict(format!(
+                "volume \"{volume}\" is also used by machine {other}"
+            )));
+        }
+        self.remove(force)?;
+        match VolumeStore::new(self.inner.store.volumes_dir()).remove(volume) {
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+            other => other,
+        }
+    }
+
+    /// Deletes the machine and its state, keeping its named volume. A running
+    /// machine needs `force`.
     pub fn remove(&self, force: bool) -> Result<()> {
         let mut starting = self.inner.lock();
         let (record, state) = self.inner.store.load(&self.id)?;

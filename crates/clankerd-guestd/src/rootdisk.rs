@@ -35,7 +35,7 @@ pub struct Ctx {
 }
 
 /// Failure of one method: a protocol-level error name plus a message.
-struct Failure(&'static str, String);
+pub(crate) struct Failure(pub(crate) &'static str, pub(crate) String);
 
 impl Failure {
     fn invalid(msg: impl Into<String>) -> Self {
@@ -98,7 +98,7 @@ fn format_ext4(ctx: &Ctx, p: FormatExt4) -> Result<Value, Failure> {
     Ok(Value::Object(Default::default()))
 }
 
-fn format_device(
+pub(crate) fn format_device(
     ctx: &Ctx,
     device: &Path,
     size: Option<u64>,
@@ -253,8 +253,8 @@ fn umount(target: &Path) -> Result<(), Failure> {
 
 /// A loop device attached to a regular file, detached on drop (autoclear covers
 /// the case where it is still mounted).
-struct LoopDevice {
-    path: PathBuf,
+pub(crate) struct LoopDevice {
+    pub(crate) path: PathBuf,
 }
 
 const LOOP_SET_FD: libc::Ioctl = 0x4C00 as libc::Ioctl;
@@ -264,7 +264,7 @@ const LOOP_CTL_GET_FREE: libc::Ioctl = 0x4C82 as libc::Ioctl;
 const LO_FLAGS_AUTOCLEAR: u32 = 4;
 
 impl LoopDevice {
-    fn attach(file: &Path) -> io::Result<Self> {
+    pub(crate) fn attach(file: &Path) -> io::Result<Self> {
         let ctl = OpenOptions::new()
             .read(true)
             .write(true)

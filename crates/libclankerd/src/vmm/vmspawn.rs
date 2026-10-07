@@ -12,6 +12,8 @@ use crate::error::{Error, Result};
 
 const SPEC_FILE: &str = "vmspawn.json";
 const LOG_FILE: &str = "vmspawn.log";
+/// Static binaries guestd needs for a volume, next to guestd.
+const VOLUME_TOOLS: [&str; 2] = ["mke2fs", "resize2fs"];
 const DEFAULT_CPUS: u32 = 2;
 const DEFAULT_MEMORY: u64 = 1024 * 1024 * 1024;
 
@@ -60,10 +62,37 @@ impl VmspawnVmm {
                 ))
             })?;
         }
+        if spec.volume_disk.is_some() {
+            self.place_volume_tools(boot)?;
+        }
         fs::write(
             boot.join(BOOT_WORKLOAD),
             serde_json::to_vec(&spec.workload)?,
         )?;
+        Ok(())
+    }
+
+    /// guestd formats and grows the volume with the static e2fsprogs that ship
+    /// next to it; they must be in the boot directory it keeps at
+    /// `/run/clankerd/boot`.
+    fn place_volume_tools(&self, boot: &Path) -> Result<()> {
+        let dir = self.guestd.parent().unwrap_or(Path::new("."));
+        for name in VOLUME_TOOLS {
+            let src = dir.join(name);
+            if !src.exists() {
+                return Err(Error::unavailable(format!(
+                    "{name} not found in {} (volumes need it; run `make rust`, it builds e2fsprogs)",
+                    dir.display()
+                )));
+            }
+            let dst = boot.join(name);
+            let _ = fs::remove_file(&dst);
+            if fs::hard_link(&src, &dst).is_err() {
+                fs::copy(&src, &dst).map_err(|e| {
+                    Error::unavailable(format!("cannot place {name} in the boot directory: {e}"))
+                })?;
+            }
+        }
         Ok(())
     }
 }
@@ -83,6 +112,8 @@ impl Vmm for VmspawnVmm {
             memory_mib: (spec.memory.unwrap_or(DEFAULT_MEMORY) / (1024 * 1024)).max(128) as u32,
             root_disk: spec.root_disk.clone(),
             populate: false,
+            volume_disk: spec.volume_disk.clone(),
+            shares: spec.shares.clone(),
         };
         let spec_file = spec.dir.join(SPEC_FILE);
         fs::write(&spec_file, serde_json::to_vec_pretty(&spawn_spec)?)?;

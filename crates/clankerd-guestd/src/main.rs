@@ -55,6 +55,7 @@ use serde_json::Value;
 
 mod exec;
 mod user;
+mod volume;
 
 const LISTEN_FD: i32 = 3;
 const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";

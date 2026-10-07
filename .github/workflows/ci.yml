@@ -76,6 +76,7 @@ jobs:
         run: |
           sudo apt-get install -y --no-install-recommends e2fsprogs
           sudo -E env "PATH=$PATH" "HOME=$HOME" mise exec -- cargo test -p clankerd-guestd --test seam_b -- --nocapture 2>&1 | tee seam-b.log
+          sudo -E env "PATH=$PATH" "HOME=$HOME" mise exec -- cargo test -p clankerd-guestd --bin clankerd-guestd volume -- --nocapture 2>&1 | tee -a seam-b.log
           sudo -E env "PATH=$PATH" "HOME=$HOME" mise exec -- cargo test -p libclankerd --test images --test seam_b_images -- --nocapture 2>&1 | tee -a seam-b.log
           if grep -q '^SKIPPED' seam-b.log; then echo "seam B tests were skipped:"; grep '^SKIPPED' seam-b.log; exit 1; fi
 
