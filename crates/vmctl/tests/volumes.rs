@@ -59,7 +59,10 @@ impl Cli {
     }
 
     fn volume_file(&self, name: &str) -> PathBuf {
-        self.root().join("state/volumes").join(name).join("data.ext4")
+        self.root()
+            .join("state/volumes")
+            .join(name)
+            .join("data.ext4")
     }
 }
 
@@ -67,7 +70,15 @@ impl Cli {
 fn a_named_volume_is_created_sparse_with_the_requested_size_and_survives_rm() {
     let cli = Cli::new();
     cli.ok(&[
-        "run", "--name", "a", "-v", "data:/storage", "--volume-size", "8M", "img", "true",
+        "run",
+        "--name",
+        "a",
+        "-v",
+        "data:/storage",
+        "--volume-size",
+        "8M",
+        "img",
+        "true",
     ]);
     assert_eq!(
         std::fs::metadata(cli.volume_file("data")).unwrap().len(),
@@ -84,7 +95,15 @@ fn a_named_volume_is_created_sparse_with_the_requested_size_and_survives_rm() {
     assert_eq!(v[0]["size"], 8 * MIB);
 
     // A new machine reuses it, and a bigger size grows it.
-    cli.ok(&["run", "--name", "b", "-v", "data:/storage:size=24M", "img", "true"]);
+    cli.ok(&[
+        "run",
+        "--name",
+        "b",
+        "-v",
+        "data:/storage:size=24M",
+        "img",
+        "true",
+    ]);
     assert_eq!(
         std::fs::metadata(cli.volume_file("data")).unwrap().len(),
         24 * MIB
@@ -112,7 +131,15 @@ fn volume_subcommands_create_and_remove() {
 fn a_relative_host_directory_becomes_an_absolute_bind_mount() {
     let cli = Cli::new();
     std::fs::create_dir(cli.root().join("proj")).unwrap();
-    cli.ok(&["create", "--name", "a", "-v", "./proj:/workspace:ro", "img", "true"]);
+    cli.ok(&[
+        "create",
+        "--name",
+        "a",
+        "-v",
+        "./proj:/workspace:ro",
+        "img",
+        "true",
+    ]);
     let v: serde_json::Value = serde_json::from_str(&cli.ok(&["inspect", "a"])).unwrap();
     let m = &v[0]["host_config"]["mounts"][0];
     assert_eq!(m["type"], "bind");

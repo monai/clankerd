@@ -45,7 +45,10 @@ fn with_mounts(mounts: Vec<Mount>) -> HostConfig {
 }
 
 fn volume_file(env: &Env, name: &str) -> PathBuf {
-    env.root().join("state/volumes").join(name).join("data.ext4")
+    env.root()
+        .join("state/volumes")
+        .join(name)
+        .join("data.ext4")
 }
 
 #[test]
@@ -68,7 +71,12 @@ fn a_new_volume_is_a_sparse_file_of_the_requested_size() {
     assert_eq!(info.name, "data");
     assert_eq!(info.size, 64 * MIB);
     assert_eq!(info.path, file);
-    let names: Vec<_> = engine.volumes().unwrap().into_iter().map(|v| v.name).collect();
+    let names: Vec<_> = engine
+        .volumes()
+        .unwrap()
+        .into_iter()
+        .map(|v| v.name)
+        .collect();
     assert_eq!(names, ["data"]);
 }
 
@@ -84,7 +92,10 @@ fn the_vmm_gets_the_volume_disk_and_the_guest_gets_the_mount() {
     m.wait().unwrap();
 
     let specs = vmm.specs.lock().unwrap();
-    assert_eq!(specs[0].volume_disk.as_deref(), Some(volume_file(&env, "data").as_path()));
+    assert_eq!(
+        specs[0].volume_disk.as_deref(),
+        Some(volume_file(&env, "data").as_path())
+    );
     assert_eq!(
         specs[0].workload.mounts,
         [GuestMount::Volume {
@@ -152,7 +163,10 @@ fn remove_with_volumes_deletes_the_machines_volume() {
     m.remove_with_volumes(false).unwrap();
     assert!(!volume_file(&env, "data").exists());
     assert!(engine.volumes().unwrap().is_empty());
-    assert_eq!(engine.volume("data").unwrap_err().kind(), ErrorKind::NotFound);
+    assert_eq!(
+        engine.volume("data").unwrap_err().kind(),
+        ErrorKind::NotFound
+    );
 }
 
 #[test]
@@ -186,11 +200,17 @@ fn a_larger_size_grows_the_file_and_is_passed_to_the_guest_at_the_next_start() {
         .create(Some("b"), sh("true"), with_mounts(vec![big]))
         .unwrap();
     // Takes effect at start, not at create.
-    assert_eq!(std::fs::metadata(volume_file(&env, "data")).unwrap().len(), 16 * MIB);
+    assert_eq!(
+        std::fs::metadata(volume_file(&env, "data")).unwrap().len(),
+        16 * MIB
+    );
     b.start().unwrap();
     b.wait().unwrap();
 
-    assert_eq!(std::fs::metadata(volume_file(&env, "data")).unwrap().len(), 48 * MIB);
+    assert_eq!(
+        std::fs::metadata(volume_file(&env, "data")).unwrap().len(),
+        48 * MIB
+    );
     assert_eq!(engine.volume("data").unwrap().size, 48 * MIB);
     let specs = vmm.specs.lock().unwrap();
     assert!(matches!(
@@ -213,7 +233,10 @@ fn a_smaller_size_never_shrinks_the_volume() {
         .unwrap();
     b.start().unwrap();
     b.wait().unwrap();
-    assert_eq!(std::fs::metadata(volume_file(&env, "data")).unwrap().len(), 32 * MIB);
+    assert_eq!(
+        std::fs::metadata(volume_file(&env, "data")).unwrap().len(),
+        32 * MIB
+    );
     let specs = vmm.specs.lock().unwrap();
     assert!(matches!(
         specs[0].workload.mounts[0],
@@ -252,9 +275,7 @@ fn a_machine_cannot_start_while_another_running_machine_holds_its_volume() {
     let env = Env::new();
     let (engine, _) = recording(&env);
     let host = || with_mounts(vec![Mount::volume("data", "/storage")]);
-    let a = engine
-        .create(Some("a"), sh("sleep 30"), host())
-        .unwrap();
+    let a = engine.create(Some("a"), sh("sleep 30"), host()).unwrap();
     a.start().unwrap();
     let b = engine.create(Some("b"), sh("true"), host()).unwrap();
     assert_eq!(b.start().unwrap_err().kind(), ErrorKind::Conflict);
@@ -322,7 +343,10 @@ fn invalid_mounts_are_rejected_at_create() {
             "duplicate target",
             vec![Mount::volume("a", "/a"), Mount::bind(&dir, "/a")],
         ),
-        ("missing bind source", vec![Mount::bind(env.root().join("nope"), "/x")]),
+        (
+            "missing bind source",
+            vec![Mount::bind(env.root().join("nope"), "/x")],
+        ),
         ("relative bind source", vec![Mount::bind("rel", "/x")]),
     ];
     for (what, mounts) in cases {
@@ -333,7 +357,10 @@ fn invalid_mounts_are_rejected_at_create() {
         assert_eq!(err.kind(), ErrorKind::InvalidParameter, "{what}: {err}");
     }
     assert!(engine.list(true).unwrap().is_empty());
-    assert!(engine.volumes().unwrap().is_empty(), "no volume left behind");
+    assert!(
+        engine.volumes().unwrap().is_empty(),
+        "no volume left behind"
+    );
 }
 
 #[test]

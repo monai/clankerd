@@ -74,10 +74,9 @@ impl Mount {
     /// The size a volume mount asks for, if it names one.
     pub(crate) fn requested_size(&self) -> Result<Option<u64>> {
         match self {
-            Mount::Volume { driver_opts, .. } => driver_opts
-                .get("size")
-                .map(|s| parse_size(s))
-                .transpose(),
+            Mount::Volume { driver_opts, .. } => {
+                driver_opts.get("size").map(|s| parse_size(s)).transpose()
+            }
             Mount::Bind { .. } => Ok(None),
         }
     }
