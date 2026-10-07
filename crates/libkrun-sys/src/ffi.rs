@@ -30,6 +30,20 @@ unsafe extern "C" {
     /// `(ctx, tag, path)` from the 1.19 header notes (memory/research-libkrun.md);
     /// unverified on the M2. Read-only is enforced by the guest's mount flags.
     pub fn krun_add_virtiofs(ctx_id: u32, c_tag: *const c_char, c_path: *const c_char) -> i32;
+    /// virtio-net backed by a unix datagram socket (gvproxy, vmnet-helper).
+    /// `c_path` and `fd` are mutually exclusive (`fd` -1 with a path). `c_mac`
+    /// points at 6 bytes. `flags`: `NET_FLAG_VFKIT` (1 << 0) sends the vfkit
+    /// magic, `NET_FLAG_DHCP_CLIENT` (1 << 1) would run libkrun's own DHCP
+    /// client (unused: guestd does DHCP). Once a net device exists libkrun
+    /// no longer uses TSI. Signature from libkrun v1.19.0 `include/libkrun.h`.
+    pub fn krun_add_net_unixgram(
+        ctx_id: u32,
+        c_path: *const c_char,
+        fd: i32,
+        c_mac: *const u8,
+        features: u32,
+        flags: u32,
+    ) -> i32;
     pub fn krun_set_console_output(ctx_id: u32, c_filepath: *const c_char) -> i32;
     /// With `listen`, libkrun binds a unix socket at `c_filepath` and forwards
     /// connections to the guest's vsock `port`.

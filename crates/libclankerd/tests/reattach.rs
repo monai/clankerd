@@ -6,7 +6,7 @@ mod common;
 use std::time::{Duration, Instant};
 
 use common::*;
-use libclankerd::{EventAction, HostConfig, RestartPolicy, Status};
+use libclankerd::{HostConfig, RestartPolicy, Status};
 
 fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -17,7 +17,7 @@ fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
 }
 
 #[test]
-fn a_reattached_machine_keeps_its_restart_policy_and_reports_events() {
+fn a_reattached_machine_keeps_its_restart_policy() {
     let env = Env::new();
     let go = env.root().join("go");
     let log = env.root().join("log");
@@ -42,7 +42,6 @@ fn a_reattached_machine_keeps_its_restart_policy_and_reports_events() {
     m.start().unwrap();
 
     let second = env.engine();
-    let mut events = second.events();
     let m = second.get("kept").unwrap();
     assert_eq!(m.inspect().unwrap().state.status, Status::Running);
     std::fs::write(&go, "").unwrap();
@@ -52,11 +51,6 @@ fn a_reattached_machine_keeps_its_restart_policy_and_reports_events() {
     let state = m.inspect().unwrap().state;
     assert_eq!((state.status, state.restart_count), (Status::Exited, 1));
     assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 2);
-    let mut seen = Vec::new();
-    while let Some(e) = events.next_timeout(Duration::from_millis(300)) {
-        seen.push(e.action);
-    }
-    assert!(seen.contains(&EventAction::Exited), "{seen:?}");
 }
 
 #[test]

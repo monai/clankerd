@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use clankerd_proto::guest::{
-    Clock, Event, METHOD_KILL, METHOD_SET_CLOCK, METHOD_SHUTDOWN, SignalParams, Workload,
+    Clock, Event, METHOD_KILL, METHOD_SET_CLOCK, METHOD_SHUTDOWN, NetworkConfig, SignalParams,
+    Workload,
 };
 use serde::Serialize;
 
@@ -147,6 +148,16 @@ impl Machine {
         )?;
         let mut argv = info.config.entrypoint.clone();
         argv.extend(info.config.cmd.iter().cloned());
+        let net = match &self.inner.net {
+            Some(backend) => Some(backend.start(&self.inner.net_spec(&self.id)).inspect_err(
+                |err| {
+                    let _ = self
+                        .inner
+                        .update_state(&self.id, |s| s.error = err.message().to_owned());
+                },
+            )?),
+            None => None,
+        };
         let spec = BootSpec {
             machine_id: self.id.clone(),
             dir,
@@ -161,11 +172,17 @@ impl Machine {
                 user: info.config.user.clone(),
                 clock: Some(Clock::now()),
                 mounts: plan.guest,
+                network: net.as_ref().map(|n| NetworkConfig {
+                    interface: "eth0".into(),
+                    hostname: self.id[..12].to_owned(),
+                    blocked: n.blocked.clone(),
+                }),
             },
             cpus: info.host_config.cpus,
             memory: info.host_config.memory,
             volume_disk: plan.volume_disk,
             shares: plan.shares,
+            net,
         };
 
         let fail = |err: Error| {
@@ -174,12 +191,16 @@ impl Machine {
                 .update_state(&self.id, |s| s.error = err.message().to_owned());
             err
         };
-        let handle = self.inner.vmm.boot(&spec).map_err(fail)?;
+        let handle = self.inner.vmm.boot(&spec).map_err(|err| {
+            self.inner.stop_net(&self.id);
+            fail(err)
+        })?;
         let alive = || self.inner.vmm.check_alive(&spec, &handle);
         let ready = match wait_ready(&socket, &exit_file, self.inner.start_timeout, &alive) {
             Ok(r) => r,
             Err(err) => {
                 kill_group(handle.pid);
+                self.inner.stop_net(&self.id);
                 let _ = fs::remove_file(&socket);
                 return Err(fail(err));
             }
@@ -189,6 +210,7 @@ impl Machine {
             && let Err(err) = start_tunnels(&self.inner, &self.id, &info.host_config, true)
         {
             kill_group(handle.pid);
+            self.inner.stop_net(&self.id);
             self.inner.drop_tunnels(&self.id);
             let _ = fs::remove_file(&socket);
             return Err(fail(err));
@@ -530,6 +552,7 @@ impl Machine {
                 kill_group(pid);
             }
         }
+        self.inner.stop_net(&self.id);
         self.inner.drop_tunnels(&self.id);
         self.inner.store.remove(&self.id)?;
         self.inner
@@ -608,6 +631,7 @@ fn spawn_monitor(inner: Arc<Inner>, id: String, ready: Ready) {
 fn record_exit(inner: &Arc<Inner>, id: &str, code: Option<i32>) {
     // Release host resources first: whoever sees the new state sees them gone.
     inner.drop_tunnels(id);
+    inner.stop_net(id);
     let _ = fs::remove_file(inner.socket_path(id));
     // A machine whose helper we killed ended by SIGKILL: Docker's 137.
     let code = code.or_else(|| inner.forced().remove(id).then_some(137));

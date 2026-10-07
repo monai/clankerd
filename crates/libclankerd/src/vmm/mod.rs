@@ -47,6 +47,9 @@ pub struct BootSpec {
     /// Host directories to share over virtio-fs, mounted by tag per
     /// `workload.mounts`; the local stand-in ignores them.
     pub shares: Vec<Share>,
+    /// The machine's network sidecar, already listening. A VMM that boots a
+    /// real VM attaches a virtio-net device to it; the local stand-in ignores it.
+    pub net: Option<crate::net::NetAttachment>,
 }
 
 /// A booted machine. The VMM process must outlive the library process.

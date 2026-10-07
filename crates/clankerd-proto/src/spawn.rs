@@ -56,6 +56,9 @@ pub struct SpawnSpec {
     /// Host directories shared into the guest over virtio-fs.
     #[serde(default)]
     pub shares: Vec<Share>,
+    /// virtio-net device backed by a unixgram socket (gvproxy).
+    #[serde(default)]
+    pub net: Option<NetDevice>,
 }
 
 /// A host directory shared over virtio-fs; the guest mounts it by `tag`.
@@ -63,4 +66,16 @@ pub struct SpawnSpec {
 pub struct Share {
     pub tag: String,
     pub path: PathBuf,
+}
+
+/// One virtio-net device whose backend is a network sidecar listening on a
+/// unix datagram socket.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetDevice {
+    pub socket: PathBuf,
+    pub mac: [u8; 6],
+    /// virtio-net feature bits offered to the guest.
+    pub features: u32,
+    /// Send the vfkit magic when connecting (gvproxy `-listen-vfkit`).
+    pub vfkit: bool,
 }

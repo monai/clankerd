@@ -38,6 +38,7 @@ mod images;
 mod machine;
 mod merge;
 mod mount;
+pub mod net;
 mod rootdisk;
 mod state;
 mod store;
