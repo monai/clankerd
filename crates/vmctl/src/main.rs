@@ -159,6 +159,10 @@ struct CreateArgs {
     /// Publish a guest port on host loopback: [IP:]HOST_PORT:GUEST_PORT.
     #[arg(short = 'p', long = "publish", value_parser = parse_publish)]
     publish: Vec<PortBinding>,
+    /// Make a host loopback port reachable at the same port on the guest's
+    /// loopback.
+    #[arg(long = "host-gateway-port", value_name = "PORT")]
+    host_gateway_port: Vec<u16>,
     /// Mount a named volume (`data:/storage[:size=20G]`) or a host directory
     /// (`./dir:/path[:ro]`; a source starting with `.`, `/` or `~` is a path).
     #[arg(short = 'v', long = "volume", value_parser = parse_mount)]
@@ -288,6 +292,7 @@ fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error>
     }
     let host_config = HostConfig {
         port_bindings: a.publish,
+        host_gateway_ports: a.host_gateway_port,
         mounts,
         ..Default::default()
     };
