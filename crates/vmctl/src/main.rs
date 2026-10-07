@@ -175,7 +175,9 @@ struct CreateArgs {
     /// Memory, e.g. 2G or 512M.
     #[arg(short = 'm', long)]
     memory: Option<String>,
-    /// Publish a guest port on host loopback: [IP:]HOST_PORT:GUEST_PORT.
+    /// Publish a guest port on host loopback: [IP:]HOST_PORT:GUEST_PORT. Only
+    /// open while the vmctl process that started the machine runs (`run`
+    /// without -d); the machine itself outlives it.
     #[arg(short = 'p', long = "publish", value_parser = parse_publish)]
     publish: Vec<PortBinding>,
     /// Make a host loopback port reachable at the same port on the guest's

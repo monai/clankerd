@@ -305,6 +305,10 @@ $vmctl rm -f b
 - [ ] Items above confirmed or corrected
 
 
+## Known limitation: published ports die with the starter
+
+Published ports (`-p`), host-gateway ports and socket bindings are tunnels served by the process that started the machine (libclankerd inside `vmctl` or the embedding program). The machine keeps running when that process exits, but the tunnels close and a later process does not reopen them. With `vmctl`, `-p` therefore works with `vmctl run` (foreground) and not with `run -d` or `start` followed by exit. Fixing it means moving the tunnels into a helper that outlives the library process (follow-up).
+
 ## 9. Guest networking via gvproxy (M2 hand-off for ticket 08)
 
 Every image-backed machine gets a virtio-net NIC served by its own gvproxy sidecar (pinned release, sha256-verified, cached under the cache dir; `--gvproxy PATH` / `CLANKERD_GVPROXY` overrides it). The sidecar starts before the VMM and is stopped with the machine.

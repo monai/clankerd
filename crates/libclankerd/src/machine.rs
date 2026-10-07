@@ -392,6 +392,11 @@ impl Machine {
 
     /// Publishes a guest port on host loopback while the machine runs.
     /// Dropping the returned handle closes the listener.
+    ///
+    /// Known limitation: the listeners live in the calling process. The machine
+    /// survives that process exiting, but its published ports (and host-gateway
+    /// ports and socket bindings) do not; a new process gets them back only by
+    /// restarting the machine.
     pub fn publish(&self, binding: PortBinding) -> Result<PublishedPort> {
         validate_port_binding(&binding)?;
         self.tunnels()?.publish(&binding)
