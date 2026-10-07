@@ -8,7 +8,10 @@ use std::time::{Duration, SystemTime};
 
 use crate::config::{HostConfig, MachineConfig};
 use crate::error::{Error, Result};
+use crate::events::{EventBus, Events};
 use crate::image_config::ImageConfig;
+use crate::events::EventAction;
+use crate::events::MachineEvent;
 use crate::images::{ImageInfo, ImageStore};
 use crate::machine::{Machine, MachineInfo};
 use crate::rootdisk::{DiskPopulator, clone_file, ensure_base};
@@ -107,6 +110,7 @@ pub(crate) struct Inner {
     pub forced: Mutex<HashSet<String>>,
     /// Tunnel resources of running machines, by id.
     pub tunnels: Mutex<HashMap<String, Arc<MachineTunnels>>>,
+    pub events: EventBus,
 }
 
 impl Inner {
@@ -133,6 +137,31 @@ impl Inner {
     }
 
     /// Closes the host side of a machine's tunnels (listeners, host endpoint).
+    /// Emits an event for a machine (best effort: a machine already gone is skipped).
+    pub fn emit(&self, id: &str, action: EventAction, exit_code: Option<i32>) {
+        let name = match self.store.load(id) {
+            Ok((record, _)) => record.name,
+            Err(_) => return,
+        };
+        self.emit_named(id, name, action, exit_code);
+    }
+
+    pub fn emit_named(
+        &self,
+        id: &str,
+        name: String,
+        action: EventAction,
+        exit_code: Option<i32>,
+    ) {
+        self.events.emit(MachineEvent {
+            action,
+            machine_id: id.to_owned(),
+            machine_name: name,
+            time: SystemTime::now(),
+            exit_code,
+        });
+    }
+
     pub fn drop_tunnels(&self, id: &str) {
         let removed = self.tunnels().remove(id);
         drop(removed);
@@ -202,6 +231,7 @@ impl Engine {
             changed: Condvar::new(),
             forced: Mutex::default(),
             tunnels: Mutex::default(),
+            events: EventBus::default(),
         });
         for id in inner.store.ids()? {
             crate::machine::reattach(&inner, &id);
@@ -298,7 +328,14 @@ impl Engine {
                 return Err(e);
             }
         }
+        self.inner.emit(&id, EventAction::Created, None);
         Ok(Machine::new(self.inner.clone(), id))
+    }
+
+    /// Subscribes to machine events: created, started, exited and so on, in
+    /// the order they happen. Sees events from this point on.
+    pub fn events(&self) -> Events {
+        self.inner.events.subscribe()
     }
 
     /// Pulls `reference` into the image cache (always contacting the registry)

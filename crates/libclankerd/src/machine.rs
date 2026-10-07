@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::config::{HostConfig, MachineConfig, PortBinding};
 use crate::engine::Inner;
 use crate::error::{Error, ErrorKind, Result};
+use crate::events::EventAction;
 use crate::exec::{Exec, ExecConfig};
 use crate::guest::{self, EventStream, Next};
 use crate::image_config::ImageConfig;
@@ -184,6 +185,7 @@ impl Machine {
             s.started_at = Some(SystemTime::now());
             s.finished_at = None;
         })?;
+        self.inner.emit(&self.id, EventAction::Started, None);
         spawn_monitor(self.inner.clone(), self.id.clone(), ready);
         Ok(())
     }
@@ -325,6 +327,7 @@ impl Machine {
             )
             .map(|_| ());
         }
+        self.inner.emit(&self.id, EventAction::Killed, None);
         self.inner.forced().insert(self.id.clone());
         kill_group(pid);
         // The monitor records the end; return once it has.
@@ -389,6 +392,8 @@ impl Machine {
         }
         self.inner.drop_tunnels(&self.id);
         self.inner.store.remove(&self.id)?;
+        self.inner
+            .emit_named(&self.id, record.name, EventAction::Removed, None);
         let _ = fs::remove_file(self.inner.socket_path(&self.id));
         starting.remove(&self.id);
         self.inner.changed.notify_all();
@@ -468,6 +473,9 @@ fn record_exit(inner: &Inner, id: &str, code: Option<i32>) {
         if s.status != Status::Running {
             return;
         }
+        // Emitted under the state lock: whoever sees the new state (a waiter
+        // that then removes the machine, say) sees this event first.
+        inner.emit(id, EventAction::Exited, Some(code.unwrap_or(-1)));
         s.status = if code.is_some() {
             Status::Exited
         } else {
