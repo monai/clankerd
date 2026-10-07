@@ -48,7 +48,7 @@ use std::time::{Duration, Instant};
 use clankerd_proto::guest::{
     ERROR_CONFLICT, ERROR_INVALID_PARAMETER, ERROR_METHOD_NOT_FOUND, Event, METHOD_EVENTS,
     METHOD_EXEC_CREATE, METHOD_EXEC_INSPECT, METHOD_EXEC_KILL, METHOD_EXEC_RESIZE,
-    METHOD_EXEC_START, METHOD_KILL, METHOD_SHUTDOWN, SignalParams, Workload,
+    METHOD_EXEC_START, METHOD_KILL, METHOD_SET_CLOCK, METHOD_SHUTDOWN, SignalParams, Workload,
 };
 use clankerd_proto::varlink::{self, Call, Reply};
 use serde_json::Value;
@@ -62,6 +62,9 @@ const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/s
 /// How long to keep serving after the workload exits so subscribers see `exited`.
 const LINGER: Duration = Duration::from_millis(300);
 const DRAIN_LIMIT: Duration = Duration::from_secs(5);
+
+/// Set once guestd booted a root disk: it is then PID 1 of a VM and may set the clock.
+static BOOTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 struct Shared {
     inner: Mutex<Inner>,
@@ -118,6 +121,7 @@ fn main() {
         )
     };
 
+    BOOTED.store(boot_root, std::sync::atomic::Ordering::Relaxed);
     if boot_root {
         // Mount the root disk and pivot into it; from here on `/` is the
         // image. The boot directory stays reachable at its guest mount point.
@@ -348,6 +352,18 @@ fn serve(
         METHOD_EXEC_START => exec_start(input, out, call.parameters, &shared),
         METHOD_SHUTDOWN | METHOD_KILL => {
             let result = signal_workload(&call, &shared);
+            let _ = reply(&mut out, result);
+        }
+        METHOD_SET_CLOCK => {
+            let result = params::<clankerd_proto::guest::Clock>(&call).and_then(|clock| {
+                // Only a booted guest owns its clock; a local stand-in must
+                // never touch the host's.
+                if BOOTED.load(std::sync::atomic::Ordering::Relaxed) {
+                    boot::set_clock(&clock)
+                        .map_err(|e| (ERROR_CONFLICT, format!("setting the clock: {e}")))?;
+                }
+                Ok(serde_json::json!({}))
+            });
             let _ = reply(&mut out, result);
         }
         METHOD_EXEC_CREATE | METHOD_EXEC_RESIZE | METHOD_EXEC_KILL | METHOD_EXEC_INSPECT => {

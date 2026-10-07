@@ -15,6 +15,7 @@
 //!   `images`: the image cache (pull, list, resolve); `merge`: layers to one tar;
 //!   `rootdisk`: base root disk building and per-machine clones.
 //! * `events`: the events stream ([`Events`], [`MachineEvent`]).
+//! * `clockwatch`: notices the host sleeping and resyncs guest clocks (private).
 //! * `store`: atomic on-disk persistence of config and state (private).
 //! * `exec`: [`Exec`] lifecycle (create, start, resize, kill, inspect) and its streams.
 //! * `guest`: host-side varlink client for clankerd-guestd (private).
@@ -25,6 +26,7 @@
 //! Machines outlive the process that started them: state lives on disk, the
 //! VMM runs in its own process group, and [`Engine::new`] reattaches.
 
+mod clockwatch;
 mod config;
 mod engine;
 mod error;

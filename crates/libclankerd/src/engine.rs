@@ -271,6 +271,7 @@ impl Engine {
         for id in inner.store.ids()? {
             crate::machine::reattach(&inner, &id);
         }
+        crate::clockwatch::spawn(Arc::downgrade(&inner));
         Ok(Engine { inner })
     }
 

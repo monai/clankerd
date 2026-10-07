@@ -76,6 +76,9 @@ impl Clock {
 /// `Events`, then processes are stopped, disks synced and unmounted and the
 /// machine powered off). The caller escalates to killing the VMM on a timeout.
 pub const METHOD_SHUTDOWN: &str = "io.clankerd.Guest.Shutdown";
+/// Sets the guest's wall clock (parameters: [`Clock`]); the host calls it after
+/// it woke from sleep, when the guest clock stopped with the host.
+pub const METHOD_SET_CLOCK: &str = "io.clankerd.Guest.SetClock";
 /// Signals the workload (parameters: [`SignalParams`], `id` unused).
 pub const METHOD_KILL: &str = "io.clankerd.Guest.Kill";
 

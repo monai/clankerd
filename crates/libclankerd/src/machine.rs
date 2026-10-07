@@ -5,7 +5,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use clankerd_proto::guest::{Clock, Event, METHOD_KILL, METHOD_SHUTDOWN, SignalParams, Workload};
+use clankerd_proto::guest::{
+    Clock, Event, METHOD_KILL, METHOD_SET_CLOCK, METHOD_SHUTDOWN, SignalParams, Workload,
+};
 use serde::Serialize;
 
 use crate::config::{HostConfig, MachineConfig, PortBinding};
@@ -290,6 +292,25 @@ impl Machine {
         self.inner
             .emit_named(&self.id, record.name, EventAction::Updated, None);
         Ok(())
+    }
+
+    /// Sets the guest's clock from the host's. The engine does this by itself
+    /// when the host wakes from sleep; it is public for callers that know
+    /// better. Fails with a conflict if the machine is not running.
+    pub fn sync_clock(&self) -> Result<()> {
+        let (record, state) = self.inner.store.load(&self.id)?;
+        if state.status != Status::Running {
+            return Err(Error::conflict(format!(
+                "machine {} is not running",
+                record.name
+            )));
+        }
+        guest::call(
+            &self.inner.socket_path(&self.id),
+            METHOD_SET_CLOCK,
+            &Clock::now(),
+        )
+        .map(|_| ())
     }
 
     /// Registers a command to run inside the running machine (Docker's exec create).
