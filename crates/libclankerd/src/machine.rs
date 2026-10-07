@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use clankerd_proto::guest::{
     AttachParams, Clock, Event, METHOD_ATTACH, METHOD_KILL, METHOD_SET_CLOCK, METHOD_SHUTDOWN,
-    NetworkConfig, ResizeParams, SignalParams, Workload,
+    NetworkConfig, ResizeParams, ShutdownParams, SignalParams, Workload,
 };
 use serde::Serialize;
 
@@ -462,14 +462,16 @@ impl Machine {
         }
     }
 
-    /// Stops the machine gracefully: guestd signals the workload (SIGTERM),
+    /// Stops the machine gracefully: guestd signals the workload (the stop
+    /// signal of its config, SIGTERM by default),
     /// and once it exits stops the remaining processes, syncs, unmounts and
     /// powers off. If the machine is still running after `timeout` (or guestd
     /// cannot be reached) the VMM is killed. Stopping a machine that is not
     /// running succeeds.
     pub fn stop(&self, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
-        match self.inner.store.load_state(&self.id)?.status {
+        let (record, state) = self.inner.store.load(&self.id)?;
+        match state.status {
             Status::Running => {}
             Status::Restarting => {
                 // Waiting for a restart: stopping cancels it.
@@ -483,10 +485,14 @@ impl Machine {
             _ => return Ok(()),
         }
         self.inner.stopped().insert(self.id.clone());
+        let signal = Some(record.config.stop_signal.as_str())
+            .filter(|s| !s.is_empty())
+            .and_then(|s| crate::signal::parse_signal(s).ok())
+            .unwrap_or(libc::SIGTERM);
         let asked = guest::call(
             &self.inner.socket_path(&self.id),
             METHOD_SHUTDOWN,
-            &serde_json::json!({}),
+            &ShutdownParams { signal },
         );
         if asked.is_ok() && self.wait_until(Some(deadline), false)?.is_some() {
             return Ok(());

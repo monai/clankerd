@@ -78,7 +78,8 @@ enum Command {
     Create(CreateArgs),
     /// Start created or exited machines.
     Start { machines: Vec<String> },
-    /// Stop machines gracefully: the workload gets SIGTERM, the machine syncs,
+    /// Stop machines gracefully: the workload gets its stop signal (SIGTERM unless the
+    /// image's StopSignal or --stop-signal says otherwise), the machine syncs,
     /// unmounts and powers off; it is killed after the timeout.
     Stop {
         /// Seconds to wait before killing.
@@ -165,6 +166,9 @@ struct CreateArgs {
     /// Allocate a pseudo-terminal for the main process.
     #[arg(short = 't', long)]
     tty: bool,
+    /// Signal `vmctl stop` sends the main process (default: the image's StopSignal, else SIGTERM).
+    #[arg(long = "stop-signal", value_name = "SIGNAL")]
+    stop_signal: Option<String>,
     /// Number of virtual CPUs.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     cpus: Option<u32>,
@@ -302,6 +306,7 @@ fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error>
         working_dir: a.workdir.unwrap_or_default(),
         tty: a.tty,
         open_stdin: a.interactive,
+        stop_signal: a.stop_signal.unwrap_or_default(),
     };
     let memory = a
         .memory

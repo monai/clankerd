@@ -50,7 +50,8 @@ use std::time::{Duration, Instant};
 use clankerd_proto::guest::{
     ERROR_CONFLICT, ERROR_INVALID_PARAMETER, ERROR_METHOD_NOT_FOUND, Event, METHOD_ATTACH,
     METHOD_EVENTS, METHOD_EXEC_CREATE, METHOD_EXEC_INSPECT, METHOD_EXEC_KILL, METHOD_EXEC_RESIZE,
-    METHOD_EXEC_START, METHOD_KILL, METHOD_SET_CLOCK, METHOD_SHUTDOWN, SignalParams, Workload,
+    METHOD_EXEC_START, METHOD_KILL, METHOD_SET_CLOCK, METHOD_SHUTDOWN, ShutdownParams,
+    SignalParams, Workload,
 };
 use clankerd_proto::varlink::{self, Call, Reply};
 use serde_json::Value;
@@ -393,10 +394,12 @@ fn serve(
     }
 }
 
-/// `Shutdown` (SIGTERM) and `Kill` (any signal) act on the workload only.
+/// `Shutdown` (the stop signal, SIGTERM by default) and `Kill` (any signal) act on the workload only.
 fn signal_workload(call: &Call, shared: &Shared) -> Result<Value, exec::Failure> {
     let signal = if call.method == METHOD_SHUTDOWN {
-        libc::SIGTERM
+        // Parameters are optional: a bare Shutdown is SIGTERM.
+        serde_json::from_value::<ShutdownParams>(call.parameters.clone())
+            .map_or(libc::SIGTERM, |p| p.signal)
     } else {
         params::<SignalParams>(call)?.signal
     };

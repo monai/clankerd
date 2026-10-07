@@ -20,6 +20,9 @@ pub struct MachineConfig {
     pub working_dir: String,
     pub tty: bool,
     pub open_stdin: bool,
+    /// Signal `stop` sends the workload (`SIGTERM`, `15`, ...); empty means
+    /// the image's `StopSignal`, else SIGTERM.
+    pub stop_signal: String,
 }
 
 impl MachineConfig {
@@ -34,6 +37,7 @@ impl MachineConfig {
             ("working_dir", self.working_dir != other.working_dir),
             ("tty", self.tty != other.tty),
             ("open_stdin", self.open_stdin != other.open_stdin),
+            ("stop_signal", self.stop_signal != other.stop_signal),
         ]
         .into_iter()
         .filter_map(|(name, differs)| differs.then_some(name))

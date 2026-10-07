@@ -165,3 +165,31 @@ fn the_workload_runs_the_merged_entrypoint_cmd_and_env() {
     assert_eq!(m.wait().unwrap().exit_code, 0);
     assert_eq!(std::fs::read_to_string(&out).unwrap(), "1 3 /tmp\n");
 }
+
+#[test]
+fn the_images_stopsignal_is_used_unless_overridden() {
+    let f = fixture();
+    let image = f.push(
+        "sig",
+        serde_json::json!({"Cmd": ["serve"], "StopSignal": "SIGQUIT"}),
+    );
+    let info = f
+        .create(&image, MachineConfig::default())
+        .unwrap()
+        .inspect()
+        .unwrap();
+    assert_eq!(info.config.stop_signal, "SIGQUIT");
+
+    let own = f
+        .create(
+            &image,
+            MachineConfig {
+                stop_signal: "SIGINT".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .inspect()
+        .unwrap();
+    assert_eq!(own.config.stop_signal, "SIGINT");
+}

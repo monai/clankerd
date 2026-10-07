@@ -19,6 +19,8 @@ pub struct ImageConfig {
     pub env: Vec<String>,
     pub user: String,
     pub working_dir: String,
+    /// The image's `StopSignal`; empty when it declares none.
+    pub stop_signal: String,
 }
 
 #[derive(Deserialize, Default)]
@@ -29,6 +31,7 @@ struct RawConfig {
     env: Option<Vec<String>>,
     user: Option<String>,
     working_dir: Option<String>,
+    stop_signal: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -50,6 +53,7 @@ impl ImageConfig {
             env: c.env.unwrap_or_default(),
             user: c.user.unwrap_or_default(),
             working_dir: c.working_dir.unwrap_or_default(),
+            stop_signal: c.stop_signal.unwrap_or_default(),
         })
     }
 
@@ -60,6 +64,7 @@ impl ImageConfig {
     ///   override of `[""]` clears the entrypoint (`--entrypoint ""`).
     /// * Trailing arguments replace the image's CMD but keep its ENTRYPOINT.
     /// * Environment entries override image entries with the same key.
+    /// * The stop signal is the developer's, else the image's `StopSignal`.
     /// * User and working directory replace the image's when given; the
     ///   working directory defaults to `/`.
     pub fn merge(&self, requested: &MachineConfig) -> Result<MachineConfig> {
@@ -105,6 +110,7 @@ impl ImageConfig {
             working_dir,
             tty: requested.tty,
             open_stdin: requested.open_stdin,
+            stop_signal: pick(&requested.stop_signal, &self.stop_signal),
         })
     }
 }

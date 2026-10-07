@@ -316,6 +316,7 @@ impl Engine {
         if self.inner.images.is_none() && config.entrypoint.is_empty() && config.cmd.is_empty() {
             return Err(Error::invalid_parameter("no command specified"));
         }
+        validate_stop_signal(&config.stop_signal)?;
         validate_host_config(&host_config)?;
         crate::mount::validate(&host_config.mounts)?;
         if let Some(name) = name {
@@ -336,6 +337,7 @@ impl Engine {
             // What runs is decided now, from the pinned image: the stored
             // configuration is the merged one, as in Docker's inspect.
             config = defaults.merge(&config)?;
+            validate_stop_signal(&config.stop_signal)?;
             image_config = Some(defaults);
             Some((image.id, base))
         } else {
@@ -469,6 +471,16 @@ impl Engine {
         out.sort_by_key(|i| std::cmp::Reverse(i.created));
         Ok(out)
     }
+}
+
+/// Empty is allowed (SIGTERM).
+fn validate_stop_signal(signal: &str) -> Result<()> {
+    if signal.is_empty() {
+        return Ok(());
+    }
+    crate::signal::parse_signal(signal)
+        .map(drop)
+        .map_err(|e| Error::invalid_parameter(format!("invalid stop signal: {e}")))
 }
 
 fn validate_name(name: &str) -> Result<()> {

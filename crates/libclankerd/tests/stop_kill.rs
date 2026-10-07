@@ -178,3 +178,48 @@ fn a_stopped_machine_can_be_started_again() {
     m.kill(libc::SIGKILL).unwrap();
     m.wait().unwrap();
 }
+
+#[test]
+fn stop_sends_the_configured_stop_signal_instead_of_sigterm() {
+    let env = Env::new();
+    let engine = env.engine();
+    let (ready, bye) = (env.root().join("ready"), env.root().join("bye"));
+    let script = format!(
+        "trap 'echo usr1 > {bye}; exit 0' USR1; trap 'exit 9' TERM; touch {ready}; while true; do sleep 0.05; done",
+        bye = bye.display(),
+        ready = ready.display()
+    );
+    let m = engine
+        .create(
+            Some("quit-signal"),
+            libclankerd::MachineConfig {
+                stop_signal: "SIGUSR1".into(),
+                ..sh(&script)
+            },
+            libclankerd::HostConfig::default(),
+        )
+        .unwrap();
+    m.start().unwrap();
+    wait_for(&ready);
+    m.stop(Duration::from_secs(10)).unwrap();
+    assert_eq!(std::fs::read_to_string(&bye).unwrap(), "usr1\n");
+    assert_eq!(m.inspect().unwrap().state.exit_code, 0);
+}
+
+#[test]
+fn an_unknown_stop_signal_is_refused_at_create() {
+    let env = Env::new();
+    let engine = env.engine();
+    let err = engine
+        .create(
+            None,
+            libclankerd::MachineConfig {
+                stop_signal: "SIGNOPE".into(),
+                ..sh("true")
+            },
+            libclankerd::HostConfig::default(),
+        )
+        .err()
+        .expect("refused");
+    assert_eq!(err.kind(), ErrorKind::InvalidParameter);
+}

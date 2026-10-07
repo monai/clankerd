@@ -103,11 +103,24 @@ impl Clock {
     }
 }
 
-/// Graceful stop: signals the workload with SIGTERM and returns at once. The
+/// Graceful stop: signals the workload (parameters: [`ShutdownParams`]) and
+/// returns at once. The
 /// machine then follows its normal end (the workload's exit is reported through
 /// `Events`, then processes are stopped, disks synced and unmounted and the
 /// machine powered off). The caller escalates to killing the VMM on a timeout.
 pub const METHOD_SHUTDOWN: &str = "io.clankerd.Guest.Shutdown";
+/// Parameters of [`METHOD_SHUTDOWN`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShutdownParams {
+    /// The machine's stop signal.
+    #[serde(default = "default_stop_signal")]
+    pub signal: i32,
+}
+
+fn default_stop_signal() -> i32 {
+    15
+}
+
 /// Sets the guest's wall clock (parameters: [`Clock`]); the host calls it after
 /// it woke from sleep, when the guest clock stopped with the host.
 pub const METHOD_SET_CLOCK: &str = "io.clankerd.Guest.SetClock";
