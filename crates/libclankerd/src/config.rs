@@ -22,6 +22,25 @@ pub struct MachineConfig {
     pub open_stdin: bool,
 }
 
+impl MachineConfig {
+    /// Names of the fields that differ from `other`.
+    pub(crate) fn differing_fields(&self, other: &MachineConfig) -> Vec<&'static str> {
+        [
+            ("image", self.image != other.image),
+            ("entrypoint", self.entrypoint != other.entrypoint),
+            ("cmd", self.cmd != other.cmd),
+            ("env", self.env != other.env),
+            ("user", self.user != other.user),
+            ("working_dir", self.working_dir != other.working_dir),
+            ("tty", self.tty != other.tty),
+            ("open_stdin", self.open_stdin != other.open_stdin),
+        ]
+        .into_iter()
+        .filter_map(|(name, differs)| differs.then_some(name))
+        .collect()
+    }
+}
+
 /// How the machine is hosted: resources, mounts, ports, policies.
 /// Restart and pull policy arrive with later tickets.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

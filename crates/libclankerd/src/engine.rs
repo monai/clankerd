@@ -8,10 +8,10 @@ use std::time::{Duration, SystemTime};
 
 use crate::config::{HostConfig, MachineConfig};
 use crate::error::{Error, Result};
-use crate::events::{EventBus, Events};
-use crate::image_config::ImageConfig;
 use crate::events::EventAction;
 use crate::events::MachineEvent;
+use crate::events::{EventBus, Events};
+use crate::image_config::ImageConfig;
 use crate::images::{ImageInfo, ImageStore};
 use crate::machine::{Machine, MachineInfo};
 use crate::rootdisk::{DiskPopulator, clone_file, ensure_base};
@@ -146,13 +146,7 @@ impl Inner {
         self.emit_named(id, name, action, exit_code);
     }
 
-    pub fn emit_named(
-        &self,
-        id: &str,
-        name: String,
-        action: EventAction,
-        exit_code: Option<i32>,
-    ) {
+    pub fn emit_named(&self, id: &str, name: String, action: EventAction, exit_code: Option<i32>) {
         self.events.emit(MachineEvent {
             action,
             machine_id: id.to_owned(),

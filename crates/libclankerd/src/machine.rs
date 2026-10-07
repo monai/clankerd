@@ -190,6 +190,43 @@ impl Machine {
         Ok(())
     }
 
+    /// Replaces the host configuration of a machine that is not running:
+    /// resources, mounts, ports and policies. `config` must equal the
+    /// machine's current [`MachineConfig`]: it is immutable, and a difference
+    /// fails with `InvalidParameter` naming each field that cannot change
+    /// (use [`Machine::change_image`] to move to another image). Nothing is
+    /// applied on failure.
+    pub fn update(&self, config: &MachineConfig, host_config: HostConfig) -> Result<()> {
+        crate::tunnel::validate_host_config(&host_config)?;
+        crate::mount::validate(&host_config.mounts)?;
+        let starting = self.inner.lock();
+        let (mut record, state) = self.inner.store.load(&self.id)?;
+        let immutable = record.config.differing_fields(config);
+        if !immutable.is_empty() {
+            return Err(Error::invalid_parameter(format!(
+                "cannot update immutable fields: {}",
+                immutable.join(", ")
+            )));
+        }
+        if matches!(state.status, Status::Running | Status::Restarting)
+            || starting.contains(&self.id)
+        {
+            return Err(Error::conflict(format!(
+                "cannot update machine {}: it is running; stop it first",
+                record.name
+            )));
+        }
+        crate::mount::ensure_volume(
+            &VolumeStore::new(self.inner.store.volumes_dir()),
+            &host_config.mounts,
+        )?;
+        record.host_config = host_config;
+        self.inner.store.save_record(&record)?;
+        self.inner
+            .emit_named(&self.id, record.name, EventAction::Updated, None);
+        Ok(())
+    }
+
     /// Registers a command to run inside the running machine (Docker's exec create).
     pub fn exec_create(&self, config: ExecConfig) -> Result<Exec> {
         let (record, state) = self.inner.store.load(&self.id)?;

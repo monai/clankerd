@@ -39,7 +39,10 @@ fn a_machine_lifecycle_emits_its_events_in_order() {
             EventAction::Removed
         ]
     );
-    assert!(got.iter().all(|e| e.machine_name == "evt" && e.machine_id == m.id()));
+    assert!(
+        got.iter()
+            .all(|e| e.machine_name == "evt" && e.machine_id == m.id())
+    );
     assert_eq!(got[2].exit_code, Some(3));
     assert!(events.next_timeout(Duration::from_millis(200)).is_none());
 }

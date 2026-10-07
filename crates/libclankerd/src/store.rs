@@ -75,6 +75,11 @@ impl Store {
         self.save_state(&record.id, state)
     }
 
+    /// Replaces the machine's record (config.json) atomically.
+    pub fn save_record(&self, record: &Record) -> Result<()> {
+        write_json(&self.machine_dir(&record.id).join("config.json"), record)
+    }
+
     pub fn load(&self, id: &str) -> Result<(Record, MachineState)> {
         let dir = self.machine_dir(id);
         Ok((
