@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
-use crate::config::{HostConfig, MachineConfig};
+use crate::config::{HostConfig, MachineConfig, PullPolicy};
 use crate::error::{Error, Result};
 use crate::events::EventAction;
 use crate::events::MachineEvent;
@@ -181,6 +181,34 @@ impl Inner {
         self.runtime_dir.join(format!("{}.sock", &id[..12]))
     }
 
+    /// The cached image for `reference` per `policy`, and its cached base root disk.
+    pub fn resolve_image(
+        &self,
+        reference: &str,
+        policy: PullPolicy,
+    ) -> Result<(ImageInfo, ImageConfig, PathBuf)> {
+        let store = self
+            .images
+            .as_ref()
+            .ok_or_else(|| Error::unavailable("no image cache configured"))?;
+        let image = match (policy, store.find(reference)?) {
+            (PullPolicy::Missing, Some(image)) | (PullPolicy::Never, Some(image)) => image,
+            (PullPolicy::Never, None) => {
+                return Err(Error::not_found(format!(
+                    "no such image: {reference} (pull policy is never)"
+                )));
+            }
+            (PullPolicy::Missing, None) | (PullPolicy::Always, _) => store.pull(reference)?,
+        };
+        let defaults = ImageConfig::parse(&image.config)?;
+        let populator = self
+            .populator
+            .as_deref()
+            .ok_or_else(|| Error::unavailable("no root-disk populator configured"))?;
+        let (base, _) = ensure_base(store, populator, &image)?;
+        Ok((image, defaults, base))
+    }
+
     /// Finds a machine by exact name, exact id or unique id prefix.
     pub fn resolve(&self, key: &str) -> Result<Record> {
         let _g = self.lock();
@@ -270,25 +298,20 @@ impl Engine {
 
         // Resolve and pin the image, and build its base disk, before taking the
         // lock: pulling and building can take minutes.
+        let requested = config.clone();
         let mut config = config;
         let mut image_config = None;
-        let base = match &self.inner.images {
-            Some(store) => {
-                let image = self.resolve_image(store, &config.image)?;
-                let defaults = ImageConfig::parse(&image.config)?;
-                // What runs is decided now, from the pinned image: the stored
-                // configuration is the merged one, as in Docker's inspect.
-                config = defaults.merge(&config)?;
-                image_config = Some(defaults);
-                let populator = self
-                    .inner
-                    .populator
-                    .as_deref()
-                    .ok_or_else(|| Error::unavailable("no root-disk populator configured"))?;
-                let (base, _) = ensure_base(store, populator, &image)?;
-                Some((image.id, base))
-            }
-            None => None,
+        let base = if self.inner.images.is_some() {
+            let (image, defaults, base) = self
+                .inner
+                .resolve_image(&config.image, host_config.pull_policy)?;
+            // What runs is decided now, from the pinned image: the stored
+            // configuration is the merged one, as in Docker's inspect.
+            config = defaults.merge(&config)?;
+            image_config = Some(defaults);
+            Some((image.id, base))
+        } else {
+            None
         };
 
         let mut new_volume = None;
@@ -312,6 +335,7 @@ impl Engine {
                 name,
                 created: SystemTime::now(),
                 config,
+                requested: Some(requested),
                 host_config,
                 image_id: base.as_ref().map(|(id, _)| id.clone()).unwrap_or_default(),
                 image_config,
@@ -361,14 +385,6 @@ impl Engine {
             .images
             .as_ref()
             .ok_or_else(|| Error::unavailable("no image cache configured"))
-    }
-
-    /// The cached image for `reference`, pulling it when missing (`--pull missing`).
-    fn resolve_image(&self, store: &ImageStore, reference: &str) -> Result<ImageInfo> {
-        match store.find(reference)? {
-            Some(image) => Ok(image),
-            None => store.pull(reference),
-        }
     }
 
     fn volume_store(&self) -> VolumeStore {

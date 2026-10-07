@@ -244,6 +244,54 @@ impl Machine {
         Ok(())
     }
 
+    /// Moves a machine that is not running to another image: the root disk is
+    /// rebuilt from the new image's cached base (pulled per the machine's pull
+    /// policy) and what the machine runs is merged again over the new image's
+    /// defaults. The volume is untouched.
+    pub fn change_image(&self, reference: &str) -> Result<()> {
+        if reference.is_empty() {
+            return Err(Error::invalid_parameter("image is required"));
+        }
+        let host_config = self.inspect()?.host_config;
+        // Pulling and building can take minutes: before taking the lock.
+        let (image, defaults, base) = self
+            .inner
+            .resolve_image(reference, host_config.pull_policy)?;
+        let starting = self.inner.lock();
+        let (mut record, state) = self.inner.store.load(&self.id)?;
+        if matches!(state.status, Status::Running | Status::Restarting)
+            || starting.contains(&self.id)
+        {
+            return Err(Error::conflict(format!(
+                "cannot change the image of machine {}: it is running; stop it first",
+                record.name
+            )));
+        }
+        let mut requested = record
+            .requested
+            .clone()
+            .unwrap_or_else(|| record.config.clone());
+        requested.image = reference.to_owned();
+        let config = defaults.merge(&requested)?;
+        // Swap the disk in atomically, so a failure leaves the old one.
+        let dir = self.inner.store.machine_dir(&self.id);
+        let part = dir.join(format!("{}.new", crate::engine::ROOT_DISK));
+        let _ = fs::remove_file(&part);
+        crate::rootdisk::clone_file(&base, &part)?;
+        if let Err(e) = fs::rename(&part, dir.join(crate::engine::ROOT_DISK)) {
+            let _ = fs::remove_file(&part);
+            return Err(e.into());
+        }
+        record.config = config;
+        record.requested = Some(requested);
+        record.image_id = image.id;
+        record.image_config = Some(defaults);
+        self.inner.store.save_record(&record)?;
+        self.inner
+            .emit_named(&self.id, record.name, EventAction::Updated, None);
+        Ok(())
+    }
+
     /// Registers a command to run inside the running machine (Docker's exec create).
     pub fn exec_create(&self, config: ExecConfig) -> Result<Exec> {
         let (record, state) = self.inner.store.load(&self.id)?;

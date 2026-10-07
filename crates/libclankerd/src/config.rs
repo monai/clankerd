@@ -110,6 +110,44 @@ impl std::fmt::Display for RestartPolicy {
     }
 }
 
+/// When create contacts the registry for an image (Docker's `--pull`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PullPolicy {
+    /// Pull only when the image is not cached.
+    #[default]
+    Missing,
+    /// Pull every time.
+    Always,
+    /// Use the cache only; a missing image is `NotFound`.
+    Never,
+}
+
+impl std::str::FromStr for PullPolicy {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, String> {
+        match s {
+            "missing" => Ok(PullPolicy::Missing),
+            "always" => Ok(PullPolicy::Always),
+            "never" => Ok(PullPolicy::Never),
+            _ => Err(format!(
+                "invalid pull policy \"{s}\": use missing, always or never"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for PullPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            PullPolicy::Missing => "missing",
+            PullPolicy::Always => "always",
+            PullPolicy::Never => "never",
+        })
+    }
+}
+
 /// How the machine is hosted: resources, mounts, ports, policies.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -126,6 +164,8 @@ pub struct HostConfig {
     /// Host unix sockets exposed at paths inside the guest.
     pub socket_bindings: Vec<SocketBinding>,
     pub restart_policy: RestartPolicy,
+    /// Applies whenever the machine's image is resolved (create, image change).
+    pub pull_policy: PullPolicy,
 }
 
 /// A guest TCP port published on the host. The host side is loopback only:

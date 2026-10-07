@@ -26,6 +26,11 @@ pub struct Record {
     /// empty when the engine has no image cache.
     #[serde(default)]
     pub image_id: String,
+    /// What the caller asked for, before the image's defaults were merged in;
+    /// kept so the merge can be redone for another image. `None` in records
+    /// written before it existed (then `config` stands in).
+    #[serde(default)]
+    pub requested: Option<MachineConfig>,
     /// The image's runtime defaults at create time (`None` without an image cache).
     #[serde(default)]
     pub image_config: Option<ImageConfig>,
@@ -155,6 +160,7 @@ mod tests {
             config: MachineConfig::default(),
             host_config: HostConfig::default(),
             image_id: String::new(),
+            requested: None,
             image_config: None,
         };
         store.create(&record, &MachineState::created()).unwrap();

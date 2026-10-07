@@ -44,7 +44,9 @@ pub mod vmm;
 mod vmspawn_populator;
 mod volumes;
 
-pub use config::{HostConfig, MachineConfig, PortBinding, RestartPolicy, SocketBinding};
+pub use config::{
+    HostConfig, MachineConfig, PortBinding, PullPolicy, RestartPolicy, SocketBinding,
+};
 pub use engine::{Engine, EngineConfig, ROOT_DISK};
 pub use error::{Error, ErrorKind, Result};
 pub use events::{EventAction, Events, MachineEvent};
