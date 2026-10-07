@@ -118,6 +118,7 @@ impl DiskPopulator for VmspawnPopulator {
             populate: true,
             volume_disk: None,
             shares: Vec::new(),
+            net: None,
         };
         let spec_file = work.path().join(SPEC_FILE);
         fs::write(&spec_file, serde_json::to_vec_pretty(&spec)?)?;

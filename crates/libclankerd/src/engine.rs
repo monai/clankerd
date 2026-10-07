@@ -11,6 +11,7 @@ use crate::error::{Error, Result};
 use crate::image_config::ImageConfig;
 use crate::images::{ImageInfo, ImageStore};
 use crate::machine::{Machine, MachineInfo};
+use crate::net::{NetBackend, NetSpec};
 use crate::rootdisk::{DiskPopulator, clone_file, ensure_base};
 use crate::state::MachineState;
 use crate::store::{Record, Store};
@@ -37,6 +38,9 @@ pub struct EngineConfig {
     /// Registries (`host:port`) reached over plain HTTP, like Docker's
     /// `insecure-registries`.
     pub insecure_registries: Vec<String>,
+    /// Gives machines a virtio NIC with a sidecar per machine. Without one,
+    /// machines boot with no NIC.
+    pub net: Option<Arc<dyn NetBackend>>,
 }
 
 impl EngineConfig {
@@ -50,6 +54,7 @@ impl EngineConfig {
             cache_dir: None,
             populator: None,
             insecure_registries: Vec::new(),
+            net: None,
         }
     }
 
@@ -99,6 +104,7 @@ pub(crate) struct Inner {
     pub start_timeout: Duration,
     pub images: Option<ImageStore>,
     pub populator: Option<Arc<dyn DiskPopulator>>,
+    pub net: Option<Arc<dyn NetBackend>>,
     /// Serialises state read-modify-write; holds ids whose start is in flight.
     pub guarded: Mutex<HashSet<String>>,
     /// Signalled on every state change.
@@ -136,6 +142,26 @@ impl Inner {
     pub fn drop_tunnels(&self, id: &str) {
         let removed = self.tunnels().remove(id);
         drop(removed);
+    }
+
+    /// Where a machine's network sidecar listens for the VMM's NIC.
+    pub fn net_socket_path(&self, id: &str) -> PathBuf {
+        self.runtime_dir.join(format!("{}.net", &id[..12]))
+    }
+
+    pub fn net_spec(&self, id: &str) -> NetSpec {
+        NetSpec {
+            machine_id: id.to_owned(),
+            dir: self.store.machine_dir(id),
+            socket: self.net_socket_path(id),
+        }
+    }
+
+    /// Ends the machine's network sidecar, if the machine has one.
+    pub fn stop_net(&self, id: &str) {
+        if let Some(net) = &self.net {
+            net.stop(&self.net_spec(id));
+        }
     }
 
     /// Where the guest dials the host (stands in for a vsock port).
@@ -198,6 +224,7 @@ impl Engine {
                 None => None,
             },
             populator: config.populator,
+            net: config.net,
             guarded: Mutex::default(),
             changed: Condvar::new(),
             forced: Mutex::default(),

@@ -303,3 +303,31 @@ $vmctl rm -f b
 - [ ] `vmctl rm -v` deletes the volume
 - [ ] A host directory bind mount is readable and writable from both sides
 - [ ] Items above confirmed or corrected
+
+
+## 9. Guest networking via gvproxy (M2 hand-off for ticket 08)
+
+Every image-backed machine gets a virtio-net NIC served by its own gvproxy sidecar (pinned release, sha256-verified, cached under the cache dir; `--gvproxy PATH` / `CLANKERD_GVPROXY` overrides it). The sidecar starts before the VMM and is stopped with the machine.
+
+### Run it
+
+```sh
+scripts/m2-boot-check.sh net
+```
+
+### Unverified (look here first if it fails)
+
+1. **Pinned asset.** `GVPROXY_URL`/`GVPROXY_SHA256` in `crates/libclankerd/src/net/fetch.rs` must be the darwin arm64 binary; a checksum mismatch aborts `create`/`start`.
+2. **NIC attach.** The vfkit magic and virtio-net feature bits are untested against real libkrun; if eth0 never appears check `vmctl logs` and gvproxy's log in the machine directory.
+3. **DHCP.** guestd speaks DHCP itself (static lease 192.168.127.2 keyed to the fixed MAC); check `ip addr show eth0` and `/etc/resolv.conf`.
+4. **Control API block.** guestd installs an nft ruleset dropping 192.168.127.1:80 and 192.168.127.254 in `output` and `forward`; the image or kernel must provide nftables support.
+5. **Sidecar lifetime.** `pgrep gvproxy` should be empty after `vmctl rm -f`.
+
+### Ticket 08 checklist for you
+
+- [ ] gvproxy is downloaded once and verified; a second run uses the cache
+- [ ] eth0 gets 192.168.127.2 by DHCP; DNS resolves like on the host
+- [ ] The guest fetches an HTTPS URL
+- [ ] The guest cannot reach 192.168.127.1:80 or 192.168.127.254
+- [ ] `net.ipv4.ip_forward` is 1 before the workload starts
+- [ ] gvproxy starts and stops with each machine

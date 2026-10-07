@@ -950,6 +950,7 @@ dependencies = [
  "libc",
  "oci-client",
  "ocirender",
+ "reqwest",
  "rustls",
  "serde",
  "serde_json",

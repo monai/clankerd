@@ -151,6 +151,17 @@ pub struct Share {
     pub path: PathBuf,
 }
 
+/// A virtio-net device whose backend listens on a unix datagram socket.
+#[derive(Debug, Clone)]
+pub struct NetDevice {
+    pub socket: PathBuf,
+    pub mac: [u8; 6],
+    /// virtio-net feature bits.
+    pub features: u32,
+    /// Send the vfkit magic (gvproxy `-listen-vfkit`).
+    pub vfkit: bool,
+}
+
 /// Everything libkrun needs to boot one guest.
 #[derive(Debug, Clone)]
 pub struct BootConfig {
@@ -168,6 +179,8 @@ pub struct BootConfig {
     pub disks: Vec<Disk>,
     /// Extra virtio-fs shares (the root directory is separate).
     pub shares: Vec<Share>,
+    /// virtio-net devices (`eth0`, ...); without any, libkrun uses TSI.
+    pub nets: Vec<NetDevice>,
     pub cpus: u8,
     pub memory_mib: u32,
 }
@@ -183,6 +196,7 @@ impl BootConfig {
             vsock_ports: Vec::new(),
             disks: Vec::new(),
             shares: Vec::new(),
+            nets: Vec::new(),
             cpus: 1,
             memory_mib: 512,
         }
@@ -274,6 +288,22 @@ pub fn boot(config: &BootConfig) -> Result<std::convert::Infallible, Error> {
             check(
                 "krun_add_virtiofs",
                 ffi::krun_add_virtiofs(ctx, tag.as_ptr(), dir.as_ptr()),
+            )?;
+        }
+        for n in &config.nets {
+            let sock = path(&n.socket, "network socket path")?;
+            // NET_FLAG_VFKIT = 1 << 0.
+            let flags = u32::from(n.vfkit);
+            check(
+                "krun_add_net_unixgram",
+                ffi::krun_add_net_unixgram(
+                    ctx,
+                    sock.as_ptr(),
+                    -1,
+                    n.mac.as_ptr(),
+                    n.features,
+                    flags,
+                ),
             )?;
         }
         for p in &config.vsock_ports {

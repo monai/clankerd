@@ -30,6 +30,7 @@
 //! sets the clock from the host and writes `/.clankerdenv` (`boot`).
 
 mod boot;
+mod network;
 mod power;
 mod rootdisk;
 mod tunnel;

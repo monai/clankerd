@@ -9,6 +9,7 @@ use std::time::Duration;
 mod exec;
 
 use clap::{Args, Parser, Subcommand};
+use libclankerd::net::{GvproxyBackend, GvproxyFetcher};
 use libclankerd::vmm::{LocalProcessVmm, VmspawnVmm};
 use libclankerd::{
     Engine, EngineConfig, Error, HostConfig, ImageInfo, LocalGuestdPopulator, MachineConfig,
@@ -54,6 +55,10 @@ struct Cli {
     /// directory (default: next to vmctl, or ../linux-arm64/ as in build/rust).
     #[arg(long, global = true, env = "CLANKERD_GUESTD")]
     guestd: Option<PathBuf>,
+    /// Use this gvproxy binary for machine networking instead of the pinned,
+    /// checksum-verified release downloaded into the cache.
+    #[arg(long, global = true, env = "CLANKERD_GVPROXY")]
+    gvproxy: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -230,6 +235,18 @@ fn engine(cli: &Cli) -> Result<Engine, Error> {
         }
         cfg.vmm = Arc::new(vmm);
         cfg.populator = Some(Arc::new(populator));
+        // Machines get a virtio NIC served by one gvproxy sidecar each. Not
+        // for the dev stand-in (no VM) nor the boot-directory-as-root check.
+        if !dev_local && !cli.boot_dir_root {
+            cfg.net = Some(Arc::new(match &cli.gvproxy {
+                Some(binary) => GvproxyBackend::new(binary),
+                None => GvproxyBackend::fetching(GvproxyFetcher::pinned(
+                    &cfg.cache_dir
+                        .clone()
+                        .unwrap_or_else(EngineConfig::default_cache_dir),
+                )),
+            }));
+        }
     }
     Engine::new(cfg)
 }
