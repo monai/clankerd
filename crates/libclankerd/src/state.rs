@@ -41,6 +41,10 @@ pub struct MachineState {
     pub pid: Option<u32>,
     pub started_at: Option<SystemTime>,
     pub finished_at: Option<SystemTime>,
+    /// Times the restart policy started the machine since it was last started
+    /// by hand.
+    #[serde(default)]
+    pub restart_count: u32,
 }
 
 impl MachineState {
@@ -53,6 +57,7 @@ impl MachineState {
             pid: None,
             started_at: None,
             finished_at: None,
+            restart_count: 0,
         }
     }
 }

@@ -6,8 +6,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
-use crate::config::{HostConfig, MachineConfig};
+use crate::config::{HostConfig, MachineConfig, PullPolicy};
 use crate::error::{Error, Result};
+use crate::events::EventAction;
+use crate::events::MachineEvent;
+use crate::events::{EventBus, Events};
 use crate::image_config::ImageConfig;
 use crate::images::{ImageInfo, ImageStore};
 use crate::machine::{Machine, MachineInfo};
@@ -35,6 +38,9 @@ pub struct EngineConfig {
     pub cache_dir: Option<PathBuf>,
     /// Builds base root disks; required to create machines when `cache_dir` is set.
     pub populator: Option<Arc<dyn DiskPopulator>>,
+    /// Delay before the first restart under a restart policy; it doubles with
+    /// each quick failure (Docker starts at 100 ms).
+    pub restart_delay: Duration,
     /// Registries (`host:port`) reached over plain HTTP, like Docker's
     /// `insecure-registries`.
     pub insecure_registries: Vec<String>,
@@ -51,6 +57,7 @@ impl EngineConfig {
             runtime_dir: runtime_dir.into(),
             vmm: Arc::new(UnavailableVmm),
             start_timeout: Duration::from_secs(30),
+            restart_delay: Duration::from_millis(100),
             cache_dir: None,
             populator: None,
             insecure_registries: Vec::new(),
@@ -111,8 +118,12 @@ pub(crate) struct Inner {
     pub changed: Condvar,
     /// Machines whose VMM was killed on purpose (their end is exit code 137, not `dead`).
     pub forced: Mutex<HashSet<String>>,
+    /// Machines stopped through the API: their policy does not restart them.
+    pub stopped: Mutex<HashSet<String>>,
+    pub restart_delay: Duration,
     /// Tunnel resources of running machines, by id.
     pub tunnels: Mutex<HashMap<String, Arc<MachineTunnels>>>,
+    pub events: EventBus,
 }
 
 impl Inner {
@@ -134,11 +145,34 @@ impl Inner {
         self.forced.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    pub fn stopped(&self) -> MutexGuard<'_, HashSet<String>> {
+        self.stopped.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn tunnels(&self) -> MutexGuard<'_, HashMap<String, Arc<MachineTunnels>>> {
         self.tunnels.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Closes the host side of a machine's tunnels (listeners, host endpoint).
+    /// Emits an event for a machine (best effort: a machine already gone is skipped).
+    pub fn emit(&self, id: &str, action: EventAction, exit_code: Option<i32>) {
+        let name = match self.store.load(id) {
+            Ok((record, _)) => record.name,
+            Err(_) => return,
+        };
+        self.emit_named(id, name, action, exit_code);
+    }
+
+    pub fn emit_named(&self, id: &str, name: String, action: EventAction, exit_code: Option<i32>) {
+        self.events.emit(MachineEvent {
+            action,
+            machine_id: id.to_owned(),
+            machine_name: name,
+            time: SystemTime::now(),
+            exit_code,
+        });
+    }
+
     pub fn drop_tunnels(&self, id: &str) {
         let removed = self.tunnels().remove(id);
         drop(removed);
@@ -171,6 +205,34 @@ impl Inner {
 
     pub fn socket_path(&self, id: &str) -> PathBuf {
         self.runtime_dir.join(format!("{}.sock", &id[..12]))
+    }
+
+    /// The cached image for `reference` per `policy`, and its cached base root disk.
+    pub fn resolve_image(
+        &self,
+        reference: &str,
+        policy: PullPolicy,
+    ) -> Result<(ImageInfo, ImageConfig, PathBuf)> {
+        let store = self
+            .images
+            .as_ref()
+            .ok_or_else(|| Error::unavailable("no image cache configured"))?;
+        let image = match (policy, store.find(reference)?) {
+            (PullPolicy::Missing, Some(image)) | (PullPolicy::Never, Some(image)) => image,
+            (PullPolicy::Never, None) => {
+                return Err(Error::not_found(format!(
+                    "no such image: {reference} (pull policy is never)"
+                )));
+            }
+            (PullPolicy::Missing, None) | (PullPolicy::Always, _) => store.pull(reference)?,
+        };
+        let defaults = ImageConfig::parse(&image.config)?;
+        let populator = self
+            .populator
+            .as_deref()
+            .ok_or_else(|| Error::unavailable("no root-disk populator configured"))?;
+        let (base, _) = ensure_base(store, populator, &image)?;
+        Ok((image, defaults, base))
     }
 
     /// Finds a machine by exact name, exact id or unique id prefix.
@@ -228,11 +290,15 @@ impl Engine {
             guarded: Mutex::default(),
             changed: Condvar::new(),
             forced: Mutex::default(),
+            stopped: Mutex::default(),
+            restart_delay: config.restart_delay,
             tunnels: Mutex::default(),
+            events: EventBus::default(),
         });
         for id in inner.store.ids()? {
             crate::machine::reattach(&inner, &id);
         }
+        crate::clockwatch::spawn(Arc::downgrade(&inner));
         Ok(Engine { inner })
     }
 
@@ -260,25 +326,20 @@ impl Engine {
 
         // Resolve and pin the image, and build its base disk, before taking the
         // lock: pulling and building can take minutes.
+        let requested = config.clone();
         let mut config = config;
         let mut image_config = None;
-        let base = match &self.inner.images {
-            Some(store) => {
-                let image = self.resolve_image(store, &config.image)?;
-                let defaults = ImageConfig::parse(&image.config)?;
-                // What runs is decided now, from the pinned image: the stored
-                // configuration is the merged one, as in Docker's inspect.
-                config = defaults.merge(&config)?;
-                image_config = Some(defaults);
-                let populator = self
-                    .inner
-                    .populator
-                    .as_deref()
-                    .ok_or_else(|| Error::unavailable("no root-disk populator configured"))?;
-                let (base, _) = ensure_base(store, populator, &image)?;
-                Some((image.id, base))
-            }
-            None => None,
+        let base = if self.inner.images.is_some() {
+            let (image, defaults, base) = self
+                .inner
+                .resolve_image(&config.image, host_config.pull_policy)?;
+            // What runs is decided now, from the pinned image: the stored
+            // configuration is the merged one, as in Docker's inspect.
+            config = defaults.merge(&config)?;
+            image_config = Some(defaults);
+            Some((image.id, base))
+        } else {
+            None
         };
 
         let mut new_volume = None;
@@ -302,6 +363,7 @@ impl Engine {
                 name,
                 created: SystemTime::now(),
                 config,
+                requested: Some(requested),
                 host_config,
                 image_id: base.as_ref().map(|(id, _)| id.clone()).unwrap_or_default(),
                 image_config,
@@ -325,7 +387,14 @@ impl Engine {
                 return Err(e);
             }
         }
+        self.inner.emit(&id, EventAction::Created, None);
         Ok(Machine::new(self.inner.clone(), id))
+    }
+
+    /// Subscribes to machine events: created, started, exited and so on, in
+    /// the order they happen. Sees events from this point on.
+    pub fn events(&self) -> Events {
+        self.inner.events.subscribe()
     }
 
     /// Pulls `reference` into the image cache (always contacting the registry)
@@ -344,14 +413,6 @@ impl Engine {
             .images
             .as_ref()
             .ok_or_else(|| Error::unavailable("no image cache configured"))
-    }
-
-    /// The cached image for `reference`, pulling it when missing (`--pull missing`).
-    fn resolve_image(&self, store: &ImageStore, reference: &str) -> Result<ImageInfo> {
-        match store.find(reference)? {
-            Some(image) => Ok(image),
-            None => store.pull(reference),
-        }
     }
 
     fn volume_store(&self) -> VolumeStore {

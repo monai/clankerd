@@ -14,6 +14,8 @@
 //! * `image_config`: the OCI image config and Docker's merge rules over it;
 //!   `images`: the image cache (pull, list, resolve); `merge`: layers to one tar;
 //!   `rootdisk`: base root disk building and per-machine clones.
+//! * `events`: the events stream ([`Events`], [`MachineEvent`]).
+//! * `clockwatch`: notices the host sleeping and resyncs guest clocks (private).
 //! * `store`: atomic on-disk persistence of config and state (private).
 //! * `exec`: [`Exec`] lifecycle (create, start, resize, kill, inspect) and its streams.
 //! * `guest`: host-side varlink client for clankerd-guestd (private).
@@ -24,9 +26,11 @@
 //! Machines outlive the process that started them: state lives on disk, the
 //! VMM runs in its own process group, and [`Engine::new`] reattaches.
 
+mod clockwatch;
 mod config;
 mod engine;
 mod error;
+mod events;
 mod exec;
 mod guest;
 mod image_config;
@@ -43,9 +47,12 @@ pub mod vmm;
 mod vmspawn_populator;
 mod volumes;
 
-pub use config::{HostConfig, MachineConfig, PortBinding, SocketBinding};
+pub use config::{
+    HostConfig, MachineConfig, PortBinding, PullPolicy, RestartPolicy, SocketBinding,
+};
 pub use engine::{Engine, EngineConfig, ROOT_DISK};
 pub use error::{Error, ErrorKind, Result};
+pub use events::{EventAction, Events, MachineEvent};
 pub use exec::{Exec, ExecConfig, ExecInfo, ExecOutput, ExecStatus, ExecStdin, ExecStreams};
 pub use image_config::ImageConfig;
 pub use images::{ImageInfo, LayerInfo};

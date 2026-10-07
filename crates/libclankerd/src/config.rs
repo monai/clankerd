@@ -22,8 +22,133 @@ pub struct MachineConfig {
     pub open_stdin: bool,
 }
 
+impl MachineConfig {
+    /// Names of the fields that differ from `other`.
+    pub(crate) fn differing_fields(&self, other: &MachineConfig) -> Vec<&'static str> {
+        [
+            ("image", self.image != other.image),
+            ("entrypoint", self.entrypoint != other.entrypoint),
+            ("cmd", self.cmd != other.cmd),
+            ("env", self.env != other.env),
+            ("user", self.user != other.user),
+            ("working_dir", self.working_dir != other.working_dir),
+            ("tty", self.tty != other.tty),
+            ("open_stdin", self.open_stdin != other.open_stdin),
+        ]
+        .into_iter()
+        .filter_map(|(name, differs)| differs.then_some(name))
+        .collect()
+    }
+}
+
+/// When a machine whose workload exited is started again (Docker's `--restart`).
+/// A machine stopped through the API is never restarted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RestartPolicy {
+    #[default]
+    No,
+    Always,
+    /// Restart only after a non-zero exit, at most `max_retries` times.
+    OnFailure {
+        max_retries: Option<u32>,
+    },
+    /// Like `Always`.
+    UnlessStopped,
+}
+
+impl RestartPolicy {
+    /// Whether a run that ended with `exit_code` (`-1`: vanished) is followed
+    /// by a restart, given how many restarts already happened.
+    pub(crate) fn restarts(&self, exit_code: i32, restarts_so_far: u32) -> bool {
+        match self {
+            RestartPolicy::No => false,
+            RestartPolicy::Always | RestartPolicy::UnlessStopped => true,
+            RestartPolicy::OnFailure { max_retries } => {
+                exit_code != 0 && max_retries.is_none_or(|max| restarts_so_far < max)
+            }
+        }
+    }
+}
+
+impl std::str::FromStr for RestartPolicy {
+    type Err = String;
+
+    /// `no`, `always`, `unless-stopped`, `on-failure[:N]`.
+    fn from_str(s: &str) -> std::result::Result<Self, String> {
+        match s {
+            "no" => Ok(RestartPolicy::No),
+            "always" => Ok(RestartPolicy::Always),
+            "unless-stopped" => Ok(RestartPolicy::UnlessStopped),
+            "on-failure" => Ok(RestartPolicy::OnFailure { max_retries: None }),
+            _ => match s.strip_prefix("on-failure:") {
+                Some(n) => n
+                    .parse()
+                    .map(|n| RestartPolicy::OnFailure {
+                        max_retries: Some(n),
+                    })
+                    .map_err(|_| format!("invalid retry count \"{n}\" in restart policy")),
+                None => Err(format!(
+                    "invalid restart policy \"{s}\": use no, always, on-failure[:N] or unless-stopped"
+                )),
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for RestartPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RestartPolicy::No => f.write_str("no"),
+            RestartPolicy::Always => f.write_str("always"),
+            RestartPolicy::UnlessStopped => f.write_str("unless-stopped"),
+            RestartPolicy::OnFailure { max_retries: None } => f.write_str("on-failure"),
+            RestartPolicy::OnFailure {
+                max_retries: Some(n),
+            } => write!(f, "on-failure:{n}"),
+        }
+    }
+}
+
+/// When create contacts the registry for an image (Docker's `--pull`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PullPolicy {
+    /// Pull only when the image is not cached.
+    #[default]
+    Missing,
+    /// Pull every time.
+    Always,
+    /// Use the cache only; a missing image is `NotFound`.
+    Never,
+}
+
+impl std::str::FromStr for PullPolicy {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, String> {
+        match s {
+            "missing" => Ok(PullPolicy::Missing),
+            "always" => Ok(PullPolicy::Always),
+            "never" => Ok(PullPolicy::Never),
+            _ => Err(format!(
+                "invalid pull policy \"{s}\": use missing, always or never"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for PullPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            PullPolicy::Missing => "missing",
+            PullPolicy::Always => "always",
+            PullPolicy::Never => "never",
+        })
+    }
+}
+
 /// How the machine is hosted: resources, mounts, ports, policies.
-/// Restart and pull policy arrive with later tickets.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HostConfig {
@@ -38,6 +163,9 @@ pub struct HostConfig {
     pub host_gateway_ports: Vec<u16>,
     /// Host unix sockets exposed at paths inside the guest.
     pub socket_bindings: Vec<SocketBinding>,
+    pub restart_policy: RestartPolicy,
+    /// Applies whenever the machine's image is resolved (create, image change).
+    pub pull_policy: PullPolicy,
 }
 
 /// A guest TCP port published on the host. The host side is loopback only:

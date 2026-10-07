@@ -26,6 +26,11 @@ pub struct Record {
     /// empty when the engine has no image cache.
     #[serde(default)]
     pub image_id: String,
+    /// What the caller asked for, before the image's defaults were merged in;
+    /// kept so the merge can be redone for another image. `None` in records
+    /// written before it existed (then `config` stands in).
+    #[serde(default)]
+    pub requested: Option<MachineConfig>,
     /// The image's runtime defaults at create time (`None` without an image cache).
     #[serde(default)]
     pub image_config: Option<ImageConfig>,
@@ -73,6 +78,11 @@ impl Store {
         fs::create_dir_all(&dir)?;
         write_json(&dir.join("config.json"), record)?;
         self.save_state(&record.id, state)
+    }
+
+    /// Replaces the machine's record (config.json) atomically.
+    pub fn save_record(&self, record: &Record) -> Result<()> {
+        write_json(&self.machine_dir(&record.id).join("config.json"), record)
     }
 
     pub fn load(&self, id: &str) -> Result<(Record, MachineState)> {
@@ -150,6 +160,7 @@ mod tests {
             config: MachineConfig::default(),
             host_config: HostConfig::default(),
             image_id: String::new(),
+            requested: None,
             image_config: None,
         };
         store.create(&record, &MachineState::created()).unwrap();

@@ -239,3 +239,49 @@ fn entrypoint_env_user_and_workdir_flags_shape_the_workload() {
         format!("hello /tmp {uid}\n")
     );
 }
+
+#[test]
+fn run_restart_on_failure_reruns_the_workload_and_records_the_restarts() {
+    let cli = Cli::new();
+    let log = cli.root().join("log");
+    let script = format!("echo run >> {}; exit 5", log.display());
+    let out = cli.run(&[
+        "run",
+        "--restart",
+        "on-failure:2",
+        "--name",
+        "flaky",
+        "img",
+        "sh",
+        "-c",
+        &script,
+    ]);
+    assert_eq!(out.status.code(), Some(5), "{}", text(&out.stderr));
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 3);
+    let inspect = cli.run(&["inspect", "flaky"]);
+    let v: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert_eq!(v[0]["state"]["restart_count"], 2);
+    assert_eq!(
+        v[0]["host_config"]["restart_policy"]["on-failure"]["max_retries"],
+        2
+    );
+}
+
+#[test]
+fn invalid_restart_and_pull_policies_are_usage_errors() {
+    let cli = Cli::new();
+    let out = cli.run(&["create", "--restart", "sometimes", "img", "true"]);
+    assert!(!out.status.success());
+    assert!(
+        text(&out.stderr).contains("invalid restart policy"),
+        "{}",
+        text(&out.stderr)
+    );
+    let out = cli.run(&["create", "--pull", "sometimes", "img", "true"]);
+    assert!(!out.status.success());
+    assert!(
+        text(&out.stderr).contains("invalid pull policy"),
+        "{}",
+        text(&out.stderr)
+    );
+}

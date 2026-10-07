@@ -6,13 +6,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use clankerd_proto::guest::{
-    Clock, Event, METHOD_KILL, METHOD_SHUTDOWN, NetworkConfig, SignalParams, Workload,
+    Clock, Event, METHOD_KILL, METHOD_SET_CLOCK, METHOD_SHUTDOWN, NetworkConfig, SignalParams,
+    Workload,
 };
 use serde::Serialize;
 
 use crate::config::{HostConfig, MachineConfig, PortBinding};
 use crate::engine::Inner;
 use crate::error::{Error, ErrorKind, Result};
+use crate::events::EventAction;
 use crate::exec::{Exec, ExecConfig};
 use crate::guest::{self, EventStream, Next};
 use crate::image_config::ImageConfig;
@@ -72,22 +74,36 @@ impl Machine {
     /// Boots the machine and returns once the guest reported ready.
     /// Fails with `Unavailable` if it does not within the engine's start timeout.
     pub fn start(&self) -> Result<()> {
+        self.start_with(false)
+    }
+
+    /// `restart` is set when a restart policy starts the machine: it only
+    /// proceeds while the machine is still waiting for that restart.
+    fn start_with(&self, restart: bool) -> Result<()> {
         let info = self.inspect()?;
         {
             let mut starting = self.inner.lock();
             let status = self.inner.store.load_state(&self.id)?.status;
-            if status == Status::Running || starting.contains(&self.id) {
+            let busy = status == Status::Running
+                || starting.contains(&self.id)
+                || (!restart && status == Status::Restarting);
+            // A restart whose machine was stopped or removed meanwhile is off.
+            let cancelled = restart && status != Status::Restarting;
+            if busy || cancelled {
                 return Err(Error::conflict(format!(
                     "machine {} is already running",
                     info.name
                 )));
+            }
+            if !restart {
+                self.inner.stopped().remove(&self.id);
             }
             if let Some(name) = crate::mount::volume_name(&info.host_config.mounts) {
                 self.check_volume_free(&starting, name)?;
             }
             starting.insert(self.id.clone());
         }
-        let result = self.boot(&info);
+        let result = self.boot(&info, restart);
         self.inner.lock().remove(&self.id);
         self.inner.changed.notify_all();
         result
@@ -117,7 +133,7 @@ impl Machine {
         Ok(())
     }
 
-    fn boot(&self, info: &MachineInfo) -> Result<()> {
+    fn boot(&self, info: &MachineInfo, restart: bool) -> Result<()> {
         let dir = self.inner.store.machine_dir(&self.id);
         let exit_file = dir.join("exit");
         let socket = self.inner.socket_path(&self.id);
@@ -206,9 +222,117 @@ impl Machine {
             s.exit_code = 0;
             s.started_at = Some(SystemTime::now());
             s.finished_at = None;
+            if !restart {
+                s.restart_count = 0;
+            }
         })?;
+        self.inner.emit(&self.id, EventAction::Started, None);
         spawn_monitor(self.inner.clone(), self.id.clone(), ready);
         Ok(())
+    }
+
+    /// Replaces the host configuration of a machine that is not running:
+    /// resources, mounts, ports and policies. `config` must equal the
+    /// machine's current [`MachineConfig`]: it is immutable, and a difference
+    /// fails with `InvalidParameter` naming each field that cannot change
+    /// (use [`Machine::change_image`] to move to another image). Nothing is
+    /// applied on failure.
+    pub fn update(&self, config: &MachineConfig, host_config: HostConfig) -> Result<()> {
+        crate::tunnel::validate_host_config(&host_config)?;
+        crate::mount::validate(&host_config.mounts)?;
+        let starting = self.inner.lock();
+        let (mut record, state) = self.inner.store.load(&self.id)?;
+        let immutable = record.config.differing_fields(config);
+        if !immutable.is_empty() {
+            return Err(Error::invalid_parameter(format!(
+                "cannot update immutable fields: {}",
+                immutable.join(", ")
+            )));
+        }
+        if matches!(state.status, Status::Running | Status::Restarting)
+            || starting.contains(&self.id)
+        {
+            return Err(Error::conflict(format!(
+                "cannot update machine {}: it is running; stop it first",
+                record.name
+            )));
+        }
+        crate::mount::ensure_volume(
+            &VolumeStore::new(self.inner.store.volumes_dir()),
+            &host_config.mounts,
+        )?;
+        record.host_config = host_config;
+        self.inner.store.save_record(&record)?;
+        self.inner
+            .emit_named(&self.id, record.name, EventAction::Updated, None);
+        Ok(())
+    }
+
+    /// Moves a machine that is not running to another image: the root disk is
+    /// rebuilt from the new image's cached base (pulled per the machine's pull
+    /// policy) and what the machine runs is merged again over the new image's
+    /// defaults. The volume is untouched.
+    pub fn change_image(&self, reference: &str) -> Result<()> {
+        if reference.is_empty() {
+            return Err(Error::invalid_parameter("image is required"));
+        }
+        let host_config = self.inspect()?.host_config;
+        // Pulling and building can take minutes: before taking the lock.
+        let (image, defaults, base) = self
+            .inner
+            .resolve_image(reference, host_config.pull_policy)?;
+        let starting = self.inner.lock();
+        let (mut record, state) = self.inner.store.load(&self.id)?;
+        if matches!(state.status, Status::Running | Status::Restarting)
+            || starting.contains(&self.id)
+        {
+            return Err(Error::conflict(format!(
+                "cannot change the image of machine {}: it is running; stop it first",
+                record.name
+            )));
+        }
+        let mut requested = record
+            .requested
+            .clone()
+            .unwrap_or_else(|| record.config.clone());
+        requested.image = reference.to_owned();
+        let config = defaults.merge(&requested)?;
+        // Swap the disk in atomically, so a failure leaves the old one.
+        let dir = self.inner.store.machine_dir(&self.id);
+        let part = dir.join(format!("{}.new", crate::engine::ROOT_DISK));
+        let _ = fs::remove_file(&part);
+        crate::rootdisk::clone_file(&base, &part)?;
+        if let Err(e) = fs::rename(&part, dir.join(crate::engine::ROOT_DISK)) {
+            let _ = fs::remove_file(&part);
+            return Err(e.into());
+        }
+        record.config = config;
+        record.requested = Some(requested);
+        record.image_id = image.id;
+        record.image_config = Some(defaults);
+        self.inner.store.save_record(&record)?;
+        self.inner
+            .emit_named(&self.id, record.name, EventAction::Updated, None);
+        Ok(())
+    }
+
+    /// Sets the guest's clock from the host's. The engine does this by itself
+    /// when the host wakes from sleep; it is public for callers that know
+    /// better. Fails with a conflict if the machine is not running.
+    pub fn sync_clock(&self) -> Result<()> {
+        let (record, state) = self.inner.store.load(&self.id)?;
+        if state.status != Status::Running {
+            return Err(Error::conflict(format!(
+                "machine {} is not running",
+                record.name
+            )));
+        }
+        guest::call(
+            &self.inner.socket_path(&self.id),
+            METHOD_SET_CLOCK,
+            &Clock::now(),
+        )
+        .map(|_| ())
     }
 
     /// Registers a command to run inside the running machine (Docker's exec create).
@@ -267,16 +391,22 @@ impl Machine {
     /// Returns immediately for a machine that never started.
     pub fn wait(&self) -> Result<WaitResult> {
         Ok(self
-            .wait_until(None)?
+            .wait_until(None, true)?
             .expect("waiting without a deadline ends with a result"))
     }
 
     /// Like [`Machine::wait`], giving up with `None` at `deadline`.
-    fn wait_until(&self, deadline: Option<Instant>) -> Result<Option<WaitResult>> {
+    ///
+    /// With `settled` it also waits out restarts: the machine is done only
+    /// when no restart policy is about to start it again. Without, a run ending
+    /// is enough.
+    fn wait_until(&self, deadline: Option<Instant>, settled: bool) -> Result<Option<WaitResult>> {
         let mut starting = self.inner.lock();
         loop {
             let state = self.inner.store.load_state(&self.id)?;
-            if state.status != Status::Running && !starting.contains(&self.id) {
+            let over =
+                state.status != Status::Running && !(settled && state.status == Status::Restarting);
+            if over && !starting.contains(&self.id) {
                 return Ok(Some(WaitResult {
                     exit_code: state.exit_code,
                 }));
@@ -304,15 +434,26 @@ impl Machine {
     /// running succeeds.
     pub fn stop(&self, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
-        if self.inner.store.load_state(&self.id)?.status != Status::Running {
-            return Ok(());
+        match self.inner.store.load_state(&self.id)?.status {
+            Status::Running => {}
+            Status::Restarting => {
+                // Waiting for a restart: stopping cancels it.
+                self.inner.update_state(&self.id, |s| {
+                    if s.status == Status::Restarting {
+                        s.status = Status::Exited;
+                    }
+                })?;
+                return Ok(());
+            }
+            _ => return Ok(()),
         }
+        self.inner.stopped().insert(self.id.clone());
         let asked = guest::call(
             &self.inner.socket_path(&self.id),
             METHOD_SHUTDOWN,
             &serde_json::json!({}),
         );
-        if asked.is_ok() && self.wait_until(Some(deadline))?.is_some() {
+        if asked.is_ok() && self.wait_until(Some(deadline), false)?.is_some() {
             return Ok(());
         }
         match self.kill(libc::SIGKILL) {
@@ -348,10 +489,11 @@ impl Machine {
             )
             .map(|_| ());
         }
+        self.inner.emit(&self.id, EventAction::Killed, None);
         self.inner.forced().insert(self.id.clone());
         kill_group(pid);
         // The monitor records the end; return once it has.
-        self.wait_until(Some(Instant::now() + Duration::from_secs(10)))?;
+        self.wait_until(Some(Instant::now() + Duration::from_secs(10)), false)?;
         self.inner.forced().remove(&self.id);
         Ok(())
     }
@@ -399,7 +541,7 @@ impl Machine {
                 record.name
             )));
         }
-        if state.status == Status::Running {
+        if matches!(state.status, Status::Running | Status::Restarting) {
             if !force {
                 return Err(Error::conflict(format!(
                     "cannot remove running machine {}: stop it first or use force",
@@ -413,6 +555,8 @@ impl Machine {
         self.inner.stop_net(&self.id);
         self.inner.drop_tunnels(&self.id);
         self.inner.store.remove(&self.id)?;
+        self.inner
+            .emit_named(&self.id, record.name, EventAction::Removed, None);
         let _ = fs::remove_file(self.inner.socket_path(&self.id));
         starting.remove(&self.id);
         self.inner.changed.notify_all();
@@ -482,17 +626,28 @@ fn spawn_monitor(inner: Arc<Inner>, id: String, ready: Ready) {
 }
 
 /// Persists the end of a run. `None` means the guest vanished: status `dead`.
-fn record_exit(inner: &Inner, id: &str, code: Option<i32>) {
+/// When the machine's restart policy asks for it the machine goes to
+/// `restarting` instead and a restart is scheduled.
+fn record_exit(inner: &Arc<Inner>, id: &str, code: Option<i32>) {
     // Release host resources first: whoever sees the new state sees them gone.
     inner.drop_tunnels(id);
     inner.stop_net(id);
     let _ = fs::remove_file(inner.socket_path(id));
     // A machine whose helper we killed ended by SIGKILL: Docker's 137.
     let code = code.or_else(|| inner.forced().remove(id).then_some(137));
+    let policy = inner
+        .store
+        .load(id)
+        .map(|(r, _)| r.host_config.restart_policy)
+        .unwrap_or_default();
+    let mut restart_in = None;
     let _ = inner.update_state(id, |s| {
         if s.status != Status::Running {
             return;
         }
+        // Emitted under the state lock: whoever sees the new state (a waiter
+        // that then removes the machine, say) sees this event first.
+        inner.emit(id, EventAction::Exited, Some(code.unwrap_or(-1)));
         s.status = if code.is_some() {
             Status::Exited
         } else {
@@ -500,7 +655,69 @@ fn record_exit(inner: &Inner, id: &str, code: Option<i32>) {
         };
         s.exit_code = code.unwrap_or(-1);
         s.pid = None;
-        s.finished_at = Some(SystemTime::now());
+        let now = SystemTime::now();
+        s.finished_at = Some(now);
+        let stopped_by_api = inner.stopped().remove(id);
+        if !stopped_by_api && policy.restarts(s.exit_code, s.restart_count) {
+            // Docker's backoff: the delay doubles while runs are short.
+            let ran = s
+                .started_at
+                .and_then(|t| now.duration_since(t).ok())
+                .unwrap_or_default();
+            let doublings = if ran >= STABLE_RUN {
+                0
+            } else {
+                s.restart_count.min(9)
+            };
+            restart_in =
+                Some((inner.restart_delay * 2u32.pow(doublings)).min(Duration::from_secs(60)));
+            s.status = Status::Restarting;
+            s.restart_count += 1;
+            inner.emit(id, EventAction::Restarting, None);
+        }
+    });
+    if let Some(delay) = restart_in {
+        spawn_restarter(inner.clone(), id.to_owned(), delay);
+    }
+}
+
+/// A run at least this long resets the restart backoff.
+const STABLE_RUN: Duration = Duration::from_secs(10);
+
+/// Starts the machine again after `delay`, unless it was stopped or removed
+/// meanwhile.
+fn spawn_restarter(inner: Arc<Inner>, id: String, delay: Duration) {
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + delay;
+        let mut guard = inner.lock();
+        loop {
+            match inner.store.load_state(&id) {
+                Ok(s) if s.status == Status::Restarting => {}
+                _ => return,
+            }
+            match deadline.checked_duration_since(Instant::now()) {
+                Some(left) if !left.is_zero() => {
+                    guard = inner
+                        .changed
+                        .wait_timeout(guard, left)
+                        .unwrap_or_else(|e| e.into_inner())
+                        .0;
+                }
+                _ => break,
+            }
+        }
+        drop(guard);
+        if let Err(err) = Machine::new(inner.clone(), id.clone()).start_with(true)
+            && err.kind() != ErrorKind::NotFound
+        {
+            // Could not boot again: the machine stays down, with the reason.
+            let _ = inner.update_state(&id, |s| {
+                if s.status == Status::Restarting {
+                    s.status = Status::Exited;
+                    s.error = err.message().to_owned();
+                }
+            });
+        }
     });
 }
 
@@ -521,6 +738,11 @@ pub(crate) fn reattach(inner: &Arc<Inner>, id: &str) {
     let Ok(state) = inner.store.load_state(id) else {
         return;
     };
+    if state.status == Status::Restarting {
+        // The library went away during a restart delay: carry on.
+        spawn_restarter(inner.clone(), id.to_owned(), inner.restart_delay);
+        return;
+    }
     if state.status != Status::Running {
         return;
     }

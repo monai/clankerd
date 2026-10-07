@@ -13,7 +13,8 @@ use libclankerd::net::{GvproxyBackend, GvproxyFetcher};
 use libclankerd::vmm::{LocalProcessVmm, VmspawnVmm};
 use libclankerd::{
     Engine, EngineConfig, Error, HostConfig, ImageInfo, LocalGuestdPopulator, MachineConfig,
-    MachineInfo, Mount, PortBinding, Status, VmspawnPopulator, VolumeInfo,
+    MachineInfo, Mount, PortBinding, PullPolicy, RestartPolicy, Status, VmspawnPopulator,
+    VolumeInfo,
 };
 
 #[derive(Parser)]
@@ -170,6 +171,12 @@ struct CreateArgs {
     /// Size of the named volume, e.g. 20G (it only ever grows).
     #[arg(long = "volume-size")]
     volume_size: Option<String>,
+    /// Restart policy: no, always, on-failure[:N] or unless-stopped.
+    #[arg(long, default_value = "no")]
+    restart: RestartPolicy,
+    /// When to pull the image: missing, always or never.
+    #[arg(long, default_value = "missing")]
+    pull: PullPolicy,
     image: String,
     /// Command and arguments.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -294,6 +301,8 @@ fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error>
         port_bindings: a.publish,
         host_gateway_ports: a.host_gateway_port,
         mounts,
+        restart_policy: a.restart,
+        pull_policy: a.pull,
         ..Default::default()
     };
     engine.create(a.name.as_deref(), config, host_config)
