@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 use clankerd_proto::guest::{Clock, Workload};
 use clankerd_proto::spawn::{GUEST_BOOT_MOUNT, ROOT_DEVICE};
 
+use crate::poll::poll_until;
+
 /// Marker file image authors test for (like Docker's `/.dockerenv`).
 pub const MARKER: &str = ".clankerdenv";
 const NEW_ROOT: &str = "/newroot";
@@ -133,7 +135,7 @@ pub(crate) fn mount(
 /// Mounts the root disk, keeps the boot directory reachable at
 /// [`GUEST_BOOT_MOUNT`] (read-only) and pivots into the disk.
 fn mount_root_and_pivot() -> io::Result<()> {
-    wait_for_device(Path::new(ROOT_DEVICE))?;
+    wait_for_device(Path::new(ROOT_DEVICE), "root disk")?;
     fs::create_dir_all(NEW_ROOT)?;
     mount(ROOT_DEVICE, NEW_ROOT, "ext4", libc::MS_NOATIME, "")?;
 
@@ -186,26 +188,30 @@ fn mount_root_and_pivot() -> io::Result<()> {
 
 /// virtio-blk devices appear a moment after boot; `/dev` may also still need
 /// mounting if libkrun's init has not.
-fn wait_for_device(device: &Path) -> io::Result<()> {
-    let deadline = Instant::now() + DEVICE_WAIT;
+/// Waits for a block device node to appear, mounting devtmpfs on /dev if the
+/// kernel has not by the time half the wait is gone. `what` names the disk in
+/// the error.
+pub fn wait_for_device(device: &Path, what: &str) -> io::Result<()> {
+    let half = Instant::now() + DEVICE_WAIT / 2;
     let mut tried_devtmpfs = false;
-    while !device.exists() {
-        if Instant::now() >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!(
-                    "{} did not appear (is the root disk attached?)",
-                    device.display()
-                ),
-            ));
-        }
-        if !tried_devtmpfs && deadline.saturating_duration_since(Instant::now()) < DEVICE_WAIT / 2 {
+    let found = poll_until(DEVICE_WAIT, Duration::from_millis(50), || {
+        if !tried_devtmpfs && !device.exists() && Instant::now() >= half {
             tried_devtmpfs = true;
             let _ = mount("devtmpfs", "/dev", "devtmpfs", 0, "mode=0755");
         }
-        std::thread::sleep(Duration::from_millis(50));
+        device.exists()
+    });
+    if found {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "{} did not appear (is the {what} attached?)",
+                device.display()
+            ),
+        ))
     }
-    Ok(())
 }
 
 /// Mounts what a Linux userspace expects, over the image's (usually empty)

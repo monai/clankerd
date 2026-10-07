@@ -132,6 +132,23 @@ pub fn boot_dir_with_mke2fs() -> tempfile::TempDir {
     dir
 }
 
+/// Polls `ok` every 20 ms for up to 15 s.
+pub fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while !ok() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Waits until `path` exists (a workload says it is ready).
+pub fn wait_for_file(path: &Path) {
+    wait_for(&path.display().to_string(), || path.exists());
+}
+
 pub fn is_root() -> bool {
     // SAFETY: no preconditions.
     unsafe { libc::geteuid() == 0 }

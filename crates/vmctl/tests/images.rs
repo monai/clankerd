@@ -3,7 +3,11 @@
 #[path = "../../libclankerd/tests/common/registry.rs"]
 mod registry;
 
+mod common;
+
 use std::process::{Command, Output};
+
+use common::text;
 
 fn vmctl(dir: &std::path::Path, registry: &str, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_vmctl"))
@@ -14,10 +18,6 @@ fn vmctl(dir: &std::path::Path, registry: &str, args: &[&str]) -> Output {
         .env("CLANKERD_INSECURE_REGISTRIES", registry)
         .output()
         .unwrap()
-}
-
-fn text(b: &[u8]) -> String {
-    String::from_utf8_lossy(b).into_owned()
 }
 
 #[test]

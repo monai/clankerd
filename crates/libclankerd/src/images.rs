@@ -19,6 +19,7 @@ use oci_client::secrets::RegistryAuth;
 use oci_client::{Client, Reference};
 use serde::{Deserialize, Serialize};
 
+use crate::digest::hex_of;
 use crate::error::{Error, Result};
 
 /// One layer of an image, in manifest order (oldest first).
@@ -74,9 +75,7 @@ impl ImageStore {
     }
 
     pub fn blob_path(&self, digest: &str) -> PathBuf {
-        self.root
-            .join("blobs/sha256")
-            .join(digest.strip_prefix("sha256:").unwrap_or(digest))
+        self.root.join("blobs/sha256").join(hex_of(digest))
     }
 
     pub fn base_path(&self, id: &str) -> PathBuf {
@@ -125,7 +124,7 @@ impl ImageStore {
                 return Ok(Some(info.clone()));
             }
         }
-        let hex = reference.strip_prefix("sha256:").unwrap_or(reference);
+        let hex = hex_of(reference);
         if hex.len() >= 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             let mut by_prefix = images.iter().filter(|i| hex_of(&i.id).starts_with(hex));
             if let (Some(info), None) = (by_prefix.next(), by_prefix.next()) {
@@ -240,10 +239,6 @@ fn canonical_reference(reference: &str) -> std::result::Result<String, ()> {
         .parse::<Reference>()
         .map(|r| r.whole())
         .map_err(|_| ())
-}
-
-fn hex_of(id: &str) -> &str {
-    id.strip_prefix("sha256:").unwrap_or(id)
 }
 
 /// Runs a future on a private runtime; libclankerd's API is synchronous.

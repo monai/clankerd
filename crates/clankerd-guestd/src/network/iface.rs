@@ -7,9 +7,10 @@ use std::io;
 use std::net::Ipv4Addr;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::dhcp::Lease;
+use crate::poll::poll_until;
 
 fn control_socket() -> io::Result<OwnedFd> {
     // SAFETY: plain socket(2); the fd is owned right away.
@@ -63,17 +64,14 @@ fn ioctl<T>(sock: &OwnedFd, request: libc::c_ulong, arg: &mut T, what: &str) -> 
 /// Waits for the kernel to create `name` (virtio devices probe asynchronously).
 pub fn wait_for(name: &str, timeout: Duration) -> io::Result<()> {
     let path = Path::new("/sys/class/net").join(name);
-    let deadline = Instant::now() + timeout;
-    while !path.exists() {
-        if Instant::now() >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("network interface {name} did not appear (no virtio-net device?)"),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(50));
+    if poll_until(timeout, Duration::from_millis(50), || path.exists()) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("network interface {name} did not appear (no virtio-net device?)"),
+        ))
     }
-    Ok(())
 }
 
 /// The interface's hardware address as the kernel reports it.

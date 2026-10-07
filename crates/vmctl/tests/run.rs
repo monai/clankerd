@@ -1,32 +1,12 @@
 //! CLI smoke: `vmctl run` returns the command's exit code; ps/inspect/rm work.
 //! The VMM is the local-process stand-in (see libclankerd::vmm).
 
+mod common;
+
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::Command;
 
-fn guestd() -> PathBuf {
-    // Cargo builds only this package's binaries for these tests.
-    let exe = std::env::current_exe().unwrap();
-    let profile_dir = exe.parent().unwrap().parent().unwrap().to_path_buf();
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut cmd = Command::new(cargo);
-    cmd.args(["build", "-q", "-p", "clankerd-guestd"]);
-    if profile_dir.file_name().is_some_and(|n| n == "release") {
-        cmd.arg("--release");
-    }
-    assert!(cmd.status().unwrap().success());
-    profile_dir.join("clankerd-guestd")
-}
-
-fn vmctl(dir: &std::path::Path, guestd: &std::path::Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_vmctl"))
-        .args(args)
-        .env("CLANKERD_STATE_DIR", dir.join("state"))
-        .env("CLANKERD_RUNTIME_DIR", dir.join("run"))
-        .env("CLANKERD_DEV_GUESTD", guestd)
-        .output()
-        .unwrap()
-}
+use common::{guestd, vmctl};
 
 #[test]
 fn logs_show_workload_output() {

@@ -5,22 +5,13 @@
 #[path = "../../libclankerd/tests/common/registry.rs"]
 mod registry;
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
-fn guestd() -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let profile_dir = exe.parent().unwrap().parent().unwrap().to_path_buf();
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut cmd = Command::new(cargo);
-    cmd.args(["build", "-q", "-p", "clankerd-guestd"]);
-    if profile_dir.file_name().is_some_and(|n| n == "release") {
-        cmd.arg("--release");
-    }
-    assert!(cmd.status().unwrap().success());
-    profile_dir.join("clankerd-guestd")
-}
+use common::{guestd, text, vmctl, wait_for};
 
 struct Cli {
     dir: tempfile::TempDir,
@@ -36,13 +27,7 @@ impl Cli {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_vmctl"))
-            .args(args)
-            .env("CLANKERD_STATE_DIR", self.dir.path().join("state"))
-            .env("CLANKERD_RUNTIME_DIR", self.dir.path().join("run"))
-            .env("CLANKERD_DEV_GUESTD", &self.guestd)
-            .output()
-            .unwrap()
+        vmctl(self.root(), &self.guestd, args)
     }
 
     fn root(&self) -> &Path {
@@ -62,16 +47,8 @@ impl Cli {
     /// Waits for the workload to say it is ready.
     fn wait_for(&self, file: &str) {
         let path = self.root().join(file);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !path.exists() {
-            assert!(Instant::now() < deadline, "{file} never appeared");
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        wait_for(file, || path.exists());
     }
-}
-
-fn text(b: &[u8]) -> String {
-    String::from_utf8_lossy(b).into_owned()
 }
 
 #[test]

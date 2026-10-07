@@ -9,19 +9,6 @@ use std::time::{Duration, Instant};
 use common::*;
 use libclankerd::{ErrorKind, Status};
 
-/// Waits until `path` exists (the workload says it is ready).
-fn wait_for(path: &std::path::Path) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !path.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "{} never appeared",
-            path.display()
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
 #[test]
 fn stop_lets_the_workload_handle_sigterm_and_exit_cleanly() {
     let env = Env::new();
@@ -37,7 +24,7 @@ fn stop_lets_the_workload_handle_sigterm_and_exit_cleanly() {
         ),
     );
     m.start().unwrap();
-    wait_for(&ready);
+    wait_for_file(&ready);
 
     let began = Instant::now();
     m.stop(Duration::from_secs(10)).unwrap();
@@ -63,7 +50,7 @@ fn stop_reports_128_plus_sigterm_for_a_workload_that_does_not_handle_it() {
         &format!("touch {}; sleep 60", ready.display()),
     );
     m.start().unwrap();
-    wait_for(&ready);
+    wait_for_file(&ready);
     m.stop(Duration::from_secs(10)).unwrap();
     let state = m.inspect().unwrap().state;
     assert_eq!(state.status, Status::Exited);
@@ -84,7 +71,7 @@ fn stop_kills_a_workload_that_ignores_sigterm_after_the_timeout() {
         ),
     );
     m.start().unwrap();
-    wait_for(&ready);
+    wait_for_file(&ready);
     let pid = m.inspect().unwrap().state.pid.unwrap();
 
     let began = Instant::now();
@@ -118,7 +105,7 @@ fn kill_ends_the_machine_immediately_with_137() {
         &format!("trap '' TERM; touch {}; sleep 60", ready.display()),
     );
     m.start().unwrap();
-    wait_for(&ready);
+    wait_for_file(&ready);
     m.kill(libc::SIGKILL).unwrap();
     assert_eq!(m.wait().unwrap().exit_code, 137);
     assert_eq!(m.inspect().unwrap().state.status, Status::Exited);
@@ -138,7 +125,7 @@ fn kill_with_another_signal_goes_to_the_workload_only() {
         ),
     );
     m.start().unwrap();
-    wait_for(&ready);
+    wait_for_file(&ready);
     m.kill(libc::SIGUSR1).unwrap();
     assert_eq!(m.wait().unwrap().exit_code, 5);
 }
@@ -169,11 +156,11 @@ fn a_stopped_machine_can_be_started_again() {
         &format!("touch {}; sleep 60", ready.display()),
     );
     m.start().unwrap();
-    wait_for(&ready);
+    wait_for_file(&ready);
     m.stop(Duration::from_secs(10)).unwrap();
     std::fs::remove_file(&ready).unwrap();
     m.start().unwrap();
-    wait_for(&ready);
+    wait_for_file(&ready);
     assert_eq!(m.inspect().unwrap().state.status, Status::Running);
     m.kill(libc::SIGKILL).unwrap();
     m.wait().unwrap();
@@ -200,7 +187,7 @@ fn stop_sends_the_configured_stop_signal_instead_of_sigterm() {
         )
         .unwrap();
     m.start().unwrap();
-    wait_for(&ready);
+    wait_for_file(&ready);
     m.stop(Duration::from_secs(10)).unwrap();
     assert_eq!(std::fs::read_to_string(&bye).unwrap(), "usr1\n");
     assert_eq!(m.inspect().unwrap().state.exit_code, 0);

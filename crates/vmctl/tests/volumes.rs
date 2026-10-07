@@ -2,23 +2,14 @@
 //! `volume` subcommands. The VMM is the local-process stand-in, so these check
 //! what the CLI hands the library and what lands on the host.
 
+mod common;
+
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
+
+use common::{command, guestd};
 
 const MIB: u64 = 1 << 20;
-
-fn guestd() -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let profile_dir = exe.parent().unwrap().parent().unwrap().to_path_buf();
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut cmd = Command::new(cargo);
-    cmd.args(["build", "-q", "-p", "clankerd-guestd"]);
-    if profile_dir.file_name().is_some_and(|n| n == "release") {
-        cmd.arg("--release");
-    }
-    assert!(cmd.status().unwrap().success());
-    profile_dir.join("clankerd-guestd")
-}
 
 struct Cli {
     dir: tempfile::TempDir,
@@ -34,12 +25,8 @@ impl Cli {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_vmctl"))
-            .args(args)
+        command(self.root(), &self.guestd, args)
             .current_dir(self.root())
-            .env("CLANKERD_STATE_DIR", self.root().join("state"))
-            .env("CLANKERD_RUNTIME_DIR", self.root().join("run"))
-            .env("CLANKERD_DEV_GUESTD", &self.guestd)
             .output()
             .unwrap()
     }

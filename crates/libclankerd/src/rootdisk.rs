@@ -157,7 +157,7 @@ pub(crate) fn ensure_base(
     let scratch = store.tmp_dir();
     let tag = format!(
         "{}.{}",
-        image.id.trim_start_matches("sha256:"),
+        crate::digest::hex_of(&image.id),
         std::process::id()
     );
     let tar_path = scratch.join(format!("{tag}.tar"));

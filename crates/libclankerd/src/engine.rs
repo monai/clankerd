@@ -500,5 +500,5 @@ fn random_id() -> Result<String> {
     use std::io::Read;
     let mut bytes = [0u8; 32];
     fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    Ok(crate::digest::hex(&bytes))
 }

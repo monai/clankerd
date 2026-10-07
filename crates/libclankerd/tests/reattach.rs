@@ -3,18 +3,8 @@
 
 mod common;
 
-use std::time::{Duration, Instant};
-
 use common::*;
 use libclankerd::{HostConfig, RestartPolicy, Status};
-
-fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !ok() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
 
 #[test]
 fn a_reattached_machine_keeps_its_restart_policy() {

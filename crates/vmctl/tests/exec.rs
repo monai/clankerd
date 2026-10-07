@@ -1,6 +1,8 @@
 //! CLI seam: `vmctl exec` against a machine on the local-process VMM stand-in,
 //! including a real pseudo-terminal for `-it` and the terminal-restore guarantees.
 
+mod common;
+
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -9,19 +11,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-fn guestd() -> PathBuf {
-    // Cargo builds only this package's binaries for these tests.
-    let exe = std::env::current_exe().unwrap();
-    let profile_dir = exe.parent().unwrap().parent().unwrap().to_path_buf();
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut cmd = Command::new(cargo);
-    cmd.args(["build", "-q", "-p", "clankerd-guestd"]);
-    if profile_dir.file_name().is_some_and(|n| n == "release") {
-        cmd.arg("--release");
-    }
-    assert!(cmd.status().unwrap().success());
-    profile_dir.join("clankerd-guestd")
-}
+use common::guestd;
 
 struct Env {
     dir: tempfile::TempDir,
@@ -47,12 +37,7 @@ impl Env {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut c = Command::new(env!("CARGO_BIN_EXE_vmctl"));
-        c.args(args)
-            .env("CLANKERD_STATE_DIR", self.dir.path().join("state"))
-            .env("CLANKERD_RUNTIME_DIR", self.dir.path().join("run"))
-            .env("CLANKERD_DEV_GUESTD", &self.guestd);
-        c
+        common::command(self.dir.path(), &self.guestd, args)
     }
 
     fn vmctl(&self, args: &[&str]) -> Output {

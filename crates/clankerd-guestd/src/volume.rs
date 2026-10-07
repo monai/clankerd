@@ -50,7 +50,7 @@ pub fn setup_all(tools: &Path, mounts: &[GuestMount]) -> Result<(), String> {
 /// Formats `device` if blank, mounts it at `target` and grows the filesystem
 /// to `size` bytes when it is smaller (online, so no fsck is needed first).
 pub fn setup_volume(tools: &Path, device: &Path, target: &Path, size: u64) -> Result<(), String> {
-    wait_for_device(device)?;
+    crate::boot::wait_for_device(device, "volume").map_err(|e| e.to_string())?;
     if format_if_blank(tools, device)? {
         eprintln!("clankerd-guestd: formatted new volume {}", device.display());
     }
@@ -73,19 +73,6 @@ fn mount_bind(tag: &str, target: &Path, read_only: bool) -> io::Result<()> {
     fs::create_dir_all(target)?;
     let flags = if read_only { libc::MS_RDONLY } else { 0 };
     crate::boot::mount(tag, &target.to_string_lossy(), "virtiofs", flags, "")
-}
-
-fn wait_for_device(device: &Path) -> Result<(), String> {
-    for _ in 0..200 {
-        if device.exists() {
-            return Ok(());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    Err(format!(
-        "{} did not appear (is the volume attached?)",
-        device.display()
-    ))
 }
 
 /// Formats `device` when it holds nothing; returns whether it did. A device

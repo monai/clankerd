@@ -23,6 +23,33 @@ use crate::tunnel::{GuestBinding, MachineTunnels, PublishedPort, validate_port_b
 use crate::vmm::BootSpec;
 use crate::volumes::VolumeStore;
 
+/// Who starts a machine.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StartKind {
+    /// `Machine::start`: a fresh run, the restart count begins again.
+    Requested,
+    /// The restart policy.
+    PolicyRestart,
+}
+
+/// What `wait_until` waits for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WaitFor {
+    /// The current run ending.
+    RunEnd,
+    /// The machine being done, with no restart pending.
+    Settled,
+}
+
+/// How `start_tunnels` treats the guest side.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tunnels {
+    /// A fresh boot: open every listener.
+    Open,
+    /// Reattach: the guest still holds its listeners.
+    Reattach,
+}
+
 /// Everything `inspect` reports: the creation-time record plus current state.
 #[derive(Debug, Clone, Serialize)]
 pub struct MachineInfo {
@@ -74,12 +101,13 @@ impl Machine {
     /// Boots the machine and returns once the guest reported ready.
     /// Fails with `Unavailable` if it does not within the engine's start timeout.
     pub fn start(&self) -> Result<()> {
-        self.start_with(false)
+        self.start_with(StartKind::Requested)
     }
 
-    /// `restart` is set when a restart policy starts the machine: it only
-    /// proceeds while the machine is still waiting for that restart.
-    fn start_with(&self, restart: bool) -> Result<()> {
+    /// A [`StartKind::PolicyRestart`] only proceeds while the machine is still
+    /// waiting for that restart.
+    fn start_with(&self, kind: StartKind) -> Result<()> {
+        let restart = kind == StartKind::PolicyRestart;
         let info = self.inspect()?;
         {
             let mut starting = self.inner.lock();
@@ -103,7 +131,7 @@ impl Machine {
             }
             starting.insert(self.id.clone());
         }
-        let result = self.boot(&info, restart);
+        let result = self.boot(&info, kind);
         self.inner.lock().remove(&self.id);
         self.inner.changed.notify_all();
         result
@@ -133,7 +161,7 @@ impl Machine {
         Ok(())
     }
 
-    fn boot(&self, info: &MachineInfo, restart: bool) -> Result<()> {
+    fn boot(&self, info: &MachineInfo, kind: StartKind) -> Result<()> {
         let dir = self.inner.store.machine_dir(&self.id);
         let exit_file = dir.join("exit");
         let socket = self.inner.socket_path(&self.id);
@@ -209,7 +237,7 @@ impl Machine {
         };
 
         if matches!(ready, Ready::Stream(_))
-            && let Err(err) = start_tunnels(&self.inner, &self.id, &info.host_config, true)
+            && let Err(err) = start_tunnels(&self.inner, &self.id, &info.host_config, Tunnels::Open)
         {
             kill_group(handle.pid);
             self.inner.stop_net(&self.id);
@@ -224,7 +252,7 @@ impl Machine {
             s.exit_code = 0;
             s.started_at = Some(SystemTime::now());
             s.finished_at = None;
-            if !restart {
+            if kind == StartKind::Requested {
                 s.restart_count = 0;
             }
         })?;
@@ -431,21 +459,21 @@ impl Machine {
     /// Returns immediately for a machine that never started.
     pub fn wait(&self) -> Result<WaitResult> {
         Ok(self
-            .wait_until(None, true)?
+            .wait_until(None, WaitFor::Settled)?
             .expect("waiting without a deadline ends with a result"))
     }
 
     /// Like [`Machine::wait`], giving up with `None` at `deadline`.
     ///
-    /// With `settled` it also waits out restarts: the machine is done only
-    /// when no restart policy is about to start it again. Without, a run ending
-    /// is enough.
-    fn wait_until(&self, deadline: Option<Instant>, settled: bool) -> Result<Option<WaitResult>> {
+    /// With [`WaitFor::Settled`] it also waits out restarts: the machine is done
+    /// only when no restart policy is about to start it again. With
+    /// [`WaitFor::RunEnd`] a run ending is enough.
+    fn wait_until(&self, deadline: Option<Instant>, what: WaitFor) -> Result<Option<WaitResult>> {
         let mut starting = self.inner.lock();
         loop {
             let state = self.inner.store.load_state(&self.id)?;
-            let over =
-                state.status != Status::Running && !(settled && state.status == Status::Restarting);
+            let over = state.status != Status::Running
+                && !(what == WaitFor::Settled && state.status == Status::Restarting);
             if over && !starting.contains(&self.id) {
                 return Ok(Some(WaitResult {
                     exit_code: state.exit_code,
@@ -499,7 +527,7 @@ impl Machine {
             METHOD_SHUTDOWN,
             &ShutdownParams { signal },
         );
-        if asked.is_ok() && self.wait_until(Some(deadline), false)?.is_some() {
+        if asked.is_ok() && self.wait_until(Some(deadline), WaitFor::RunEnd)?.is_some() {
             return Ok(());
         }
         match self.kill(libc::SIGKILL) {
@@ -539,7 +567,10 @@ impl Machine {
         self.inner.forced().insert(self.id.clone());
         kill_group(pid);
         // The monitor records the end; return once it has.
-        self.wait_until(Some(Instant::now() + Duration::from_secs(10)), false)?;
+        self.wait_until(
+            Some(Instant::now() + Duration::from_secs(10)),
+            WaitFor::RunEnd,
+        )?;
         self.inner.forced().remove(&self.id);
         Ok(())
     }
@@ -753,7 +784,8 @@ fn spawn_restarter(inner: Arc<Inner>, id: String, delay: Duration) {
             }
         }
         drop(guard);
-        if let Err(err) = Machine::new(inner.clone(), id.clone()).start_with(true)
+        if let Err(err) =
+            Machine::new(inner.clone(), id.clone()).start_with(StartKind::PolicyRestart)
             && err.kind() != ErrorKind::NotFound
         {
             // Could not boot again: the machine stays down, with the reason.
@@ -768,11 +800,10 @@ fn spawn_restarter(inner: Arc<Inner>, id: String, delay: Duration) {
 }
 
 /// Starts the host side of the machine's tunnels and its configured bindings.
-/// `fresh` is false on reattach: the guest still holds its listeners.
-fn start_tunnels(inner: &Inner, id: &str, host: &HostConfig, fresh: bool) -> Result<()> {
+fn start_tunnels(inner: &Inner, id: &str, host: &HostConfig, mode: Tunnels) -> Result<()> {
     let tunnels = MachineTunnels::start(inner.socket_path(id), inner.host_socket_path(id))?;
     tunnels.publish_configured(host)?;
-    if fresh {
+    if mode == Tunnels::Open {
         tunnels.listen_configured(host)?;
     }
     inner.tunnels().insert(id.to_owned(), tunnels);
@@ -798,7 +829,7 @@ pub(crate) fn reattach(inner: &Arc<Inner>, id: &str) {
     {
         if let Ok((record, _)) = inner.store.load(id) {
             // Best effort: ports that cannot be re-published are simply absent.
-            let _ = start_tunnels(inner, id, &record.host_config, false);
+            let _ = start_tunnels(inner, id, &record.host_config, Tunnels::Reattach);
         }
         spawn_monitor(inner.clone(), id.to_owned(), Ready::Stream(stream));
         return;

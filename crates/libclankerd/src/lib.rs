@@ -34,6 +34,7 @@
 
 mod clockwatch;
 mod config;
+mod digest;
 mod engine;
 mod error;
 mod events;

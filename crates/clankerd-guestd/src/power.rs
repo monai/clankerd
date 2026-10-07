@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 use std::process::{Child, Command};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Taken while spawning and while reaping, so a child is registered before
 /// the reaper can see it as a zombie.
@@ -146,16 +146,11 @@ fn signal_all(signal: i32) {
 
 /// Waits (reaping) until no userspace process but us is left.
 fn wait_for_userspace_to_end(limit: Duration) -> bool {
-    let deadline = Instant::now() + limit;
-    while Instant::now() < deadline {
+    crate::poll::poll_until(limit, Duration::from_millis(50), || {
         // SAFETY: reaping children; no pointers.
         while unsafe { libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG) } > 0 {}
-        if userspace_pids().is_empty() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    false
+        userspace_pids().is_empty()
+    })
 }
 
 /// Live userspace processes other than PID 1: kernel threads have no command

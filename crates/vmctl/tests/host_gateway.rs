@@ -2,31 +2,9 @@
 //! guest's loopback (ticket 10 smoke test needs it). The VMM is the
 //! local-process stand-in, so this checks what the CLI hands the library.
 
-use std::path::PathBuf;
-use std::process::{Command, Output};
+mod common;
 
-fn guestd() -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let profile_dir = exe.parent().unwrap().parent().unwrap().to_path_buf();
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut cmd = Command::new(cargo);
-    cmd.args(["build", "-q", "-p", "clankerd-guestd"]);
-    if profile_dir.file_name().is_some_and(|n| n == "release") {
-        cmd.arg("--release");
-    }
-    assert!(cmd.status().unwrap().success());
-    profile_dir.join("clankerd-guestd")
-}
-
-fn vmctl(dir: &std::path::Path, guestd: &std::path::Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_vmctl"))
-        .args(args)
-        .env("CLANKERD_STATE_DIR", dir.join("state"))
-        .env("CLANKERD_RUNTIME_DIR", dir.join("run"))
-        .env("CLANKERD_DEV_GUESTD", guestd)
-        .output()
-        .unwrap()
-}
+use common::{guestd, vmctl};
 
 #[test]
 fn host_gateway_ports_are_recorded_in_the_machine_config() {

@@ -32,6 +32,7 @@
 mod attach;
 mod boot;
 mod network;
+mod poll;
 mod power;
 mod rootdisk;
 mod tunnel;

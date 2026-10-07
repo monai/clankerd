@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use crate::digest::hex;
+
 use crate::error::{Error, Result};
 
 /// Pinned gvisor-tap-vsock release. `gvproxy-darwin` is a universal (x86_64 +
@@ -116,8 +118,4 @@ impl GvproxyFetcher {
         }
         Ok(())
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
