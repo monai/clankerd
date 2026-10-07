@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 mod exec;
+mod parse;
 
 use clap::{Args, Parser, Subcommand};
 use libclankerd::net::{GvproxyBackend, GvproxyFetcher};
@@ -16,6 +17,7 @@ use libclankerd::{
     MachineInfo, Mount, PortBinding, PullPolicy, RestartPolicy, Status, VmspawnPopulator,
     VolumeInfo,
 };
+use parse::{parse_mount, parse_publish};
 
 #[derive(Parser)]
 #[command(name = "vmctl", version, about = "Run Linux machines from OCI images")]
@@ -157,6 +159,18 @@ struct CreateArgs {
     workdir: Option<String>,
     #[arg(long)]
     entrypoint: Option<String>,
+    /// Keep stdin open (attach it with `vmctl run -i`).
+    #[arg(short = 'i', long)]
+    interactive: bool,
+    /// Allocate a pseudo-terminal for the main process.
+    #[arg(short = 't', long)]
+    tty: bool,
+    /// Number of virtual CPUs.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    cpus: Option<u32>,
+    /// Memory, e.g. 2G or 512M.
+    #[arg(short = 'm', long)]
+    memory: Option<String>,
     /// Publish a guest port on host loopback: [IP:]HOST_PORT:GUEST_PORT.
     #[arg(short = 'p', long = "publish", value_parser = parse_publish)]
     publish: Vec<PortBinding>,
@@ -286,8 +300,14 @@ fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error>
         env: a.env,
         user: a.user.unwrap_or_default(),
         working_dir: a.workdir.unwrap_or_default(),
-        ..Default::default()
+        tty: a.tty,
+        open_stdin: a.interactive,
     };
+    let memory = a
+        .memory
+        .as_deref()
+        .map(libclankerd::parse_size)
+        .transpose()?;
     let mut mounts = a.volume;
     if let Some(size) = &a.volume_size {
         let bytes = libclankerd::parse_size(size)?;
@@ -301,81 +321,13 @@ fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error>
         port_bindings: a.publish,
         host_gateway_ports: a.host_gateway_port,
         mounts,
+        cpus: a.cpus,
+        memory,
         restart_policy: a.restart,
         pull_policy: a.pull,
         ..Default::default()
     };
     engine.create(a.name.as_deref(), config, host_config)
-}
-
-/// Parses `SOURCE:TARGET[:OPTIONS]` where OPTIONS are comma-separated `ro` and
-/// `size=N`. A source starting with `.`, `/` or `~` is a host directory (made
-/// absolute against the current directory); anything else is a volume name.
-fn parse_mount(s: &str) -> Result<Mount, String> {
-    let parts: Vec<&str> = s.split(':').collect();
-    let (source, target, options) = match parts.as_slice() {
-        [source, target] => (*source, *target, ""),
-        [source, target, options] => (*source, *target, *options),
-        _ => return Err("expected SOURCE:TARGET[:OPTIONS]".into()),
-    };
-    if source.is_empty() || !target.starts_with('/') {
-        return Err("expected SOURCE:/ABSOLUTE/TARGET[:OPTIONS]".into());
-    }
-    let (mut read_only, mut size) = (false, None);
-    for opt in options.split(',').filter(|o| !o.is_empty()) {
-        match opt.split_once('=') {
-            None if opt == "ro" => read_only = true,
-            None if opt == "rw" => read_only = false,
-            Some(("size", v)) => {
-                size = Some(libclankerd::parse_size(v).map_err(|e| e.message().to_owned())?)
-            }
-            _ => return Err(format!("unknown mount option \"{opt}\" (use ro or size=N)")),
-        }
-    }
-    if source.starts_with(['.', '/', '~']) {
-        if size.is_some() {
-            return Err("size= only applies to named volumes".into());
-        }
-        let expanded = match source.strip_prefix("~/") {
-            Some(rest) => PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(rest),
-            None => PathBuf::from(source),
-        };
-        let absolute = std::path::absolute(&expanded).map_err(|e| e.to_string())?;
-        // Resolve `..` and symlinks when the directory exists; the library
-        // reports a missing one.
-        let source = absolute.canonicalize().unwrap_or(absolute);
-        return Ok(Mount::Bind {
-            source,
-            target: target.into(),
-            read_only,
-        });
-    }
-    if read_only {
-        return Err("ro only applies to host directories".into());
-    }
-    let mount = Mount::volume(source, target);
-    Ok(match size {
-        Some(bytes) => mount.with_size(bytes),
-        None => mount,
-    })
-}
-
-/// Parses `[IP:]HOST_PORT:GUEST_PORT`. The library rejects non-loopback IPs.
-fn parse_publish(s: &str) -> Result<PortBinding, String> {
-    let port = |p: &str| {
-        p.parse::<u16>()
-            .map_err(|_| format!("invalid port \"{p}\""))
-    };
-    let parts: Vec<&str> = s.rsplitn(3, ':').collect();
-    match parts.as_slice() {
-        [guest, host] => Ok(PortBinding::loopback(port(host)?, port(guest)?)),
-        [guest, host, ip] => Ok(PortBinding {
-            host_ip: Some(ip.parse().map_err(|_| format!("invalid IP \"{ip}\""))?),
-            host_port: port(host)?,
-            guest_port: port(guest)?,
-        }),
-        _ => Err("expected [IP:]HOST_PORT:GUEST_PORT".into()),
-    }
 }
 
 /// Runs `f` over every name, printing each success via `ok` and each error;
@@ -414,11 +366,25 @@ fn run(cli: Cli) -> Result<u8, Error> {
             Ok(0)
         }
         Command::Run(args) => {
+            let (tty, attach) = (
+                args.create.tty,
+                !args.detach && (args.create.tty || args.create.interactive),
+            );
+            if tty && !args.detach && !exec::isatty(libc::STDIN_FILENO) {
+                return Err(Error::invalid_parameter("the input device is not a TTY"));
+            }
             let m = create(&engine, args.create)?;
             m.start()?;
             if args.detach {
                 println!("{}", m.id());
                 return Ok(0);
+            }
+            if attach {
+                let streams = m.attach(if tty { exec::window_size() } else { None })?;
+                let resize = streams.resizer();
+                exec::drive(streams, tty, move |rows, cols| {
+                    let _ = resize(rows, cols);
+                })?;
             }
             // Exit codes are 0..=255 on the host.
             Ok(m.wait()?.exit_code as u8)
@@ -437,7 +403,7 @@ fn run(cli: Cli) -> Result<u8, Error> {
             Ok(n.to_owned())
         })),
         Command::Kill { signal, machines } => {
-            let signal = parse_signal(&signal).map_err(Error::invalid_parameter)?;
+            let signal = libclankerd::parse_signal(&signal).map_err(Error::invalid_parameter)?;
             Ok(each(&machines, |n| {
                 engine.get(n)?.kill(signal)?;
                 Ok(n.to_owned())
@@ -542,31 +508,6 @@ fn binary_size(bytes: u64) -> String {
         }
     }
     format!("{bytes}B")
-}
-
-/// `KILL`, `SIGKILL`, `kill` or `9`.
-fn parse_signal(s: &str) -> Result<i32, String> {
-    if let Ok(n) = s.parse::<i32>() {
-        return if (1..=64).contains(&n) {
-            Ok(n)
-        } else {
-            Err(format!("invalid signal number {n}"))
-        };
-    }
-    let name = s.to_ascii_uppercase();
-    let name = name.strip_prefix("SIG").unwrap_or(&name);
-    Ok(match name {
-        "HUP" => libc::SIGHUP,
-        "INT" => libc::SIGINT,
-        "QUIT" => libc::SIGQUIT,
-        "KILL" => libc::SIGKILL,
-        "USR1" => libc::SIGUSR1,
-        "USR2" => libc::SIGUSR2,
-        "TERM" => libc::SIGTERM,
-        "CONT" => libc::SIGCONT,
-        "STOP" => libc::SIGSTOP,
-        _ => return Err(format!("unknown signal \"{s}\"")),
-    })
 }
 
 fn status_text(info: &MachineInfo) -> String {

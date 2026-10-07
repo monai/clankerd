@@ -33,6 +33,13 @@ pub struct Workload {
     /// Present when the machine has a virtio NIC: what guestd configures on it.
     #[serde(default)]
     pub network: Option<NetworkConfig>,
+    /// Run the workload on a pseudo-terminal that `Attach` connects to.
+    #[serde(default)]
+    pub tty: bool,
+    /// Give the workload a stdin that `Attach` feeds. With neither this nor
+    /// `tty` the workload's output goes to the console only.
+    #[serde(default)]
+    pub open_stdin: bool,
 }
 
 /// One mount guestd performs at boot (`--boot` only).
@@ -126,6 +133,21 @@ pub const METHOD_EXEC_INSPECT: &str = "io.clankerd.Guest.ExecInspect";
 pub const ERROR_NO_SUCH_EXEC: &str = "io.clankerd.Guest.NoSuchExec";
 pub const ERROR_INVALID_PARAMETER: &str = "io.clankerd.Guest.InvalidParameter";
 pub const ERROR_CONFLICT: &str = "io.clankerd.Guest.Conflict";
+
+/// Connects to the workload's terminal or stdio (Docker's attach). Called with
+/// `upgrade` like `ExecStart`, so the connection then carries frames; parameters:
+/// [`AttachParams`]. Output produced before the first attach is replayed. Hanging
+/// up detaches without touching the workload; the status frame ends the stream
+/// when the workload exits. Needs `Workload::tty` or `Workload::open_stdin`.
+pub const METHOD_ATTACH: &str = "io.clankerd.Guest.Attach";
+
+/// Parameters of [`METHOD_ATTACH`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AttachParams {
+    /// Terminal size `(rows, cols)` to set when the workload has a terminal.
+    #[serde(default)]
+    pub size: Option<ResizeParams>,
+}
 
 /// Parameters of `ExecCreate`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -210,3 +210,23 @@ fn run_dash_p_refuses_non_loopback_addresses() {
     assert_eq!(out.status.code(), Some(125));
     assert!(String::from_utf8_lossy(&out.stderr).contains("loopback"));
 }
+
+#[test]
+fn cpus_and_memory_are_recorded_in_the_machine_config() {
+    let dir = tempfile::Builder::new().prefix("vm").tempdir().unwrap();
+    let guestd = guestd();
+    let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
+    let created = v(&[
+        "create", "--name", "sized", "--cpus", "2", "--memory", "512M", "img", "true",
+    ]);
+    assert!(created.status.success(), "{created:?}");
+    let inspect = String::from_utf8(v(&["inspect", "sized"]).stdout).unwrap();
+    let info: serde_json::Value = serde_json::from_str(&inspect).unwrap();
+    assert_eq!(info[0]["host_config"]["cpus"], 2);
+    assert_eq!(info[0]["host_config"]["memory"], 512 * 1024 * 1024);
+
+    for bad in [["--cpus", "0"], ["--memory", "lots"]] {
+        let out = v(&["create", bad[0], bad[1], "img", "true"]);
+        assert!(!out.status.success(), "{bad:?}");
+    }
+}

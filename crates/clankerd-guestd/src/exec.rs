@@ -160,7 +160,7 @@ impl Session {
     }
 }
 
-fn set_winsize(fd: i32, rows: u16, cols: u16) {
+pub(crate) fn set_winsize(fd: i32, rows: u16, cols: u16) {
     let ws = libc::winsize {
         ws_row: rows,
         ws_col: cols,
@@ -173,9 +173,13 @@ fn set_winsize(fd: i32, rows: u16, cols: u16) {
 
 /// Serialises frame writes and drops anything sent after the stream was closed,
 /// which keeps the status frame last.
-struct Sink(Mutex<Option<UnixStream>>);
+pub(crate) struct Sink(Mutex<Option<UnixStream>>);
 
 impl Sink {
+    pub(crate) fn new(conn: UnixStream) -> Self {
+        Sink(Mutex::new(Some(conn)))
+    }
+
     fn send(&self, frame: &Frame) {
         let mut g = self.0.lock().unwrap();
         if let Some(conn) = g.as_mut()
@@ -185,13 +189,13 @@ impl Sink {
         }
     }
 
-    fn output(&self, channel: u8, data: &[u8]) {
+    pub(crate) fn output(&self, channel: u8, data: &[u8]) {
         for chunk in data.chunks(frame::MAX_PAYLOAD) {
             self.send(&Frame::new(channel, chunk));
         }
     }
 
-    fn finish(&self, status: &ExecStatus) {
+    pub(crate) fn finish(&self, status: &ExecStatus) {
         self.send(&Frame::new(
             frame::CHANNEL_STATUS,
             serde_json::to_vec(status).unwrap(),
@@ -218,7 +222,7 @@ struct Spawned {
 impl ExecHandle {
     /// Runs the session to completion on an upgraded connection.
     pub fn run(self, input: BufReader<UnixStream>, out: UnixStream) {
-        let sink = Arc::new(Sink(Mutex::new(Some(out))));
+        let sink = Arc::new(Sink::new(out));
         let spawned = match self.spawn() {
             Ok(s) => s,
             Err((code, msg)) => {
@@ -260,7 +264,20 @@ impl ExecHandle {
         let stdin_tx = stdin.map(|f| spawn_stdin_writer(f, self.session.spec.tty));
         {
             let session = self.session.clone();
-            std::thread::spawn(move || pump_input(input, session, stdin_tx));
+            std::thread::spawn(move || {
+                pump_input(
+                    input,
+                    |rows, cols| {
+                        let _ = session.resize(rows, cols);
+                    },
+                    |signal| {
+                        let _ = session.kill(signal);
+                    },
+                    stdin_tx,
+                );
+                // The host went away: hang the process up rather than leak it.
+                let _ = session.kill(libc::SIGHUP);
+            });
         }
 
         let waited = child.wait();
@@ -390,7 +407,7 @@ impl ExecHandle {
     }
 }
 
-fn open_pty(size: Option<(u16, u16)>) -> std::io::Result<(OwnedFd, OwnedFd)> {
+pub(crate) fn open_pty(size: Option<(u16, u16)>) -> std::io::Result<(OwnedFd, OwnedFd)> {
     let (mut m, mut s) = (-1, -1);
     // SAFETY: openpty fills two fds we then own; null name/termios/winsize are allowed.
     let rc = unsafe {
@@ -419,7 +436,7 @@ fn open_pty(size: Option<(u16, u16)>) -> std::io::Result<(OwnedFd, OwnedFd)> {
 
 /// Writes queued stdin data on its own thread so a process that does not read
 /// cannot stall resize and signal handling. Dropping the sender is EOF.
-fn spawn_stdin_writer(mut file: File, tty: bool) -> Sender<Vec<u8>> {
+pub(crate) fn spawn_stdin_writer(mut file: File, tty: bool) -> Sender<Vec<u8>> {
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     std::thread::spawn(move || {
         for data in rx {
@@ -435,12 +452,14 @@ fn spawn_stdin_writer(mut file: File, tty: bool) -> Sender<Vec<u8>> {
     tx
 }
 
-/// Handles frames from the host until the connection ends.
-fn pump_input(
+/// Handles frames from the host until the connection ends, then returns the
+/// stdin sender if the host did not close it.
+pub(crate) fn pump_input(
     mut input: BufReader<UnixStream>,
-    session: Arc<Session>,
+    resize: impl Fn(u16, u16),
+    kill: impl Fn(i32),
     mut stdin: Option<Sender<Vec<u8>>>,
-) {
+) -> Option<Sender<Vec<u8>>> {
     loop {
         match frame::read_frame(&mut input) {
             Ok(Some(f)) => match f.channel {
@@ -452,21 +471,17 @@ fn pump_input(
                 frame::CHANNEL_CLOSE if f.payload == [frame::CHANNEL_STDIN] => stdin = None,
                 frame::CHANNEL_RESIZE => {
                     if let Ok(r) = serde_json::from_slice::<ResizeParams>(&f.payload) {
-                        let _ = session.resize(r.rows, r.cols);
+                        resize(r.rows, r.cols);
                     }
                 }
                 frame::CHANNEL_SIGNAL => {
                     if let Ok(s) = serde_json::from_slice::<SignalParams>(&f.payload) {
-                        let _ = session.kill(s.signal);
+                        kill(s.signal);
                     }
                 }
                 _ => {}
             },
-            // The host went away: hang the process up rather than leak it.
-            Ok(None) | Err(_) => {
-                let _ = session.kill(libc::SIGHUP);
-                return;
-            }
+            Ok(None) | Err(_) => return stdin,
         }
     }
 }

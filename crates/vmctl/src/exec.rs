@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use clap::Args;
-use libclankerd::{Engine, Error, ExecConfig};
+use libclankerd::{Engine, Error, ExecConfig, ExecStatus, ExecStreams};
 
 #[derive(Args)]
 pub struct ExecArgs {
@@ -44,17 +44,29 @@ pub fn run(engine: &Engine, args: ExecArgs) -> Result<u8, Error> {
         attach_stdin: args.interactive || args.tty,
         size: if args.tty { window_size() } else { None },
     })?;
-    let mut streams = exec.start()?;
+    let streams = exec.start()?;
+    let status = drive(streams, args.tty, {
+        let exec = exec.clone();
+        move |rows, cols| {
+            let _ = exec.resize(rows, cols);
+        }
+    })?;
+    Ok(status.exit_code as u8)
+}
 
+/// Connects the terminal (or stdio) to `streams` until the process ends:
+/// raw mode and resize forwarding for a tty, stdin forwarding, output copying.
+/// Shared by `exec` and `run -it`.
+pub fn drive(
+    mut streams: ExecStreams,
+    tty: bool,
+    resize: impl Fn(u16, u16) + Send + 'static,
+) -> Result<ExecStatus, Error> {
     // Restores the terminal when dropped: normal return, `?`, or panic unwind.
     // Fatal signals are covered inside `RawMode`.
-    let _raw = if args.tty {
-        RawMode::enter().ok()
-    } else {
-        None
-    };
-    if args.tty {
-        watch_resizes(exec.clone());
+    let _raw = if tty { RawMode::enter().ok() } else { None };
+    if tty {
+        watch_resizes(resize);
     }
 
     if let Some(mut stdin) = streams.stdin.take() {
@@ -76,8 +88,7 @@ pub fn run(engine: &Engine, args: ExecArgs) -> Result<u8, Error> {
     copy(&mut streams.stdout, &mut io::stdout());
     let _ = err_thread.join();
 
-    let status = streams.wait()?;
-    Ok(status.exit_code as u8)
+    streams.wait()
 }
 
 fn empty_output() -> libclankerd::ExecOutput {
@@ -99,12 +110,12 @@ fn copy(from: &mut impl Read, to: &mut impl Write) {
     }
 }
 
-fn isatty(fd: i32) -> bool {
+pub fn isatty(fd: i32) -> bool {
     // SAFETY: isatty only inspects the descriptor.
     unsafe { libc::isatty(fd) == 1 }
 }
 
-fn window_size() -> Option<(u16, u16)> {
+pub fn window_size() -> Option<(u16, u16)> {
     for fd in [libc::STDOUT_FILENO, libc::STDIN_FILENO] {
         // SAFETY: TIOCGWINSZ writes a winsize through a valid pointer.
         let ws = unsafe {
@@ -125,7 +136,7 @@ extern "C" fn on_winch(_: libc::c_int) {
 }
 
 /// Forwards SIGWINCH as exec resizes.
-fn watch_resizes(exec: libclankerd::Exec) {
+fn watch_resizes(resize: impl Fn(u16, u16) + Send + 'static) {
     // SAFETY: the handler only stores to an atomic.
     unsafe { libc::signal(libc::SIGWINCH, on_winch as *const () as libc::sighandler_t) };
     std::thread::spawn(move || {
@@ -134,7 +145,7 @@ fn watch_resizes(exec: libclankerd::Exec) {
             if WINCH.swap(false, Ordering::Relaxed)
                 && let Some((rows, cols)) = window_size()
             {
-                let _ = exec.resize(rows, cols);
+                resize(rows, cols);
             }
         }
     });

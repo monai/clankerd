@@ -29,12 +29,17 @@ struct Env {
 }
 
 impl Env {
-    /// A temp state dir with one running machine called `m`.
-    fn new() -> Env {
-        let env = Env {
+    /// A temp state dir with no machines.
+    fn empty() -> Env {
+        Env {
             dir: tempfile::Builder::new().prefix("vx").tempdir().unwrap(),
             guestd: guestd(),
-        };
+        }
+    }
+
+    /// A temp state dir with one running machine called `m`.
+    fn new() -> Env {
+        let env = Env::empty();
         let out = env.vmctl(&["create", "--name", "m", "img", "sleep", "600"]);
         assert!(out.status.success(), "{out:?}");
         assert!(env.vmctl(&["start", "m"]).status.success());
@@ -261,6 +266,45 @@ fn exec_it_restores_the_terminal_when_killed_and_when_the_guest_disappears() {
 fn exec_dash_t_without_a_terminal_is_refused() {
     let env = Env::new();
     let out = env.vmctl(&["exec", "-t", "m", "true"]);
+    assert_eq!(out.status.code(), Some(125));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not a TTY"));
+}
+
+#[test]
+fn run_it_attaches_the_terminal_to_the_main_process_and_returns_its_exit_code() {
+    let env = Env::empty();
+    let mut pty = Pty::new(31, 97);
+    let script = "echo ready; read x; stty size; echo got:$x; exit 5";
+    let mut child = pty.spawn(env.command(&["run", "-it", "img", "sh", "-c", script]));
+    pty.read_until("ready");
+    pty.master.write_all(b"go\n").unwrap();
+    let out = pty.read_until("got:go");
+    assert!(out.contains("31 97"), "{out:?}");
+    assert_eq!(wait_for_exit(&mut child).code(), Some(5));
+    assert!(pty.is_cooked(), "terminal left in raw mode");
+}
+
+#[test]
+fn run_dash_i_pipes_stdin_to_the_main_process() {
+    let env = Env::empty();
+    let mut child = env
+        .command(&["run", "-i", "img", "sh", "-c", "cat; echo done >&2; exit 2"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"a\nb\n").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.stdout, b"a\nb\n");
+    assert_eq!(out.stderr, b"done\n");
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn run_dash_t_without_a_terminal_is_refused() {
+    let env = Env::empty();
+    let out = env.vmctl(&["run", "-t", "img", "true"]);
     assert_eq!(out.status.code(), Some(125));
     assert!(String::from_utf8_lossy(&out.stderr).contains("not a TTY"));
 }

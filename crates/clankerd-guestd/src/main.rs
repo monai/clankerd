@@ -29,6 +29,7 @@
 //! it, mounts /proc, /sys, /dev and cgroup2, delegates cgroup controllers,
 //! sets the clock from the host and writes `/.clankerdenv` (`boot`).
 
+mod attach;
 mod boot;
 mod network;
 mod power;
@@ -47,8 +48,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use clankerd_proto::guest::{
-    ERROR_CONFLICT, ERROR_INVALID_PARAMETER, ERROR_METHOD_NOT_FOUND, Event, METHOD_EVENTS,
-    METHOD_EXEC_CREATE, METHOD_EXEC_INSPECT, METHOD_EXEC_KILL, METHOD_EXEC_RESIZE,
+    ERROR_CONFLICT, ERROR_INVALID_PARAMETER, ERROR_METHOD_NOT_FOUND, Event, METHOD_ATTACH,
+    METHOD_EVENTS, METHOD_EXEC_CREATE, METHOD_EXEC_INSPECT, METHOD_EXEC_KILL, METHOD_EXEC_RESIZE,
     METHOD_EXEC_START, METHOD_KILL, METHOD_SET_CLOCK, METHOD_SHUTDOWN, SignalParams, Workload,
 };
 use clankerd_proto::varlink::{self, Call, Reply};
@@ -71,6 +72,7 @@ struct Shared {
     inner: Mutex<Inner>,
     cv: Condvar,
     execs: exec::Registry,
+    attach: Arc<attach::Attach>,
 }
 
 #[derive(Default)]
@@ -185,9 +187,10 @@ fn main() {
                 .map(|w| w.user.clone())
                 .unwrap_or_default(),
         ),
+        attach: Arc::default(),
     });
     if let Some(workload) = &workload {
-        let child = spawn_workload(workload);
+        let child = spawn_workload(workload, &shared.attach);
         if let Ok(c) = &child {
             shared.inner.lock().unwrap().workload_pid = Some(c.id() as i32);
         }
@@ -239,7 +242,7 @@ fn die(msg: &str) -> ! {
 }
 
 /// Spawns the workload; a failure to exec maps to Docker's 127 / 126 exit codes.
-fn spawn_workload(w: &Workload) -> Result<std::process::Child, i32> {
+fn spawn_workload(w: &Workload, attach: &Arc<attach::Attach>) -> Result<std::process::Child, i32> {
     let Some((prog, rest)) = w.argv.split_first() else {
         eprintln!("clankerd-guestd: no command to run");
         return Err(127);
@@ -270,7 +273,12 @@ fn spawn_workload(w: &Workload) -> Result<std::process::Child, i32> {
     if let Some(user) = &user {
         user::drop_privileges(&mut cmd, user);
     }
-    power::spawn_owned(&mut cmd).map_err(|e| {
+    let spawned = if attach::Attach::wanted(w) {
+        attach.spawn(&mut cmd, w)
+    } else {
+        power::spawn_owned(&mut cmd)
+    };
+    spawned.map_err(|e| {
         eprintln!("clankerd-guestd: cannot run {prog}: {e}");
         if e.kind() == std::io::ErrorKind::NotFound {
             127
@@ -286,17 +294,24 @@ fn supervise(
     shared: Arc<Shared>,
     exit_file: Option<PathBuf>,
 ) {
-    let code = match child {
+    let (code, signal) = match child {
         Ok(mut c) => {
             let status = c.wait();
             power::release(c.id());
             match status {
-                Ok(s) => s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0)),
-                Err(_) => 255,
+                Ok(s) => (
+                    s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0)),
+                    s.signal(),
+                ),
+                Err(_) => (255, None),
             }
         }
-        Err(code) => code,
+        Err(code) => (code, None),
     };
+    shared.attach.finish(clankerd_proto::guest::ExecStatus {
+        exit_code: code,
+        signal,
+    });
     if let Some(exit_file) = exit_file {
         let tmp = exit_file.with_extension("tmp");
         if std::fs::write(&tmp, code.to_string()).is_ok() {
@@ -351,6 +366,7 @@ fn serve(
             end_stream(&shared);
         }
         METHOD_EXEC_START => exec_start(input, out, call.parameters, &shared),
+        METHOD_ATTACH => attach(input, out, call.parameters, &shared),
         METHOD_SHUTDOWN | METHOD_KILL => {
             let result = signal_workload(&call, &shared);
             let _ = reply(&mut out, result);
@@ -457,6 +473,26 @@ fn exec_start(input: BufReader<UnixStream>, mut out: UnixStream, p: Value, share
             end_stream(shared);
         }
     }
+}
+
+/// Upgrades the connection and attaches it to the workload's terminal or stdio.
+fn attach(input: BufReader<UnixStream>, mut out: UnixStream, p: Value, shared: &Arc<Shared>) {
+    let params = match serde_json::from_value::<clankerd_proto::guest::AttachParams>(p) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = reply(&mut out, Err((ERROR_INVALID_PARAMETER, e.to_string())));
+            return;
+        }
+    };
+    shared.inner.lock().unwrap().streams += 1;
+    let signal = |sig: i32| {
+        if let Some(pid) = shared.inner.lock().unwrap().workload_pid {
+            // SAFETY: plain signal delivery to the workload we spawned and have not reaped.
+            unsafe { libc::kill(pid, sig) };
+        }
+    };
+    shared.attach.run(params, input, out, signal, &reply);
+    end_stream(shared);
 }
 
 fn events(out: &mut UnixStream, shared: &Shared) -> std::io::Result<()> {

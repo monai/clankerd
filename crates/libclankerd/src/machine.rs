@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use clankerd_proto::guest::{
-    Clock, Event, METHOD_KILL, METHOD_SET_CLOCK, METHOD_SHUTDOWN, NetworkConfig, SignalParams,
-    Workload,
+    AttachParams, Clock, Event, METHOD_ATTACH, METHOD_KILL, METHOD_SET_CLOCK, METHOD_SHUTDOWN,
+    NetworkConfig, ResizeParams, SignalParams, Workload,
 };
 use serde::Serialize;
 
@@ -15,7 +15,7 @@ use crate::config::{HostConfig, MachineConfig, PortBinding};
 use crate::engine::Inner;
 use crate::error::{Error, ErrorKind, Result};
 use crate::events::EventAction;
-use crate::exec::{Exec, ExecConfig};
+use crate::exec::{Exec, ExecConfig, ExecStreams};
 use crate::guest::{self, EventStream, Next};
 use crate::image_config::ImageConfig;
 use crate::state::{MachineState, Status, WaitResult};
@@ -177,6 +177,8 @@ impl Machine {
                     hostname: self.id[..12].to_owned(),
                     blocked: n.blocked.clone(),
                 }),
+                tty: info.config.tty,
+                open_stdin: info.config.open_stdin,
             },
             cpus: info.host_config.cpus,
             memory: info.host_config.memory,
@@ -345,6 +347,39 @@ impl Machine {
             )));
         }
         Exec::create(self.inner.socket_path(&self.id), config)
+    }
+
+    /// Attaches to the machine's main process, like `docker attach`: its
+    /// terminal (`tty`) or stdio (`open_stdin`) become the returned streams.
+    /// Output from before the attach is replayed. Dropping the streams detaches
+    /// without stopping the machine; the status arrives when the process exits.
+    /// `size` is the terminal size `(rows, cols)` for a machine with a tty.
+    pub fn attach(&self, size: Option<(u16, u16)>) -> Result<ExecStreams> {
+        let (record, state) = self.inner.store.load(&self.id)?;
+        if state.status != Status::Running {
+            return Err(Error::conflict(format!(
+                "machine {} is not running",
+                record.name
+            )));
+        }
+        if !record.config.tty && !record.config.open_stdin {
+            return Err(Error::conflict(format!(
+                "machine {} was created without tty or open_stdin, so there is nothing to attach to",
+                record.name
+            )));
+        }
+        let reader = guest::upgrade(
+            &self.inner.socket_path(&self.id),
+            METHOD_ATTACH,
+            &AttachParams {
+                size: size.map(|(rows, cols)| ResizeParams {
+                    id: String::new(),
+                    rows,
+                    cols,
+                }),
+            },
+        )?;
+        ExecStreams::open(reader, record.config.open_stdin)
     }
 
     fn tunnels(&self) -> Result<Arc<MachineTunnels>> {

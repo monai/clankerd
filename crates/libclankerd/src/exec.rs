@@ -91,22 +91,7 @@ impl Exec {
                 id: self.id.clone(),
             },
         )?;
-        let writer = reader.get_ref().try_clone()?;
-        let (out_tx, out_rx) = mpsc::channel();
-        let (err_tx, err_rx) = mpsc::channel();
-        let (status_tx, status_rx) = mpsc::channel();
-        std::thread::spawn(move || demux(reader, out_tx, err_tx, status_tx));
-        let writer = Arc::new(Mutex::new(writer));
-        Ok(ExecStreams {
-            stdin: self.attach_stdin.then(|| ExecStdin {
-                writer: writer.clone(),
-            }),
-            stdout: ExecOutput::new(out_rx),
-            stderr: ExecOutput::new(err_rx),
-            status_rx,
-            status: None,
-            _writer: writer,
-        })
+        ExecStreams::open(reader, self.attach_stdin)
     }
 
     /// Sets the terminal size of a tty exec (TIOCSWINSZ in the guest).
@@ -175,10 +160,51 @@ pub struct ExecStreams {
     status_rx: Receiver<ExecStatus>,
     status: Option<ExecStatus>,
     /// Keeps the connection open while the streams live.
-    _writer: Arc<Mutex<UnixStream>>,
+    writer: Arc<Mutex<UnixStream>>,
 }
 
 impl ExecStreams {
+    /// Wraps an upgraded connection that carries frames.
+    pub(crate) fn open(reader: BufReader<UnixStream>, with_stdin: bool) -> Result<ExecStreams> {
+        let writer = reader.get_ref().try_clone()?;
+        let (out_tx, out_rx) = mpsc::channel();
+        let (err_tx, err_rx) = mpsc::channel();
+        let (status_tx, status_rx) = mpsc::channel();
+        std::thread::spawn(move || demux(reader, out_tx, err_tx, status_tx));
+        let writer = Arc::new(Mutex::new(writer));
+        Ok(ExecStreams {
+            stdin: with_stdin.then(|| ExecStdin {
+                writer: writer.clone(),
+            }),
+            stdout: ExecOutput::new(out_rx),
+            stderr: ExecOutput::new(err_rx),
+            status_rx,
+            status: None,
+            writer,
+        })
+    }
+
+    /// Sets the terminal size of the process (when it has a terminal).
+    pub fn resize(&self, rows: u16, cols: u16) -> Result<()> {
+        self.resizer()(rows, cols)
+    }
+
+    /// A function that resizes the terminal and outlives borrows of the streams
+    /// (for threads that watch the host terminal).
+    pub fn resizer(&self) -> impl Fn(u16, u16) -> Result<()> + Send + 'static {
+        let writer = self.writer.clone();
+        move |rows, cols| {
+            let payload = serde_json::to_vec(&ResizeParams {
+                id: String::new(),
+                rows,
+                cols,
+            })?;
+            let mut w = writer.lock().unwrap();
+            frame::write_frame(&mut *w, &Frame::new(frame::CHANNEL_RESIZE, payload))?;
+            Ok(())
+        }
+    }
+
     /// Blocks until the process ended. All its output has been delivered to
     /// `stdout` and `stderr` by then.
     pub fn wait(&mut self) -> Result<ExecStatus> {
