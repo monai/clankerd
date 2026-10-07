@@ -1,0 +1,37 @@
+#!/bin/sh
+# Starts dockerd when the image runs inside a clankerd machine (the marker
+# /.clankerdenv exists) and waits until it answers. Does nothing under plain
+# `docker run`. Install as /usr/local/bin/clankerd-dockerd and call it from the
+# entrypoint before exec'ing the command.
+#
+# Test hooks: CLANKERDENV, DOCKERD, DOCKER_SOCK, DOCKERD_LOG, DOCKERD_WAIT
+# (seconds), DOCKERD_NO_SUDO.
+set -eu
+
+marker=${CLANKERDENV:-/.clankerdenv}
+dockerd=${DOCKERD:-dockerd}
+sock=${DOCKER_SOCK:-/var/run/docker.sock}
+log=${DOCKERD_LOG:-/var/log/dockerd.log}
+wait_s=${DOCKERD_WAIT:-60}
+
+[ -e "$marker" ] || exit 0
+
+sudo=
+if [ "$(id -u)" != 0 ] && [ -z "${DOCKERD_NO_SUDO:-}" ]; then
+  sudo="sudo -n"
+fi
+
+# $sudo is deliberately unquoted: it is empty or two words.
+# shellcheck disable=SC2086
+nohup $sudo "$dockerd" --config-file=/etc/docker/daemon.json >"$log" 2>&1 &
+
+i=0
+while [ ! -e "$sock" ]; do
+  i=$((i + 1))
+  if [ "$i" -gt $((wait_s * 10)) ]; then
+    echo "clankerd-dockerd: dockerd did not come up within ${wait_s}s; its log:" >&2
+    cat "$log" >&2 || true
+    exit 1
+  fi
+  sleep 0.1
+done
