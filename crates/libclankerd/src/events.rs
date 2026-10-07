@@ -1,7 +1,7 @@
 //! The events stream: one [`MachineEvent`] per state change, in order.
 
 use std::sync::Mutex;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, SystemTime};
 
 /// What happened to a machine (Docker's event actions, past tense).
@@ -64,10 +64,7 @@ pub struct Events {
 impl Events {
     /// The next event, or `None` if none arrives within `timeout`.
     pub fn next_timeout(&mut self, timeout: Duration) -> Option<MachineEvent> {
-        match self.rx.recv_timeout(timeout) {
-            Ok(e) => Some(e),
-            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => None,
-        }
+        self.rx.recv_timeout(timeout).ok()
     }
 }
 
