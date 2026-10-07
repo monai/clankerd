@@ -33,6 +33,7 @@ mod image_config;
 mod images;
 mod machine;
 mod merge;
+pub mod net;
 mod rootdisk;
 mod state;
 mod store;

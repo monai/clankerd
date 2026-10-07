@@ -63,6 +63,16 @@ impl Hypervisor for Libkrun {
         // Make init.krun exec guestd as PID 1 instead of forking it.
         cfg.env = vec!["KRUN_INIT_PID1=1".into()];
         cfg.console_log = Some(spec.console_log.clone());
+        if let Some(net) = &spec.net
+            && !spec.populate
+        {
+            cfg.nets = vec![libkrun_sys::NetDevice {
+                socket: net.socket.clone(),
+                mac: net.mac,
+                features: net.features,
+                vfkit: net.vfkit,
+            }];
+        }
         cfg.vsock_ports = vec![
             libkrun_sys::VsockPort {
                 port: GUEST_VSOCK_PORT,

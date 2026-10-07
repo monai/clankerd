@@ -39,6 +39,9 @@ pub struct BootSpec {
     pub root_disk: Option<PathBuf>,
     pub cpus: Option<u32>,
     pub memory: Option<u64>,
+    /// The machine's network sidecar, already listening. A VMM that boots a
+    /// real VM attaches a virtio-net device to it; the local stand-in ignores it.
+    pub net: Option<crate::net::NetAttachment>,
 }
 
 /// A booted machine. The VMM process must outlive the library process.

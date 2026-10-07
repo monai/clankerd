@@ -5,7 +5,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-use clankerd_proto::spawn::{BOOT_GUESTD, BOOT_WORKLOAD, SpawnSpec};
+use clankerd_proto::spawn::{BOOT_GUESTD, BOOT_WORKLOAD, NetDevice, SpawnSpec};
 
 use super::{BootHandle, BootSpec, Vmm};
 use crate::error::{Error, Result};
@@ -83,6 +83,12 @@ impl Vmm for VmspawnVmm {
             memory_mib: (spec.memory.unwrap_or(DEFAULT_MEMORY) / (1024 * 1024)).max(128) as u32,
             root_disk: spec.root_disk.clone(),
             populate: false,
+            net: spec.net.as_ref().map(|n| NetDevice {
+                socket: n.socket.clone(),
+                mac: n.mac,
+                features: n.features,
+                vfkit: n.vfkit,
+            }),
         };
         let spec_file = spec.dir.join(SPEC_FILE);
         fs::write(&spec_file, serde_json::to_vec_pretty(&spawn_spec)?)?;
