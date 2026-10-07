@@ -37,6 +37,9 @@ pub struct EngineConfig {
     pub cache_dir: Option<PathBuf>,
     /// Builds base root disks; required to create machines when `cache_dir` is set.
     pub populator: Option<Arc<dyn DiskPopulator>>,
+    /// Delay before the first restart under a restart policy; it doubles with
+    /// each quick failure (Docker starts at 100 ms).
+    pub restart_delay: Duration,
     /// Registries (`host:port`) reached over plain HTTP, like Docker's
     /// `insecure-registries`.
     pub insecure_registries: Vec<String>,
@@ -50,6 +53,7 @@ impl EngineConfig {
             runtime_dir: runtime_dir.into(),
             vmm: Arc::new(UnavailableVmm),
             start_timeout: Duration::from_secs(30),
+            restart_delay: Duration::from_millis(100),
             cache_dir: None,
             populator: None,
             insecure_registries: Vec::new(),
@@ -108,6 +112,9 @@ pub(crate) struct Inner {
     pub changed: Condvar,
     /// Machines whose VMM was killed on purpose (their end is exit code 137, not `dead`).
     pub forced: Mutex<HashSet<String>>,
+    /// Machines stopped through the API: their policy does not restart them.
+    pub stopped: Mutex<HashSet<String>>,
+    pub restart_delay: Duration,
     /// Tunnel resources of running machines, by id.
     pub tunnels: Mutex<HashMap<String, Arc<MachineTunnels>>>,
     pub events: EventBus,
@@ -130,6 +137,10 @@ impl Inner {
 
     pub fn forced(&self) -> MutexGuard<'_, HashSet<String>> {
         self.forced.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn stopped(&self) -> MutexGuard<'_, HashSet<String>> {
+        self.stopped.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn tunnels(&self) -> MutexGuard<'_, HashMap<String, Arc<MachineTunnels>>> {
@@ -224,6 +235,8 @@ impl Engine {
             guarded: Mutex::default(),
             changed: Condvar::new(),
             forced: Mutex::default(),
+            stopped: Mutex::default(),
+            restart_delay: config.restart_delay,
             tunnels: Mutex::default(),
             events: EventBus::default(),
         });

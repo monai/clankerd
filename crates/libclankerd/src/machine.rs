@@ -71,22 +71,36 @@ impl Machine {
     /// Boots the machine and returns once the guest reported ready.
     /// Fails with `Unavailable` if it does not within the engine's start timeout.
     pub fn start(&self) -> Result<()> {
+        self.start_with(false)
+    }
+
+    /// `restart` is set when a restart policy starts the machine: it only
+    /// proceeds while the machine is still waiting for that restart.
+    fn start_with(&self, restart: bool) -> Result<()> {
         let info = self.inspect()?;
         {
             let mut starting = self.inner.lock();
             let status = self.inner.store.load_state(&self.id)?.status;
-            if status == Status::Running || starting.contains(&self.id) {
+            let busy = status == Status::Running
+                || starting.contains(&self.id)
+                || (!restart && status == Status::Restarting);
+            // A restart whose machine was stopped or removed meanwhile is off.
+            let cancelled = restart && status != Status::Restarting;
+            if busy || cancelled {
                 return Err(Error::conflict(format!(
                     "machine {} is already running",
                     info.name
                 )));
+            }
+            if !restart {
+                self.inner.stopped().remove(&self.id);
             }
             if let Some(name) = crate::mount::volume_name(&info.host_config.mounts) {
                 self.check_volume_free(&starting, name)?;
             }
             starting.insert(self.id.clone());
         }
-        let result = self.boot(&info);
+        let result = self.boot(&info, restart);
         self.inner.lock().remove(&self.id);
         self.inner.changed.notify_all();
         result
@@ -116,7 +130,7 @@ impl Machine {
         Ok(())
     }
 
-    fn boot(&self, info: &MachineInfo) -> Result<()> {
+    fn boot(&self, info: &MachineInfo, restart: bool) -> Result<()> {
         let dir = self.inner.store.machine_dir(&self.id);
         let exit_file = dir.join("exit");
         let socket = self.inner.socket_path(&self.id);
@@ -184,6 +198,9 @@ impl Machine {
             s.exit_code = 0;
             s.started_at = Some(SystemTime::now());
             s.finished_at = None;
+            if !restart {
+                s.restart_count = 0;
+            }
         })?;
         self.inner.emit(&self.id, EventAction::Started, None);
         spawn_monitor(self.inner.clone(), self.id.clone(), ready);
@@ -283,16 +300,22 @@ impl Machine {
     /// Returns immediately for a machine that never started.
     pub fn wait(&self) -> Result<WaitResult> {
         Ok(self
-            .wait_until(None)?
+            .wait_until(None, true)?
             .expect("waiting without a deadline ends with a result"))
     }
 
     /// Like [`Machine::wait`], giving up with `None` at `deadline`.
-    fn wait_until(&self, deadline: Option<Instant>) -> Result<Option<WaitResult>> {
+    ///
+    /// With `settled` it also waits out restarts: the machine is done only
+    /// when no restart policy is about to start it again. Without, a run ending
+    /// is enough.
+    fn wait_until(&self, deadline: Option<Instant>, settled: bool) -> Result<Option<WaitResult>> {
         let mut starting = self.inner.lock();
         loop {
             let state = self.inner.store.load_state(&self.id)?;
-            if state.status != Status::Running && !starting.contains(&self.id) {
+            let over =
+                state.status != Status::Running && !(settled && state.status == Status::Restarting);
+            if over && !starting.contains(&self.id) {
                 return Ok(Some(WaitResult {
                     exit_code: state.exit_code,
                 }));
@@ -320,15 +343,26 @@ impl Machine {
     /// running succeeds.
     pub fn stop(&self, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
-        if self.inner.store.load_state(&self.id)?.status != Status::Running {
-            return Ok(());
+        match self.inner.store.load_state(&self.id)?.status {
+            Status::Running => {}
+            Status::Restarting => {
+                // Waiting for a restart: stopping cancels it.
+                self.inner.update_state(&self.id, |s| {
+                    if s.status == Status::Restarting {
+                        s.status = Status::Exited;
+                    }
+                })?;
+                return Ok(());
+            }
+            _ => return Ok(()),
         }
+        self.inner.stopped().insert(self.id.clone());
         let asked = guest::call(
             &self.inner.socket_path(&self.id),
             METHOD_SHUTDOWN,
             &serde_json::json!({}),
         );
-        if asked.is_ok() && self.wait_until(Some(deadline))?.is_some() {
+        if asked.is_ok() && self.wait_until(Some(deadline), false)?.is_some() {
             return Ok(());
         }
         match self.kill(libc::SIGKILL) {
@@ -368,7 +402,7 @@ impl Machine {
         self.inner.forced().insert(self.id.clone());
         kill_group(pid);
         // The monitor records the end; return once it has.
-        self.wait_until(Some(Instant::now() + Duration::from_secs(10)))?;
+        self.wait_until(Some(Instant::now() + Duration::from_secs(10)), false)?;
         self.inner.forced().remove(&self.id);
         Ok(())
     }
@@ -416,7 +450,7 @@ impl Machine {
                 record.name
             )));
         }
-        if state.status == Status::Running {
+        if matches!(state.status, Status::Running | Status::Restarting) {
             if !force {
                 return Err(Error::conflict(format!(
                     "cannot remove running machine {}: stop it first or use force",
@@ -500,12 +534,20 @@ fn spawn_monitor(inner: Arc<Inner>, id: String, ready: Ready) {
 }
 
 /// Persists the end of a run. `None` means the guest vanished: status `dead`.
-fn record_exit(inner: &Inner, id: &str, code: Option<i32>) {
+/// When the machine's restart policy asks for it the machine goes to
+/// `restarting` instead and a restart is scheduled.
+fn record_exit(inner: &Arc<Inner>, id: &str, code: Option<i32>) {
     // Release host resources first: whoever sees the new state sees them gone.
     inner.drop_tunnels(id);
     let _ = fs::remove_file(inner.socket_path(id));
     // A machine whose helper we killed ended by SIGKILL: Docker's 137.
     let code = code.or_else(|| inner.forced().remove(id).then_some(137));
+    let policy = inner
+        .store
+        .load(id)
+        .map(|(r, _)| r.host_config.restart_policy)
+        .unwrap_or_default();
+    let mut restart_in = None;
     let _ = inner.update_state(id, |s| {
         if s.status != Status::Running {
             return;
@@ -520,7 +562,69 @@ fn record_exit(inner: &Inner, id: &str, code: Option<i32>) {
         };
         s.exit_code = code.unwrap_or(-1);
         s.pid = None;
-        s.finished_at = Some(SystemTime::now());
+        let now = SystemTime::now();
+        s.finished_at = Some(now);
+        let stopped_by_api = inner.stopped().remove(id);
+        if !stopped_by_api && policy.restarts(s.exit_code, s.restart_count) {
+            // Docker's backoff: the delay doubles while runs are short.
+            let ran = s
+                .started_at
+                .and_then(|t| now.duration_since(t).ok())
+                .unwrap_or_default();
+            let doublings = if ran >= STABLE_RUN {
+                0
+            } else {
+                s.restart_count.min(9)
+            };
+            restart_in =
+                Some((inner.restart_delay * 2u32.pow(doublings)).min(Duration::from_secs(60)));
+            s.status = Status::Restarting;
+            s.restart_count += 1;
+            inner.emit(id, EventAction::Restarting, None);
+        }
+    });
+    if let Some(delay) = restart_in {
+        spawn_restarter(inner.clone(), id.to_owned(), delay);
+    }
+}
+
+/// A run at least this long resets the restart backoff.
+const STABLE_RUN: Duration = Duration::from_secs(10);
+
+/// Starts the machine again after `delay`, unless it was stopped or removed
+/// meanwhile.
+fn spawn_restarter(inner: Arc<Inner>, id: String, delay: Duration) {
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + delay;
+        let mut guard = inner.lock();
+        loop {
+            match inner.store.load_state(&id) {
+                Ok(s) if s.status == Status::Restarting => {}
+                _ => return,
+            }
+            match deadline.checked_duration_since(Instant::now()) {
+                Some(left) if !left.is_zero() => {
+                    guard = inner
+                        .changed
+                        .wait_timeout(guard, left)
+                        .unwrap_or_else(|e| e.into_inner())
+                        .0;
+                }
+                _ => break,
+            }
+        }
+        drop(guard);
+        if let Err(err) = Machine::new(inner.clone(), id.clone()).start_with(true)
+            && err.kind() != ErrorKind::NotFound
+        {
+            // Could not boot again: the machine stays down, with the reason.
+            let _ = inner.update_state(&id, |s| {
+                if s.status == Status::Restarting {
+                    s.status = Status::Exited;
+                    s.error = err.message().to_owned();
+                }
+            });
+        }
     });
 }
 
@@ -541,6 +645,11 @@ pub(crate) fn reattach(inner: &Arc<Inner>, id: &str) {
     let Ok(state) = inner.store.load_state(id) else {
         return;
     };
+    if state.status == Status::Restarting {
+        // The library went away during a restart delay: carry on.
+        spawn_restarter(inner.clone(), id.to_owned(), inner.restart_delay);
+        return;
+    }
     if state.status != Status::Running {
         return;
     }
