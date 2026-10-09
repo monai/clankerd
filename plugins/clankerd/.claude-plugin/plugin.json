@@ -1,8 +1,0 @@
-{
-  "name": "clankerd",
-  "version": "0.1.1",
-  "description": "Teaches coding agents in a smolvm VM to use guestctl for leased ports, .local names and host Chrome",
-  "author": {
-    "name": "monai"
-  }
-}

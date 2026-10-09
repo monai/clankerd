@@ -1,8 +1,0 @@
-[smol]
-image = "ghcr.io/monai/clankers:slim"
-user = "agent"
-volumes = [".:/mnt/workspace"]
-env = ["HOME=/home/agent"]
-init = [
-  "mkdir -p /storage/docker",
-]

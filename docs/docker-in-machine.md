@@ -1,10 +1,12 @@
 # Docker inside the machine (M2 hand-off for ticket 10)
 
-Everything here was tested on Linux against stubs only (`crates/vmctl/tests/{image_changes,smoke_script,host_gateway}.rs`). Nothing has booted real Docker yet; the smoke test is how you find out.
+The derived DinD image passed the full Mac smoke test; see the validation record
+below. Linux tests check image startup, smoke-script behavior and host-gateway
+configuration (`crates/vmctl/tests/{image_changes,smoke_script,host_gateway}.rs`).
 
 ## 1. Change the `slim` image (you apply these)
 
-The files to copy are in `contrib/image/slim/`:
+The files to copy are in `images/slim/`:
 
 | File | Install as |
 | --- | --- |
@@ -32,8 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/* \
  && docker --version   # must be 29.x or newer: the nftables backend is new in 29
 
-COPY contrib/image/slim/daemon.json /etc/docker/daemon.json
-COPY contrib/image/slim/clankerd-dockerd /usr/local/bin/clankerd-dockerd
+COPY images/slim/daemon.json /etc/docker/daemon.json
+COPY images/slim/clankerd-dockerd /usr/local/bin/clankerd-dockerd
 ```
 
 Entrypoint: call the helper before running the command. It does nothing unless `/.clankerdenv` exists (guestd writes it in a clankerd machine), so the same image keeps working under plain `docker run`. If your entrypoint is a shell script, add near the top:

@@ -1,6 +1,6 @@
 # Rust tests and coverage
 
-`mise exec -- make rust-test rust-lint` runs the workspace tests and lint checks
+`mise exec -- make test lint` runs the workspace tests and lint checks
 with the pinned production compiler.
 
 Run coverage on Linux. It uses [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov), pinned
@@ -13,7 +13,7 @@ coverage toolchain without changing the production compiler.
 
 ```sh
 mise install
-mise exec -- make rust-coverage-setup rust-coverage
+mise exec -- make coverage-setup coverage
 ```
 
 Reports are `build/coverage/coverage.json` and `build/coverage/html/index.html`.

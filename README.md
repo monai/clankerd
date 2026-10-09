@@ -1,88 +1,82 @@
-# clankerd, hostctl and guestctl
+# clankerd
 
-Wires coding agents in one smolvm VM to apps, `.local` names and Chrome on the host.
+A Rust library and CLI for running Linux machines from OCI images on Apple
+Silicon Macs, using libkrun and the stock libkrunfw kernel.
 
-- `clankerd`: host-only daemon, one per VM. Owns all state; answers mDNS, forwards TCP, runs Chrome, drives `smolvm`.
-- `hostctl`: host-side client. Manages the VM and the daemon, and inspects or releases leases.
-- `guestctl`: VM-side client, talking to the daemon through the socket smolvm mounts at `/run/clankerd/ctl.sock`.
-  Acquires leases and starts browsers.
+| Component | Purpose |
+| --- | --- |
+| `libclankerd` | Machine lifecycle, images, volumes, exec and forwarding APIs |
+| `vmctl` | Docker-style machine CLI |
+| `clankerd-vmspawn` | Signed VM helper that owns forwarding and outlives the CLI |
+| `clankerd-guestd` | Guest PID 1: boot setup, workloads, exec and shutdown |
+| `clankerd-proto` | Shared host/guest protocol and stream codecs |
+| `libkrun-sys` | libkrun FFI |
 
-Vocabulary: *coding agent* (an AI tool in the VM), *lease* (an exclusive named reservation of ports and `.local`
-names), *relay* (a TCP forwarder; the VM-side one is `guestctl relay`), *host*, *VM*.
-
-```sh
-# host
-hostctl smol up|down|status|start|stop
-hostctl lease list | show NAME | release NAME [--purge]
-
-# VM
-eval "$(guestctl lease acquire shop console.shop.local)"   # CLANKER_LEASE_APP_PORT CLANKER_LEASE_CDP_URL CLANKER_LEASE_HOSTS
-guestctl browser start shop                                 # host Chrome, CDP at $CLANKER_LEASE_CDP_URL
-guestctl lease show shop | release shop | browser stop shop
-```
-
-## Agent skill
-
-The repo is also a Claude Code plugin marketplace (`clankers`) holding the `clankerd` skill, which teaches a coding agent in the VM to use `guestctl`:
-
-```sh
-claude plugin marketplace add monai/clankerd
-claude plugin install clankerd@clankers
-```
+Machines boot the image as their root filesystem. Named volumes persist across
+restarts and image changes, host directories are shared through virtio-fs, and
+published ports bind to host loopback. Host ports and Unix sockets can be exposed
+through generic tunnels. Images with Docker and nftables can run containers and
+Compose inside the machine.
 
 ## Build
 
-```sh
-mise install && mise exec -- make build   # build/{darwin,linux}-arm64/{clankerd,hostctl}, build/linux-arm64/guestctl
-mise exec -- make test
-```
-
-### Rust workspace (libclankerd, vmctl)
-
-`mise install` pins Rust, zig, cargo-zigbuild and rcodesign. One command builds everything on Linux or macOS:
+Install the pinned tools with mise, then build, sign and verify the binaries:
 
 ```sh
-mise exec -- make rust   # cross-build, sign, verify -> build/rust/{darwin-arm64/{vmctl,clankerd-vmspawn},linux-arm64/clankerd-guestd}
+mise install
+mise exec -- make build
 ```
 
-`make rust-lint` and `make rust-test` run clippy/rustfmt and the tests. `clankerd-vmspawn` is ad-hoc signed with the
-hypervisor entitlement (`crates/clankerd-vmspawn/entitlements.plist`) and `clankerd-guestd` is a static aarch64 musl
-binary; `scripts/rust-verify.sh` checks both.
+The build runs on Linux or macOS. Outputs are:
 
-`scripts/dev-install` builds `linux-arm64/guestctl` and installs it as `/usr/local/bin/guestctl` in the running VM
-(the same place the image bakes it). Rerun it after each rebuild; it ends by printing the VM's `guestctl version`.
+- `build/rust/darwin-arm64/{vmctl,clankerd-vmspawn}`: Mac host binaries.
+- `build/rust/linux-arm64/`: static guest daemon and ext4 utilities.
 
-## Configuration
+The Mac needs Homebrew libkrun/libkrunfw. The runtime can fetch the pinned
+gvproxy network sidecar.
+See [Mac setup and validation](docs/libkrun-first-boot.md) for prerequisites,
+SDK setup, signing and hardware checks. `make rust` remains an alias for the
+complete build.
 
-Precedence, highest first: flags, `CLANKERD_*` environment, project (`.clankerd/config.toml`, found by walking up
-from the current directory), user, system, defaults. `--home DIR` / `CLANKERD_HOME` replaces all of these with one directory.
+## Run a machine
 
-Every key has an environment variable `CLANKERD_<SECTION>_<KEY>` and a flag `--<section>-<key>` (underscores become
-hyphens); the table lists the ones that do not follow that pattern. List keys are repeatable flags
-(`--smol-volumes=A --smol-volumes=B`) and a JSON array in the environment (`CLANKERD_SMOL_VOLUMES='["A","B"]'`);
-`relay_bind` and `mdns.subnets` also take comma-separated values.
+```sh
+vmctl=build/rust/darwin-arm64/vmctl
+"$vmctl" run -d --name sandbox ghcr.io/monai/clankers:slim sleep infinity
+"$vmctl" exec sandbox -it /bin/bash
+"$vmctl" stop sandbox
+"$vmctl" rm sandbox
+```
 
-| env / flag | TOML | default |
-|---|---|---|
-| `CLANKERD_VM` `--vm` | `vm.name` | none: required |
-| `CLANKERD_SLOTS` | `ports.slots` | `10` |
-| `CLANKERD_APP_PORT_BASE` | `ports.app_base` | `4000` |
-| `CLANKERD_CDP_PORT_BASE` | `ports.cdp_base` | `9222` |
-| `CLANKERD_CHROME_PORT_BASE` | `ports.chrome_base` | `19222` |
-| `CLANKERD_RELAY_BIND` (list) | `ports.relay_bind` | `127.0.0.1,::1` |
-| `CLANKERD_MDNS_SUBNETS` (list) | `mdns.subnets` | empty: announce nothing |
-| `CLANKERD_MDNS_GROUP4` / `GROUP6` | `mdns.group4` / `group6` | `224.0.0.251:5353` / `[ff02::fb]:5353` |
-| `CLANKERD_CHROME_BIN` | `chrome.bin` | auto-detect |
-| `CLANKERD_HOST_ADDR` | `guest.host_addr` | the VM's default gateways, IPv4 and IPv6 (RFC 8305 Happy Eyeballs) |
-| `CLANKERD_GUEST_DIR` | `guest.dir` | `/tmp/clankerd` (relay pidfiles in the VM) |
-| `CLANKERD_LOG_LEVEL` | `log.level` | `info` |
+Use `run -it IMAGE COMMAND` to attach to the main workload; the machine exits
+when that workload exits. `exec -it` opens a separate session in a running
+machine. Removing a machine keeps its named volumes unless `rm -v` is requested.
 
-`[smol]` (`CLANKERD_SMOL_IMAGE`, `--smol-image` and so on): `image cpus mem storage net net_backend user volumes env init cmd`. None has a default: an unset
-key adds no flag, so smolvm's own default applies. `env`, `volumes` and `init` are Go templates with `{{.UID}}` and `{{.GID}}` (the host ids); an unknown field fails `smol up`.
-`cmd` is the VM's workload: smolvm launches it on every start, unlike `init`, which runs once on the first.
-`contrib/clankers.toml` wires the `ghcr.io/monai/clankers` image; use it with `--config` or `CLANKERD_CONFIG`.
-What you configure is what the VM gets: `smol up` and `smol start` on a stopped VM apply the current volumes, ports,
-`cpus`, `mem`, `storage`, `net` and `env` to it (`storage` can only grow). `image`, `user`, `init`, `cmd`, `net_backend`
-cannot change on an existing VM and fail the command. A running VM is left alone. The applied configuration is
-recorded in `<state>/vm-spec`.
-The daemon logs to `<state>/clankerd.log`; `clankerd run` runs it in the foreground.
+Run `vmctl --help` for lifecycle commands and `vmctl run --help` for image,
+resource, mount, port and environment flags. Application leases, mDNS and
+managed Chrome are outside the current runtime's API.
+
+## Test
+
+Run the Linux workspace tests and strict formatting/lint checks:
+
+```sh
+mise exec -- make test lint
+```
+
+Generate line and branch coverage using the separately pinned nightly compiler:
+
+```sh
+mise exec -- make coverage-setup coverage
+```
+
+Reports are written to `build/coverage/`. Privileged filesystem tests need root,
+loop devices and mount permissions. See [Rust testing](docs/rust-testing.md) for
+coverage setup and container build directories.
+
+[Docker inside a machine](docs/docker-in-machine.md) describes image setup and
+the Mac smoke scripts. Docker image assets live in `images/slim/`.
+
+CI tests the Rust workspace, runs privileged filesystem checks, generates
+coverage, and builds and signs the host/guest binaries. Tagged releases package
+those binaries and guest utilities.

@@ -6,8 +6,8 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 out=$root/build/dind-smoke-image
 mkdir -p "$out"
 
-cp "$root/contrib/image/slim/daemon.json" "$out/daemon.json"
-cp "$root/contrib/image/slim/clankerd-dockerd" "$out/clankerd-dockerd"
+cp "$root/images/slim/daemon.json" "$out/daemon.json"
+cp "$root/images/slim/clankerd-dockerd" "$out/clankerd-dockerd"
 
 cat > "$out/Dockerfile" <<'EOF'
 FROM docker:29-dind

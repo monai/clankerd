@@ -1,23 +1,11 @@
-export CGO_ENABLED := 0
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X github.com/monai/clankers/clankerd/internal/cli.Version=$(VERSION)
-TARGETS := darwin-arm64 linux-arm64
+.DEFAULT_GOAL := build
+.PHONY: build test lint coverage coverage-setup clean rust-build rust-sign rust-verify rust-test rust-lint rust rust-coverage rust-coverage-setup
 
-.PHONY: build test vet clean rust-build rust-sign rust-verify rust-test rust-lint rust rust-coverage rust-coverage-setup
-build:
-	@for t in $(TARGETS); do \
-	  progs="clankerd hostctl"; \
-	  [ $$t = linux-arm64 ] && progs="$$progs guestctl"; \
-	  for p in $$progs; do \
-	    GOOS=$${t%-*} GOARCH=$${t#*-} go build -trimpath -ldflags "$(LDFLAGS)" -o build/$$t/$$p ./cmd/$$p || exit 1; \
-	  done; \
-	done
-
-vet:
-	go vet ./...
-
-test:
-	go test -count=1 ./...
+build: rust
+test: rust-test
+lint: rust-lint
+coverage: rust-coverage
+coverage-setup: rust-coverage-setup
 
 # Rust workspace. Prerequisite: `mise install`. One command: `make rust`
 # (build + sign + verify); outputs land in build/rust/<os-arch>/.

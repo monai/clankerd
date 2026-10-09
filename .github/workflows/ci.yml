@@ -19,40 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-
-      - run: make vet
-
-      - run: make test
-
-      - run: make build
-
-      - name: Package
-        run: |
-          mkdir -p dist
-          for t in build/*/; do
-            t=$(basename "$t")
-            files="clankerd hostctl"
-            if [ "$t" = linux-arm64 ]; then files="$files guestctl"; fi
-            tar -C "build/$t" -czf "dist/clankerd-$t.tar.gz" $files
-          done
-          (cd dist && sha256sum *.tar.gz > SHA256SUMS)
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: clankerd
-          path: dist/*
-
-  rust:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
 
       # Installs the pinned rust, zig, cargo-zigbuild and rcodesign from mise.toml
       - uses: jdx/mise-action@v3
@@ -61,9 +27,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - run: mise exec -- make rust-lint
+      - run: mise exec -- make lint
 
-      - run: mise exec -- make rust-test
+      - run: mise exec -- make test
 
       # Seam B as root: chown to foreign owners, mknod, security.capability and
       # the loop-mount population of an ext4 root disk cannot run unprivileged
@@ -81,7 +47,7 @@ jobs:
           if grep -q '^SKIPPED' seam-b.log; then echo "seam B tests were skipped:"; grep '^SKIPPED' seam-b.log; exit 1; fi
 
       - name: Rust coverage (lines and branches)
-        run: mise exec -- make rust-coverage-setup rust-coverage
+        run: mise exec -- make coverage-setup coverage
 
       - uses: actions/upload-artifact@v7
         with:
@@ -90,12 +56,25 @@ jobs:
 
       # Cross-links the darwin binaries, builds the static musl guest binary,
       # signs clankerd-vmspawn and verifies the entitlement.
-      - run: mise exec -- make rust
+      - run: mise exec -- make build
 
       - uses: actions/upload-artifact@v7
         with:
           name: clankerd-rust
           path: build/rust/**
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          for target in darwin-arm64 linux-arm64; do
+            tar -C "build/rust/$target" -czf "dist/clankerd-$target.tar.gz" .
+          done
+          (cd dist && sha256sum *.tar.gz > SHA256SUMS)
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: clankerd
+          path: dist/*
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

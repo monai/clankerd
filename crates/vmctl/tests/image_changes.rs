@@ -1,4 +1,4 @@
-//! The `slim` image changes handed to the developer (contrib/image/slim):
+//! The `slim` image changes handed to the developer (images/slim):
 //! daemon.json and the helper the entrypoint calls. dockerd is a stub, so this
 //! checks the contract: only inside a clankerd machine, with the right
 //! configuration, and failing loudly when dockerd never comes up.
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn slim_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contrib/image/slim")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../images/slim")
 }
 
 #[test]
