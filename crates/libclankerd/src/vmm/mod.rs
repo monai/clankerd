@@ -21,6 +21,8 @@ use crate::error::Result;
 /// Everything a VMM needs to boot one machine.
 #[derive(Debug, Clone)]
 pub struct BootSpec {
+    /// Host forwarding configuration, used by helpers that own its listeners.
+    pub forwarding: clankerd_proto::spawn::ForwardingConfig,
     pub machine_id: String,
     /// The machine's private state directory (VMM may keep files here).
     pub dir: PathBuf,
@@ -60,6 +62,10 @@ pub struct BootHandle {
 }
 
 pub trait Vmm: Send + Sync {
+    /// Connect through the helper's control socket instead of serving forwarding in the caller.
+    fn owns_forwarding(&self) -> bool {
+        false
+    }
     /// Starts the machine and returns without waiting for guest readiness.
     fn boot(&self, spec: &BootSpec) -> Result<BootHandle>;
 

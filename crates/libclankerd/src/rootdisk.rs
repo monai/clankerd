@@ -18,7 +18,9 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use clankerd_proto::rootdisk::{ERROR_FAILED, METHOD_POPULATE_DISK, PopulateDisk};
+use clankerd_proto::rootdisk::{
+    ERROR_FAILED, METHOD_FINISH_POPULATION, METHOD_POPULATE_DISK, PopulateDisk, write_tar_stream,
+};
 use clankerd_proto::varlink::{self, Call, Reply};
 
 use crate::error::{Error, Result};
@@ -27,6 +29,10 @@ use crate::merge::merge_layers;
 
 /// Turns a blank disk file into a formatted, populated ext4 root disk.
 pub trait DiskPopulator: Send + Sync {
+    /// Whether a cached disk can be reused; false rebuilds it from the image.
+    fn cached_disk_valid(&self, _disk: &Path) -> Result<bool> {
+        Ok(true)
+    }
     /// `disk` is an existing (empty) file; the populator makes it `size` bytes,
     /// formats it and unpacks the tar read from `tar` onto it.
     fn populate(&self, disk: &Path, size: u64, tar: &mut dyn Read) -> Result<()>;
@@ -92,7 +98,7 @@ impl DiskPopulator for LocalGuestdPopulator {
     }
 }
 
-/// The host side of `PopulateDisk`: call, stream the tar, half-close, read the reply.
+/// Frames the tar, reads the reply, then acknowledges it on a new connection.
 pub(crate) fn populate_over(
     socket: &Path,
     disk: &Path,
@@ -112,13 +118,32 @@ pub(crate) fn populate_over(
             upgrade: false,
         },
     )?;
-    // An early error reply closes the stream under us; the reply below says why.
-    let _ = std::io::copy(tar, &mut conn);
-    conn.shutdown(std::net::Shutdown::Write)?;
+    let stream_result = write_tar_stream(tar, &mut conn);
+    if let Err(e) = &stream_result
+        && !matches!(
+            e.kind(),
+            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+        )
+    {
+        return Err(Error::system(format!("streaming the root disk tar: {e}")));
+    }
     let reply: Reply = varlink::read(&mut BufReader::new(conn))?
         .ok_or_else(|| Error::unavailable("guestd closed the connection without replying"))?;
     match reply.error.as_deref() {
-        None => Ok(()),
+        None => {
+            stream_result?;
+            let mut acknowledgment = UnixStream::connect(socket)?;
+            varlink::write(
+                &mut acknowledgment,
+                &Call {
+                    method: METHOD_FINISH_POPULATION.into(),
+                    parameters: serde_json::json!({}),
+                    more: false,
+                    upgrade: false,
+                },
+            )?;
+            Ok(())
+        }
         Some(name) => {
             let message = reply.parameters["message"]
                 .as_str()
@@ -151,7 +176,7 @@ pub(crate) fn ensure_base(
     image: &ImageInfo,
 ) -> Result<(PathBuf, bool)> {
     let base = store.base_path(&image.id);
-    if base.exists() {
+    if base.exists() && populator.cached_disk_valid(&base)? {
         return Ok((base, false));
     }
     let scratch = store.tmp_dir();
@@ -174,6 +199,49 @@ pub(crate) fn ensure_base(
     let _ = fs::remove_file(&part);
     built?;
     Ok((base, true))
+}
+
+pub(crate) const ROOT_CAPACITY: &str = "root-disk-capacity";
+
+/// Backing-file EOF can shrink when the VMM discards a zero tail; disk capacity cannot.
+pub(crate) fn restore_root_capacity(disk: &Path, dir: &Path) -> Result<()> {
+    let actual = fs::metadata(disk)?.len();
+    let record = dir.join(ROOT_CAPACITY);
+    let expected = match fs::read(&record) {
+        Ok(bytes) => serde_json::from_slice::<u64>(&bytes)?.max(actual),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => actual,
+        Err(e) => return Err(e.into()),
+    };
+    crate::store::write_atomic(&record, &serde_json::to_vec(&expected)?)?;
+    if actual < expected {
+        File::options().write(true).open(disk)?.set_len(expected)?;
+    }
+    Ok(())
+}
+
+/// Reads only the geometry needed to detect a previously truncated cached ext4 image.
+pub(crate) fn ext4_capacity(disk: &Path) -> Result<u64> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = File::open(disk)?;
+    file.seek(SeekFrom::Start(1024))?;
+    let mut superblock = [0u8; 1024];
+    file.read_exact(&mut superblock)?;
+    if superblock[56..58] != [0x53, 0xef] {
+        return Err(Error::system("cached root disk has no ext4 superblock"));
+    }
+    let word = |offset| u32::from_le_bytes(superblock[offset..offset + 4].try_into().unwrap());
+    let mut blocks = u64::from(word(4));
+    if word(96) & 0x80 != 0 {
+        blocks |= u64::from(word(336)) << 32;
+    }
+    let block_size = 1024u64
+        .checked_shl(word(24))
+        .filter(|n| *n <= 65536)
+        .ok_or_else(|| Error::system("invalid ext4 block size"))?;
+    blocks
+        .checked_mul(block_size)
+        .filter(|n| *n > 0)
+        .ok_or_else(|| Error::system("invalid ext4 disk capacity"))
 }
 
 /// Copy-on-write clone where the filesystem has one (APFS `clonefile`, reflink

@@ -8,7 +8,7 @@ mod common;
 
 use std::fs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clankerd_proto::rootdisk::{METHOD_UNPACK_TAR, UnpackSummary, UnpackTar};
 use common::tarbuild::{Meta, Tb};
@@ -235,10 +235,15 @@ use clankerd_proto::rootdisk::{
 use std::process::Command;
 
 fn tool(name: &str) -> String {
-    ["/usr/sbin", "/sbin", "/usr/bin"]
-        .iter()
-        .map(|d| format!("{d}/{name}"))
-        .find(|p| Path::new(p).exists())
+    std::env::var_os("CLANKERD_TEST_BOOT_DIR")
+        .map(|dir| PathBuf::from(dir).join(name).to_string_lossy().into_owned())
+        .into_iter()
+        .chain(
+            ["/usr/sbin", "/sbin", "/usr/bin"]
+                .into_iter()
+                .map(|dir| format!("{dir}/{name}")),
+        )
+        .find(|path| Path::new(path).exists())
         .unwrap_or_else(|| panic!("{name} (e2fsprogs) must be installed to run seam B tests"))
 }
 

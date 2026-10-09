@@ -26,11 +26,8 @@
 //! Machines outlive the process that started them: state lives on disk, the
 //! VMM runs in its own process group, and [`Engine::new`] reattaches.
 //!
-//! Known limitation: published ports, host-gateway ports and socket bindings
-//! are tunnels served by the library process. When it exits they close while
-//! the machine keeps running, and reattaching does not reopen them (restart
-//! the machine). Moving them into a helper that outlives the process is a
-//! follow-up.
+//! With VmspawnVmm, forwarding is owned by the helper and controlled through
+//! a host-only Unix socket, so configured bindings survive the starter.
 
 mod clockwatch;
 mod config;
@@ -39,6 +36,7 @@ mod engine;
 mod error;
 mod events;
 mod exec;
+pub mod forwarding;
 mod guest;
 mod image_config;
 mod images;

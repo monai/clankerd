@@ -381,13 +381,17 @@ fn run(cli: Cli) -> Result<u8, Error> {
                 return Err(Error::invalid_parameter("the input device is not a TTY"));
             }
             let m = create(&engine, args.create)?;
-            m.start()?;
+            let streams = if attach {
+                Some(m.start_attached(if tty { exec::window_size() } else { None })?)
+            } else {
+                m.start()?;
+                None
+            };
             if args.detach {
                 println!("{}", m.id());
                 return Ok(0);
             }
-            if attach {
-                let streams = m.attach(if tty { exec::window_size() } else { None })?;
+            if let Some(streams) = streams {
                 let resize = streams.resizer();
                 exec::drive(streams, tty, move |rows, cols| {
                     let _ = resize(rows, cols);

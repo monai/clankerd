@@ -82,7 +82,8 @@ impl Error {
             return Error {
                 kind: ErrorKind::KernelLibraryMissing,
                 message: "libkrunfw (the guest kernel library) could not be loaded; \
-                          install it with `brew install libkrunfw`"
+                          install it with `brew install libkrunfw`; if already installed, \
+                          check that DYLD_FALLBACK_LIBRARY_PATH includes /opt/homebrew/lib"
                     .to_owned(),
             };
         }

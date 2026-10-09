@@ -7,5 +7,9 @@ license.workspace = true
 publish.workspace = true
 build = "build.rs"
 
+# Contracts are exercised by integration tests; these targets have no unit tests.
+[lib]
+test = false
+
 [dependencies]
 libc = "0.2.190"

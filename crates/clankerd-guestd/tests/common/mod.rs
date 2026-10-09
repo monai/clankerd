@@ -54,6 +54,14 @@ impl Drop for Guestd {
 impl Guestd {
     /// Starts guestd in `--populate` mode; `boot_dir` holds mke2fs.
     pub fn spawn(boot_dir: &Path) -> Self {
+        Self::spawn_with_options(boot_dir, false)
+    }
+
+    pub fn spawn_lenient(boot_dir: &Path) -> Self {
+        Self::spawn_with_options(boot_dir, true)
+    }
+
+    fn spawn_with_options(boot_dir: &Path, lenient: bool) -> Self {
         let dir = tempfile::Builder::new().prefix("gd").tempdir().unwrap();
         let socket = dir.path().join("g.sock");
         let listener = UnixListener::bind(&socket).unwrap();
@@ -63,6 +71,9 @@ impl Guestd {
             .arg(boot_dir)
             .env("LISTEN_FDS", "1")
             .stdin(Stdio::null());
+        if lenient {
+            cmd.arg("--lenient-ownership");
+        }
         // SAFETY: only async-signal-safe calls between fork and exec.
         unsafe {
             cmd.pre_exec(move || {
@@ -88,6 +99,31 @@ impl Guestd {
         self.call_with_stream(method, params, &mut std::io::empty())
     }
 
+    pub fn is_running(&mut self) -> bool {
+        self.child.try_wait().unwrap().is_none()
+    }
+
+    pub fn connect(&self) -> UnixStream {
+        let conn = UnixStream::connect(&self.socket).unwrap();
+        conn.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        conn
+    }
+
+    pub fn send(&self, method: &str) {
+        let mut conn = UnixStream::connect(&self.socket).unwrap();
+        varlink::write(
+            &mut conn,
+            &Call {
+                method: method.into(),
+                parameters: serde_json::json!({}),
+                more: false,
+                upgrade: false,
+            },
+        )
+        .unwrap();
+    }
+
     /// Stream-in call: the request, then `stream` until EOF, then half-close.
     pub fn call_with_stream<P: Serialize>(
         &self,
@@ -107,9 +143,13 @@ impl Guestd {
         )
         .unwrap();
         // The reply may arrive early (errors); ignore EPIPE while streaming.
-        let _ = std::io::copy(stream, &mut conn);
-        let _ = conn.flush();
-        let _ = conn.shutdown(std::net::Shutdown::Write);
+        if method == clankerd_proto::rootdisk::METHOD_POPULATE_DISK {
+            let _ = clankerd_proto::rootdisk::write_tar_stream(stream, &mut conn);
+        } else {
+            let _ = std::io::copy(stream, &mut conn);
+            let _ = conn.flush();
+            let _ = conn.shutdown(std::net::Shutdown::Write);
+        }
         varlink::read::<Reply, _>(&mut BufReader::new(conn))
             .unwrap()
             .expect("guestd closed without replying")

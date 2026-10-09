@@ -78,16 +78,19 @@ pub fn exit_machine() -> ! {
         teardown();
         power_off();
     }
+
     std::process::exit(0);
 }
 
 /// Flushes and powers the VM off; as PID 1 returning would panic the kernel.
-pub fn power_off() -> ! {
+fn power_off() -> ! {
     // SAFETY: sync and reboot take no pointers.
+    unsafe { libc::sync() };
+
     unsafe {
-        libc::sync();
         libc::reboot(libc::RB_POWER_OFF);
     }
+
     // reboot only returns on failure; PID 1 must not exit.
     loop {
         std::thread::sleep(Duration::from_secs(3600));
@@ -109,18 +112,17 @@ fn teardown() {
     unsafe { libc::sync() };
     let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
     for target in unmountable(&mounts) {
-        let Ok(path) = std::ffi::CString::new(target) else {
+        let Ok(path) = std::ffi::CString::new(target.as_str()) else {
             continue;
         };
         // SAFETY: valid NUL-terminated path.
-        unsafe {
-            if libc::umount2(path.as_ptr(), 0) < 0 {
-                eprintln!(
-                    "clankerd-guestd: {} is busy, detaching it",
-                    path.to_string_lossy()
-                );
-                libc::umount2(path.as_ptr(), libc::MNT_DETACH);
-            }
+        let rc = unsafe { libc::umount2(path.as_ptr(), 0) };
+        if rc < 0 {
+            eprintln!(
+                "clankerd-guestd: {} is busy, detaching it",
+                path.to_string_lossy()
+            );
+            unsafe { libc::umount2(path.as_ptr(), libc::MNT_DETACH) };
         }
     }
     // The root cannot be unmounted from inside; a read-only remount flushes it
@@ -133,9 +135,9 @@ fn teardown() {
             std::ptr::null(),
             libc::MS_REMOUNT | libc::MS_RDONLY,
             std::ptr::null(),
-        );
-        libc::sync();
-    }
+        )
+    };
+    unsafe { libc::sync() };
     eprintln!("clankerd-guestd: powering off");
 }
 

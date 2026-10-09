@@ -35,6 +35,8 @@ pub struct VolumeInfo {
 #[derive(Serialize, Deserialize)]
 struct Meta {
     created: SystemTime,
+    #[serde(default)]
+    size: Option<u64>,
 }
 
 pub(crate) fn valid_name(name: &str) -> bool {
@@ -93,6 +95,7 @@ impl VolumeStore {
             File::create(self.data_path(name))?.set_len(size)?;
             let meta = Meta {
                 created: SystemTime::now(),
+                size: Some(size),
             };
             // The metadata file marks the volume complete, so it goes last.
             crate::store::write_atomic(&dir.join(META_FILE), &serde_json::to_vec(&meta)?)
@@ -115,9 +118,15 @@ impl VolumeStore {
             Err(e) => return Err(e.into()),
         };
         let path = self.data_path(name);
+        let actual = fs::metadata(&path)?.len();
+        let capacity = meta.size.unwrap_or_else(|| {
+            crate::rootdisk::ext4_capacity(&path)
+                .unwrap_or(actual)
+                .max(actual)
+        });
         Ok(VolumeInfo {
             name: name.to_owned(),
-            size: fs::metadata(&path)?.len(),
+            size: capacity.max(actual),
             path,
             created: meta.created,
         })
@@ -150,16 +159,17 @@ impl VolumeStore {
     /// size. The guest grows the filesystem into the new space at boot.
     pub fn grow_to(&self, name: &str, want: Option<u64>) -> Result<u64> {
         let info = self.get(name)?;
-        match want {
-            Some(want) if want > info.size => {
-                OpenOptions::new()
-                    .write(true)
-                    .open(&info.path)?
-                    .set_len(want)?;
-                Ok(want)
-            }
-            _ => Ok(info.size),
+        let capacity = info.size.max(want.unwrap_or(info.size));
+        let mut meta: Meta = serde_json::from_slice(&fs::read(self.dir(name).join(META_FILE))?)?;
+        meta.size = Some(capacity);
+        crate::store::write_atomic(&self.dir(name).join(META_FILE), &serde_json::to_vec(&meta)?)?;
+        if fs::metadata(&info.path)?.len() < capacity {
+            OpenOptions::new()
+                .write(true)
+                .open(&info.path)?
+                .set_len(capacity)?;
         }
+        Ok(capacity)
     }
 }
 

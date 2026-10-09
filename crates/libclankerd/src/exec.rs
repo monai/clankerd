@@ -152,6 +152,7 @@ fn demux(
 
 /// The stdio of a started exec. Output stays readable after [`ExecStreams::wait`].
 pub struct ExecStreams {
+    exit_ack_socket: Option<std::path::PathBuf>,
     /// Present when the exec was created with `attach_stdin`.
     pub stdin: Option<ExecStdin>,
     pub stdout: ExecOutput,
@@ -173,6 +174,7 @@ impl ExecStreams {
         std::thread::spawn(move || demux(reader, out_tx, err_tx, status_tx));
         let writer = Arc::new(Mutex::new(writer));
         Ok(ExecStreams {
+            exit_ack_socket: None,
             stdin: with_stdin.then(|| ExecStdin {
                 writer: writer.clone(),
             }),
@@ -215,7 +217,22 @@ impl ExecStreams {
                     .map_err(|_| Error::unavailable("lost the guest before the exec finished"))?,
             );
         }
+        if let Some(socket) = self.exit_ack_socket.take() {
+            // The received status is authoritative even if the guest's bounded
+            // shutdown wait has already ended. This RPC only releases that wait.
+            let _ = clankerd_proto::guest::acknowledge_exit(
+                &socket,
+                clankerd_proto::guest::ExitAcknowledgment {
+                    exit_code: self.status.as_ref().unwrap().exit_code,
+                    observer: clankerd_proto::guest::ExitObserver::Attached,
+                },
+            );
+        }
         Ok(self.status.clone().unwrap())
+    }
+
+    pub(crate) fn acknowledge_workload_exit(&mut self, socket: std::path::PathBuf) {
+        self.exit_ack_socket = Some(socket);
     }
 }
 

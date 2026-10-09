@@ -26,7 +26,12 @@ if [ ! -f "$tarball" ]; then
   curl -sSfL -o "$tarball.part" "$URL"
   mv "$tarball.part" "$tarball"
 fi
-echo "$SHA256  $tarball" | sha256sum -c - >/dev/null || {
+if command -v sha256sum >/dev/null 2>&1; then
+  checksum=(sha256sum)
+else
+  checksum=(shasum -a 256)
+fi
+echo "$SHA256  $tarball" | "${checksum[@]}" -c - >/dev/null || {
   echo "e2fsprogs tarball checksum mismatch" >&2
   rm -f "$tarball"
   exit 1
@@ -51,7 +56,12 @@ export CC="$wrap/cc" AR="$wrap/ar" RANLIB="$wrap/ranlib" BUILD_CC=cc
   --disable-uuidd --disable-defrag \
   --disable-e2initrd-helper \
   LDFLAGS="-static -s" >/dev/null
-make -j"$(nproc)" -s >/dev/null
+if command -v nproc >/dev/null 2>&1; then
+  jobs=$(nproc)
+else
+  jobs=$(sysctl -n hw.ncpu)
+fi
+make -j"$jobs" -s >/dev/null
 
 for b in misc/mke2fs e2fsck/e2fsck resize/resize2fs debugfs/debugfs; do
   install -m 0755 "$b" "$out/$(basename "$b")"

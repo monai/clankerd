@@ -7,17 +7,19 @@
 
 use std::ffi::CString;
 use std::fs::{self, OpenOptions};
-use std::io::{self, BufReader};
+use std::io::{self, BufReader, Read};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use clankerd_proto::rootdisk::{
-    ERROR_FAILED, ERROR_INVALID_PARAMETER, ErrorDetail, FormatExt4, METHOD_FORMAT_EXT4,
-    METHOD_POPULATE_DISK, METHOD_UNPACK_TAR, PopulateDisk, UnpackSummary, UnpackTar,
+    ERROR_FAILED, ERROR_INVALID_PARAMETER, ErrorDetail, FormatExt4, METHOD_FINISH_POPULATION,
+    METHOD_FORMAT_EXT4, METHOD_POPULATE_DISK, METHOD_UNPACK_TAR, PopulateDisk, TarStreamReader,
+    UnpackSummary, UnpackTar,
 };
 use clankerd_proto::varlink::{self, Call, Reply};
 use serde::de::DeserializeOwned;
@@ -28,8 +30,9 @@ use crate::unpack::unpack;
 pub struct Ctx {
     /// Directory holding the static e2fsprogs binaries (default: next to guestd).
     pub boot_dir: PathBuf,
-    /// Populate boot: power off (exit) after a successful `PopulateDisk`.
+    /// Populate boot: power off after the host acknowledges `PopulateDisk`.
     pub populate_mode: bool,
+    pub populated: AtomicBool,
     /// Development without root: skip what only root may do (see `unpack`).
     pub lenient: bool,
 }
@@ -59,10 +62,17 @@ pub fn handle(
     out: &mut UnixStream,
     ctx: &Ctx,
 ) -> bool {
+    if call.method == METHOD_FINISH_POPULATION
+        && ctx.populate_mode
+        && ctx.populated.load(Ordering::Acquire)
+    {
+        crate::power::exit_machine();
+    }
     let result = match call.method.as_str() {
         METHOD_FORMAT_EXT4 => params(call).and_then(|p| format_ext4(ctx, p)),
         METHOD_UNPACK_TAR => params(call).and_then(|p| unpack_tar(ctx, input, p)),
         METHOD_POPULATE_DISK => params(call).and_then(|p| populate_disk(ctx, input, p)),
+        METHOD_FINISH_POPULATION => Err(Failure::invalid("no completed population to acknowledge")),
         _ => return false,
     };
     let reply = match &result {
@@ -80,10 +90,11 @@ pub fn handle(
             error: Some((*name).into()),
         },
     };
-    let _ = varlink::write(out, &reply);
     if result.is_ok() && ctx.populate_mode && call.method == METHOD_POPULATE_DISK {
-        // The population boot has done its job: power off.
-        crate::power::exit_machine();
+        ctx.populated.store(true, Ordering::Release);
+    }
+    if let Err(e) = varlink::write(out, &reply) {
+        eprintln!("clankerd-guestd: replying to {}: {e}", call.method);
     }
     true
 }
@@ -163,13 +174,13 @@ fn unpack_tar(
     summary(unpack_stream(input, target, ctx.lenient)?)
 }
 
-fn unpack_stream(
-    input: &mut BufReader<UnixStream>,
+fn unpack_stream<R: Read>(
+    input: &mut R,
     target: &Path,
     lenient: bool,
 ) -> Result<UnpackSummary, Failure> {
     let summary = unpack(&mut *input, target, lenient)?;
-    // Consume the end-of-archive padding up to the client's half-close.
+    // Consume the end-of-archive padding up to the stream's end marker.
     io::copy(input, &mut io::sink())?;
     Ok(summary)
 }
@@ -184,10 +195,11 @@ fn populate_disk(
     p: PopulateDisk,
 ) -> Result<Value, Failure> {
     let device = Path::new(&p.device);
+    let mut tar = TarStreamReader::new(input);
     if ctx.lenient && device.is_dir() {
         // Development without root or a block device: unpack straight into
         // the directory, skipping format and mount.
-        return summary(unpack_stream(input, device, true)?);
+        return summary(unpack_stream(&mut tar, device, true)?);
     }
     format_device(ctx, device, p.size, None)?;
 
@@ -204,7 +216,7 @@ fn populate_disk(
         std::env::temp_dir().join(format!("clankerd-populate-{}", std::process::id()));
     fs::create_dir_all(&mount_point)?;
     mount_ext4(&source, &mount_point)?;
-    let result = unpack_stream(input, &mount_point, false);
+    let result = unpack_stream(&mut tar, &mount_point, false);
     // SAFETY: sync has no preconditions.
     unsafe { libc::sync() };
     let umount = umount(&mount_point);

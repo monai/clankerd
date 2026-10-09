@@ -59,6 +59,18 @@ pub struct SpawnSpec {
     /// virtio-net device backed by a unixgram socket (gvproxy).
     #[serde(default)]
     pub net: Option<NetDevice>,
+    /// Forwarding owned by the helper; absent for population boots.
+    #[serde(default)]
+    pub forwarding: Option<ForwardingConfig>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Host-only forwarding configuration, shared with the VM helper.
+pub struct ForwardingConfig {
+    pub control_socket: PathBuf,
+    pub port_bindings: Vec<crate::tunnel::PortBinding>,
+    pub host_gateway_ports: Vec<u16>,
+    pub socket_bindings: Vec<crate::tunnel::SocketBinding>,
 }
 
 /// A host directory shared over virtio-fs; the guest mounts it by `tag`.

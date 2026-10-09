@@ -90,6 +90,7 @@ pub fn format_if_blank(tools: &Path, device: &Path) -> Result<bool, String> {
     let ctx = Ctx {
         boot_dir: tools.to_path_buf(),
         populate_mode: false,
+        populated: Default::default(),
         lenient: false,
     };
     format_device(&ctx, device, None, Some("volume")).map_err(|f| f.1)?;

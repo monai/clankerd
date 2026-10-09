@@ -340,7 +340,7 @@ fn apply(path: &Path, meta: &Meta, chmod: bool, lenient: bool) -> io::Result<()>
             tv_nsec: libc::UTIME_OMIT,
         },
         libc::timespec {
-            tv_sec: meta.mtime.0 as libc::time_t,
+            tv_sec: meta.mtime.0 as _,
             tv_nsec: meta.mtime.1 as _,
         },
     ];

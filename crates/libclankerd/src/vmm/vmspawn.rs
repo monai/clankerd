@@ -1,4 +1,5 @@
 use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixListener;
 use std::os::unix::process::CommandExt;
@@ -12,6 +13,7 @@ use crate::error::{Error, Result};
 
 const SPEC_FILE: &str = "vmspawn.json";
 const LOG_FILE: &str = "vmspawn.log";
+const STATUS_FILE: &str = "vmspawn-exit";
 /// Static binaries guestd needs for a volume, next to guestd.
 const VOLUME_TOOLS: [&str; 2] = ["mke2fs", "resize2fs"];
 const DEFAULT_CPUS: u32 = 2;
@@ -98,11 +100,18 @@ impl VmspawnVmm {
 }
 
 impl Vmm for VmspawnVmm {
+    fn owns_forwarding(&self) -> bool {
+        true
+    }
     fn boot(&self, spec: &BootSpec) -> Result<BootHandle> {
+        if let Some(disk) = &spec.root_disk {
+            crate::rootdisk::restore_root_capacity(disk, &spec.dir)?;
+        }
         let boot = spec.dir.join("boot");
         self.prepare_boot_dir(&boot, spec)?;
 
         let spawn_spec = SpawnSpec {
+            forwarding: Some(spec.forwarding.clone()),
             boot_dir: boot,
             console_log: spec.dir.join(crate::machine::CONSOLE_LOG),
             exit_file: spec.exit_file.clone(),
@@ -124,9 +133,27 @@ impl Vmm for VmspawnVmm {
         let spec_file = spec.dir.join(SPEC_FILE);
         fs::write(&spec_file, serde_json::to_vec_pretty(&spawn_spec)?)?;
 
+        match fs::remove_file(&spawn_spec.vsock_socket) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(Error::system(format!(
+                    "removing stale libkrun listener {}: {e}",
+                    spawn_spec.vsock_socket.display()
+                )));
+            }
+        }
         let _ = fs::remove_file(&spec.guest_socket);
+        let _ = fs::remove_file(spec.dir.join(STATUS_FILE));
         let listener = UnixListener::bind(&spec.guest_socket)
             .map_err(|e| Error::system(format!("binding {}: {e}", spec.guest_socket.display())))?;
+        // Keep the diagnostic file open: a late reaper write must not create a
+        // directory entry after removal, or overwrite a later run's status file.
+        let mut status_file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(spec.dir.join(STATUS_FILE))?;
         let mut child = spawn_helper(
             &self.vmspawn,
             &spec_file,
@@ -137,7 +164,9 @@ impl Vmm for VmspawnVmm {
         let pid = child.id();
         // Reap it if it ends while we are still alive.
         std::thread::spawn(move || {
-            let _ = child.wait();
+            if let Ok(status) = child.wait() {
+                let _ = status_file.write_all(status.to_string().as_bytes());
+            }
         });
         Ok(BootHandle { pid })
     }
@@ -149,7 +178,30 @@ impl Vmm for VmspawnVmm {
             return Ok(());
         }
         let log = fs::read_to_string(spec.dir.join(LOG_FILE)).unwrap_or_default();
-        Err(explain_exit(&log))
+        let console =
+            fs::read_to_string(spec.dir.join(crate::machine::CONSOLE_LOG)).unwrap_or_default();
+        let error = if log.trim().is_empty() && !console.trim().is_empty() {
+            let lines: Vec<_> = console.lines().collect();
+            Error::unavailable(format!(
+                "guest exited before becoming ready (guest console: {})",
+                lines[lines.len().saturating_sub(20)..].join(" | ")
+            ))
+        } else {
+            explain_exit(&log)
+        };
+        let status = fs::read_to_string(spec.dir.join(STATUS_FILE)).unwrap_or_default();
+        Err(Error::new(
+            error.kind(),
+            format!(
+                "workload boot: {}{}",
+                error.message(),
+                if status.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (helper {status})")
+                }
+            ),
+        ))
     }
 }
 
@@ -171,6 +223,12 @@ pub(crate) fn spawn_helper(
         .open(log_path)?;
     let mut cmd = Command::new(vmspawn);
     cmd.arg("--spec").arg(spec_file);
+    #[cfg(target_os = "macos")]
+    cmd.env(
+        "DYLD_FALLBACK_LIBRARY_PATH",
+        std::env::var_os("DYLD_FALLBACK_LIBRARY_PATH")
+            .unwrap_or_else(|| "/opt/homebrew/lib:/usr/local/lib:/usr/lib".into()),
+    );
     if dev_local {
         cmd.arg("--dev-local");
     }

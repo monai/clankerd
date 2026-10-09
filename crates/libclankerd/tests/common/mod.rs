@@ -13,39 +13,13 @@ use std::time::Duration;
 use libclankerd::vmm::LocalProcessVmm;
 use libclankerd::{Engine, EngineConfig, HostConfig, Machine, MachineConfig, Vmm};
 
-/// Path of the clankerd-guestd binary, building it on first use because
-/// cargo only builds a package's own binaries for its integration tests.
+#[path = "../../../../tests/support/cargo.rs"]
+mod cargo;
+pub use cargo::build_binary as built;
+
 pub fn guestd_path() -> PathBuf {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| {
-        let exe = std::env::current_exe().unwrap();
-        let profile_dir = exe.parent().unwrap().parent().unwrap().to_path_buf();
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let mut cmd = Command::new(cargo);
-        cmd.args(["build", "-q", "-p", "clankerd-guestd"]);
-        if profile_dir.file_name().is_some_and(|n| n == "release") {
-            cmd.arg("--release");
-        }
-        let status = cmd.status().expect("run cargo build");
-        assert!(status.success(), "building clankerd-guestd failed");
-        profile_dir.join("clankerd-guestd")
-    })
-    .clone()
-}
-
-/// Builds `package` (cargo only builds a package's own binaries for its tests)
-/// and returns the path of its binary.
-pub fn built(package: &str) -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let profile_dir = exe.parent().unwrap().parent().unwrap().to_path_buf();
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut cmd = Command::new(cargo);
-    cmd.args(["build", "-q", "-p", package]);
-    if profile_dir.file_name().is_some_and(|n| n == "release") {
-        cmd.arg("--release");
-    }
-    assert!(cmd.status().unwrap().success(), "building {package} failed");
-    profile_dir.join(package)
+    PATH.get_or_init(|| built("clankerd-guestd")).clone()
 }
 
 pub fn vmspawn_path() -> PathBuf {
@@ -179,9 +153,14 @@ pub fn debugfs(image: &Path, request: &str) -> String {
 }
 
 fn tool(name: &str) -> String {
-    ["/usr/sbin", "/sbin", "/usr/bin"]
-        .iter()
-        .map(|d| format!("{d}/{name}"))
-        .find(|p| Path::new(p).exists())
+    std::env::var_os("CLANKERD_TEST_BOOT_DIR")
+        .map(|dir| PathBuf::from(dir).join(name).to_string_lossy().into_owned())
+        .into_iter()
+        .chain(
+            ["/usr/sbin", "/sbin", "/usr/bin"]
+                .into_iter()
+                .map(|dir| format!("{dir}/{name}")),
+        )
+        .find(|path| Path::new(path).exists())
         .unwrap_or_else(|| panic!("{name} (e2fsprogs) must be installed"))
 }

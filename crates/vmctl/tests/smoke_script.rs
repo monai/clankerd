@@ -61,7 +61,7 @@ fn a_clean_run_walks_the_whole_prototype_and_cleans_up() {
     assert!(stdout.contains("PASS"), "{stdout}");
     for expected in [
         "pull ghcr.io/monai/clankers:slim",
-        "-p 8080:80",
+        "-p 8080:8080",
         "--host-gateway-port 18931",
         "-v smoke-data:/storage",
         "stop smoke",
@@ -81,12 +81,17 @@ fn a_clean_run_walks_the_whole_prototype_and_cleans_up() {
 }
 
 #[test]
-fn nftables_failure_is_reported_with_the_kata_fallback() {
-    let r = run_script(Some("nftables"));
+fn nftables_table_failure_is_reported_with_the_kata_fallback() {
+    let r = run_script(Some("nft list tables"));
     assert!(!r.out.status.success());
     let stderr = String::from_utf8_lossy(&r.out.stderr);
     assert!(stderr.contains("FAIL"), "{stderr}");
     assert!(stderr.contains("Kata"), "{stderr}");
+    assert!(
+        r.calls.contains("exec -u root smoke sh -c nft list tables"),
+        "{}",
+        r.calls
+    );
     assert!(
         r.calls.contains("rm -f -v smoke"),
         "a failed run still cleans up:\n{}",

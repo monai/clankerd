@@ -49,10 +49,11 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use clankerd_proto::guest::{
-    ERROR_CONFLICT, ERROR_INVALID_PARAMETER, ERROR_METHOD_NOT_FOUND, Event, METHOD_ATTACH,
-    METHOD_EVENTS, METHOD_EXEC_CREATE, METHOD_EXEC_INSPECT, METHOD_EXEC_KILL, METHOD_EXEC_RESIZE,
-    METHOD_EXEC_START, METHOD_KILL, METHOD_SET_CLOCK, METHOD_SHUTDOWN, ShutdownParams,
-    SignalParams, Workload,
+    ERROR_CONFLICT, ERROR_INVALID_PARAMETER, ERROR_METHOD_NOT_FOUND, Event, ExitAcknowledgment,
+    ExitObserver, METHOD_ACKNOWLEDGE_EXIT, METHOD_ATTACH, METHOD_EVENTS, METHOD_EXEC_CREATE,
+    METHOD_EXEC_INSPECT, METHOD_EXEC_KILL, METHOD_EXEC_RESIZE, METHOD_EXEC_START, METHOD_KILL,
+    METHOD_SET_CLOCK, METHOD_SHUTDOWN, METHOD_STARTUP_COMPLETE, ShutdownParams, SignalParams,
+    Workload,
 };
 use clankerd_proto::varlink::{self, Call, Reply};
 use serde_json::Value;
@@ -63,8 +64,6 @@ mod volume;
 
 const LISTEN_FD: i32 = 3;
 const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-/// How long to keep serving after the workload exits so subscribers see `exited`.
-const LINGER: Duration = Duration::from_millis(300);
 const DRAIN_LIMIT: Duration = Duration::from_secs(5);
 
 /// Set once guestd booted a root disk: it is then PID 1 of a VM and may set the clock.
@@ -83,6 +82,10 @@ struct Inner {
     streams: usize,
     /// Process id of the workload while it runs.
     workload_pid: Option<i32>,
+    exit_recorded: bool,
+    startup_complete: bool,
+    expect_attach: bool,
+    attach_acknowledged: bool,
 }
 
 fn main() {
@@ -147,6 +150,7 @@ fn main() {
     let disk = Arc::new(rootdisk::Ctx {
         boot_dir,
         populate_mode: populate,
+        populated: Default::default(),
         lenient,
     });
 
@@ -176,7 +180,10 @@ fn main() {
     let tunnels = Arc::new(tunnel::Tunnels::new(loopback, host));
 
     let shared = Arc::new(Shared {
-        inner: Mutex::default(),
+        inner: Mutex::new(Inner {
+            expect_attach: workload.as_ref().is_some_and(|w| w.expect_attach),
+            ..Default::default()
+        }),
         cv: Condvar::new(),
         execs: exec::Registry::new(
             workload.as_ref().map(|w| w.env.clone()).unwrap_or_default(),
@@ -310,34 +317,70 @@ fn supervise(
         }
         Err(code) => (code, None),
     };
+
+    {
+        let mut g = shared.inner.lock().unwrap();
+        g.exit_code = Some(code);
+        g.workload_pid = None;
+    }
     shared.attach.finish(clankerd_proto::guest::ExecStatus {
         exit_code: code,
         signal,
     });
+    let mut exit_recorded = false;
     if let Some(exit_file) = exit_file {
         let tmp = exit_file.with_extension("tmp");
-        if std::fs::write(&tmp, code.to_string()).is_ok() {
-            let _ = std::fs::rename(&tmp, &exit_file);
+        match std::fs::write(&tmp, code.to_string())
+            .and_then(|()| std::fs::rename(&tmp, &exit_file))
+        {
+            Ok(()) => exit_recorded = true,
+            Err(e) => eprintln!("clankerd-guestd: recording workload exit: {e}"),
         }
     }
     {
         let mut g = shared.inner.lock().unwrap();
         g.exit_code = Some(code);
         g.workload_pid = None;
+        g.exit_recorded |= exit_recorded;
     }
     shared.cv.notify_all();
 
-    std::thread::sleep(LINGER);
     let deadline = Instant::now() + DRAIN_LIMIT;
-    let mut g = shared.inner.lock().unwrap();
-    while g.streams > 0 && Instant::now() < deadline {
-        g = shared
-            .cv
-            .wait_timeout(g, Duration::from_millis(50))
-            .unwrap()
-            .0;
+    let acknowledged = {
+        let mut g = shared.inner.lock().unwrap();
+        while (!g.exit_recorded
+            || !g.startup_complete
+            || (g.expect_attach && !g.attach_acknowledged))
+            && Instant::now() < deadline
+        {
+            g = shared
+                .cv
+                .wait_timeout(g, Duration::from_millis(50))
+                .unwrap()
+                .0;
+        }
+        (
+            g.exit_recorded,
+            g.startup_complete,
+            !g.expect_attach || g.attach_acknowledged,
+        )
+    };
+
+    if acknowledged != (true, true, true) {
+        eprintln!("clankerd-guestd: shutdown acknowledgment timed out: {acknowledged:?}");
     }
-    drop(g);
+    {
+        let mut g = shared.inner.lock().unwrap();
+
+        while g.streams > 0 && Instant::now() < deadline {
+            g = shared
+                .cv
+                .wait_timeout(g, Duration::from_millis(50))
+                .unwrap()
+                .0;
+        }
+    }
+
     power::exit_machine()
 }
 
@@ -362,6 +405,38 @@ fn serve(
         return;
     }
     match call.method.as_str() {
+        METHOD_STARTUP_COMPLETE => {
+            let mut g = shared.inner.lock().unwrap();
+            let _ = reply(&mut out, Ok(serde_json::json!({})));
+            g.startup_complete = true;
+            drop(g);
+            shared.cv.notify_all();
+        }
+        METHOD_ACKNOWLEDGE_EXIT => match params::<ExitAcknowledgment>(&call) {
+            Ok(ack) => {
+                let mut g = shared.inner.lock().unwrap();
+                if g.exit_code != Some(ack.exit_code) {
+                    let _ = reply(
+                        &mut out,
+                        Err((
+                            ERROR_CONFLICT,
+                            "exit code is not available or does not match".into(),
+                        )),
+                    );
+                } else {
+                    let _ = reply(&mut out, Ok(serde_json::json!({})));
+                    match ack.observer {
+                        ExitObserver::Recorded => g.exit_recorded = true,
+                        ExitObserver::Attached => g.attach_acknowledged = true,
+                    }
+                    drop(g);
+                    shared.cv.notify_all();
+                }
+            }
+            Err(error) => {
+                let _ = reply(&mut out, Err(error));
+            }
+        },
         METHOD_EVENTS => {
             shared.inner.lock().unwrap().streams += 1;
             let _ = events(&mut out, &shared);
@@ -397,6 +472,10 @@ fn serve(
 
 /// `Shutdown` (the stop signal, SIGTERM by default) and `Kill` (any signal) act on the workload only.
 fn signal_workload(call: &Call, shared: &Shared) -> Result<Value, exec::Failure> {
+    if call.method == METHOD_SHUTDOWN {
+        shared.inner.lock().unwrap().expect_attach = false;
+        shared.cv.notify_all();
+    }
     let signal = if call.method == METHOD_SHUTDOWN {
         // Parameters are optional: a bare Shutdown is SIGTERM.
         serde_json::from_value::<ShutdownParams>(call.parameters.clone())
@@ -488,7 +567,11 @@ fn attach(input: BufReader<UnixStream>, mut out: UnixStream, p: Value, shared: &
             return;
         }
     };
-    shared.inner.lock().unwrap().streams += 1;
+    {
+        let mut state = shared.inner.lock().unwrap();
+        state.streams += 1;
+        state.expect_attach = true;
+    }
     let signal = |sig: i32| {
         if let Some(pid) = shared.inner.lock().unwrap().workload_pid {
             // SAFETY: plain signal delivery to the workload we spawned and have not reaped.

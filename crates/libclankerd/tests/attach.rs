@@ -16,6 +16,37 @@ fn interactive(script: &str, tty: bool) -> MachineConfig {
     }
 }
 
+#[test]
+fn attached_status_and_output_survive_machine_shutdown() {
+    for (script, code) in [
+        ("printf output; exit 0", 0),
+        ("printf output; exit 7", 7),
+        ("printf output; kill -TERM $$", 143),
+    ] {
+        for late in [false, true] {
+            let env = Env::new();
+            let machine = env
+                .engine()
+                .create(
+                    Some("attached"),
+                    interactive(script, false),
+                    HostConfig::default(),
+                )
+                .unwrap();
+            let mut streams = machine.start_attached(None).unwrap();
+            if late {
+                assert_eq!(machine.wait().unwrap().exit_code, code);
+            }
+            assert_eq!(streams.wait().unwrap().exit_code, code);
+            assert_eq!(streams.wait().unwrap().exit_code, code);
+            let mut output = String::new();
+            streams.stdout.read_to_string(&mut output).unwrap();
+            assert_eq!(output, "output");
+            assert_eq!(machine.wait().unwrap().exit_code, code);
+        }
+    }
+}
+
 /// Reads until `needle` shows up (or the stream ends), returning what was read.
 fn read_until(r: &mut impl Read, needle: &str) -> String {
     let mut seen = Vec::new();

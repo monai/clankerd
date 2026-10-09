@@ -117,7 +117,7 @@ http_pid=$!
 
 step "boot with a volume, a published port and a host-gateway port"
 "$vmctl" run -d --name smoke -v "$vol:/storage" --volume-size 20G \
-  -p "$host_port:80" --host-gateway-port "$gw_port" "$image" sleep infinity
+  -p "$host_port:8080" --host-gateway-port "$gw_port" "$image" sleep infinity
 retry "the machine to accept exec" exec_up smoke
 
 step "interactive exec: stdin reaches the guest and output returns"
@@ -126,9 +126,13 @@ case "$reply" in *interactive-ok*) echo ok ;; *) fail "interactive exec answered
 
 step "dockerd runs in nftables mode on the stock kernel"
 retry "dockerd" dockerd_up
-if ! guest 'docker info 2>&1 | grep -qi nftables && nft list tables | grep -q docker'; then
+if ! guest 'docker info 2>&1 | grep -qi nftables'; then
   diagnose
-  fail "dockerd is not in nftables mode (see docs/docker-in-machine.md, the nftables failure section). Record the dockerd log above, then evaluate the Kata kernel fallback (krun_set_kernel)."
+  fail "Docker does not report the nftables backend; check the image configuration in docs/docker-in-machine.md."
+fi
+if ! "$vmctl" exec -u root smoke sh -c 'nft list tables | grep -q docker'; then
+  diagnose
+  fail "Docker nftables tables were not found by the root check (see docs/docker-in-machine.md). Record the dockerd log above, then evaluate the Kata kernel fallback (krun_set_kernel) if kernel support is missing."
 fi
 guest 'docker version --format "docker {{.Server.Version}}"'
 
@@ -165,7 +169,7 @@ guest "wget -qO- http://127.0.0.1:$gw_port/hello | grep -q from-host" \
   || fail "the guest cannot reach the host's loopback port $gw_port"
 
 step "stop and start keep the volume and Docker's data"
-guest 'echo persisted > /storage/marker && sync'
+"$vmctl" exec -u root smoke sh -c 'echo persisted > /storage/marker && sync'
 "$vmctl" stop smoke
 "$vmctl" start smoke
 retry "the machine to accept exec" exec_up smoke

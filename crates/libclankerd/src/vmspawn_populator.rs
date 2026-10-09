@@ -90,6 +90,13 @@ impl VmspawnPopulator {
 }
 
 impl DiskPopulator for VmspawnPopulator {
+    fn cached_disk_valid(&self, disk: &Path) -> Result<bool> {
+        if self.dev_local {
+            return Ok(true);
+        }
+        Ok(fs::metadata(disk)?.len() >= crate::rootdisk::ext4_capacity(disk)?)
+    }
+
     fn populate(&self, disk: &Path, size: u64, tar: &mut dyn Read) -> Result<()> {
         // Short names: unix socket paths are limited to ~100 bytes.
         let work = tempfile::Builder::new().prefix("clankerd-pop").tempdir()?;
@@ -97,16 +104,20 @@ impl DiskPopulator for VmspawnPopulator {
         self.prepare_boot_dir(&boot)?;
 
         // A real block device has the disk file's size.
-        if fs::metadata(disk)?.is_file() {
+        let capacity = if fs::metadata(disk)?.is_file() {
             let len = fs::metadata(disk)?.len();
             File::options()
                 .write(true)
                 .open(disk)?
                 .set_len(size.max(len))?;
-        }
+            Some(size.max(len))
+        } else {
+            None
+        };
 
         let socket = work.path().join("g.sock");
         let spec = SpawnSpec {
+            forwarding: None,
             boot_dir: boot,
             console_log: work.path().join(CONSOLE_FILE),
             exit_file: work.path().join("exit"),
@@ -131,7 +142,7 @@ impl DiskPopulator for VmspawnPopulator {
         // The helper holds the only descriptor now; if it dies, connecting fails fast.
         drop(listener);
 
-        let result = (|| {
+        let result: Result<()> = (|| {
             wait_ready(&socket, &mut child, &log)?;
             // In a VM the disk is the guest's first block device; in the
             // stand-in the guest sees the host path.
@@ -141,20 +152,38 @@ impl DiskPopulator for VmspawnPopulator {
                 PathBuf::from(ROOT_DEVICE)
             };
             populate_over(&socket, &device, size, tar)?;
-            wait_for_power_off(&mut child)
+            wait_for_power_off(&mut child)?;
+            if let Some(capacity) = capacity {
+                File::options().write(true).open(disk)?.set_len(capacity)?;
+            }
+            Ok(())
         })();
         if let Err(e) = &result {
             kill(&mut child);
             // Whatever the guest printed helps most when the unpack failed.
             let console = fs::read_to_string(work.path().join(CONSOLE_FILE)).unwrap_or_default();
             let tail: Vec<&str> = console.lines().rev().take(5).collect();
+            let preserved = work.keep();
             if !tail.is_empty() && !e.message().contains("clankerd-vmspawn exited") {
                 let tail: Vec<&str> = tail.into_iter().rev().collect();
                 return Err(Error::new(
                     e.kind(),
-                    format!("{} (guest console: {})", e.message(), tail.join(" | ")),
+                    format!(
+                        "population boot: {} (guest console: {}; diagnostics: {})",
+                        e.message(),
+                        tail.join(" | "),
+                        preserved.display()
+                    ),
                 ));
             }
+            return Err(Error::new(
+                e.kind(),
+                format!(
+                    "population boot: {} (diagnostics: {})",
+                    e.message(),
+                    preserved.display()
+                ),
+            ));
         }
         result
     }
@@ -176,8 +205,12 @@ fn wait_ready(socket: &Path, child: &mut Child, log: &Path) -> Result<()> {
         {
             return Ok(());
         }
-        if let Ok(Some(_)) = child.try_wait() {
-            return Err(explain_exit(&fs::read_to_string(log).unwrap_or_default()));
+        if let Ok(Some(status)) = child.try_wait() {
+            let error = explain_exit(&fs::read_to_string(log).unwrap_or_default());
+            return Err(Error::new(
+                error.kind(),
+                format!("{} (helper {status})", error.message()),
+            ));
         }
         if Instant::now() >= deadline {
             return Err(Error::unavailable(format!(

@@ -25,6 +25,8 @@
 #       machine. Needs network access on the Mac (first run downloads gvproxy).
 set -euo pipefail
 
+export DYLD_FALLBACK_LIBRARY_PATH=${DYLD_FALLBACK_LIBRARY_PATH:-/opt/homebrew/lib:/usr/local/lib:/usr/lib}
+
 root=$(cd "$(dirname "$0")/.." && pwd)
 mode=${1:-all}
 out=${OUT:-$root/build/rust}
@@ -36,6 +38,22 @@ state=$(mktemp -d /tmp/clankerd-boot-check.XXXXXX)
 export CLANKERD_STATE_DIR=$state/state
 export CLANKERD_RUNTIME_DIR=$state/run
 cleanup() {
+  local status=$?
+  if [ "$status" -ne 0 ]; then
+    for m in net dev probe override stubborn second vol1 vol2 binds; do
+      "$vmctl" kill "$m" >/dev/null 2>&1 || true
+    done
+    for machine_dir in "$CLANKERD_STATE_DIR"/machines/*; do
+      [ -d "$machine_dir" ] || continue
+      for log_name in vmspawn-exit vmspawn.log console.log gvproxy.log; do
+        [ -f "$machine_dir/$log_name" ] || continue
+        printf '\n== %s\n' "$machine_dir/$log_name" >&2
+        tail -n 60 "$machine_dir/$log_name" >&2
+      done
+    done
+    printf '\nFailed check: diagnostics preserved in %s\n' "$state" >&2
+    return
+  fi
   for m in net dev probe override stubborn second vol1 vol2 binds; do
     "$vmctl" rm -f "$m" >/dev/null 2>&1 || true
   done
@@ -189,6 +207,19 @@ image_check() {
   [ "$took" -le 10 ] || fail "second create took ${took}s (is the base disk cloned?)"
 }
 
+expect_volume_capacity() {
+  local machine=$1 expected=$2 logical sectors
+  logical=$("$vmctl" volume inspect data | sed -n 's/.*"size": \([0-9]*\).*/\1/p')
+  case "$logical" in '' | *[!0-9]*) fail "volume inspect did not return a numeric capacity" ;; esac
+  [ "$logical" -eq "$expected" ] || fail "volume capacity is $logical, expected $expected"
+  sectors=$("$vmctl" exec "$machine" cat /sys/class/block/vdb/size)
+  case "$sectors" in '' | *[!0-9]*) fail "guest did not return a numeric block-device capacity" ;; esac
+  [ "$sectors" -eq "$((expected / 512))" ] \
+    || fail "guest volume device has $sectors sectors, expected $((expected / 512))"
+  echo "volume capacity: $logical bytes; guest device: $sectors sectors"
+  echo "backing file EOF: $(stat -f %z "$volfile"); host allocation: $(du -h "$volfile" | cut -f1)"
+}
+
 volume_check() {
   [ -x "$out/linux-arm64/mke2fs" ] && [ -x "$out/linux-arm64/resize2fs" ] \
     || fail "mke2fs/resize2fs missing in $out/linux-arm64: run make rust (it builds e2fsprogs)"
@@ -199,17 +230,17 @@ volume_check() {
   "$vmctl" run -d --name vol1 -v data:/storage --volume-size 1G "$image" sleep infinity
   wait_exec vol1
   volfile=$CLANKERD_STATE_DIR/volumes/data/data.ext4
-  [ "$(stat -f %z "$volfile")" -eq 1073741824 ] || fail "volume file is not 1G"
-  echo "allocated on the host: $(du -h "$volfile" | cut -f1) of 1G apparent (formatting should have touched only a little)"
+  expect_volume_capacity vol1 1073741824
   "$vmctl" exec vol1 sh -c 'grep " /storage " /proc/mounts; df -h /storage'
   "$vmctl" exec vol1 sh -c 'grep " /storage " /proc/mounts | grep -q ext4' || fail "/storage is not an ext4 mount"
   logs_have vol1 "formatted new volume"
-  "$vmctl" exec vol1 sh -c 'echo persisted > /storage/marker && sync'
+  "$vmctl" exec -u root vol1 sh -c 'echo persisted > /storage/marker && sync'
 
   step "the data survives stop/start (no reformat)"
   "$vmctl" stop vol1
   "$vmctl" start vol1
   wait_exec vol1
+  expect_volume_capacity vol1 1073741824
   [ "$("$vmctl" exec vol1 cat /storage/marker)" = persisted ] || fail "marker lost across stop/start"
 
   step "the data survives rm without -v, and a new machine reuses the volume"
@@ -218,10 +249,9 @@ volume_check() {
   "$vmctl" volume ls | grep -q '^data ' || fail "volume was removed by plain rm"
 
   step "a larger size takes effect at the next start (resize2fs)"
-  before=$(stat -f %z "$volfile")
   "$vmctl" run -d --name vol2 -v data:/storage:size=2G "$image" sleep infinity
   wait_exec vol2
-  [ "$(stat -f %z "$volfile")" -eq 2147483648 ] || fail "volume file did not grow to 2G (was $before)"
+  expect_volume_capacity vol2 2147483648
   logs_have vol2 "grew volume"
   total=$("$vmctl" exec vol2 sh -c 'stat -f -c "%b * %S" /storage' | bc)
   echo "filesystem bytes: $total"
@@ -239,7 +269,7 @@ volume_check() {
   "$vmctl" run -d --name binds -v "$hostdir":/shared "$image" sleep infinity
   wait_exec binds
   [ "$("$vmctl" exec binds cat /shared/host.txt)" = from-host ] || fail "guest cannot read the host file"
-  "$vmctl" exec binds sh -c 'echo from-guest > /shared/guest.txt && sync'
+  "$vmctl" exec -u root binds sh -c 'echo from-guest > /shared/guest.txt && sync'
   [ "$(cat "$hostdir/guest.txt")" = from-guest ] || fail "host cannot read the guest's file"
   echo host-update > "$hostdir/host.txt"
   [ "$("$vmctl" exec binds cat /shared/host.txt)" = host-update ] || fail "guest does not see the host's update"
@@ -259,7 +289,20 @@ net_check() {
   step "net: DNS resolves and HTTPS works"
   "$vmctl" exec net cat /etc/resolv.conf
   "$vmctl" exec net sh -c 'getent hosts example.com || nslookup example.com' || fail "DNS lookup failed"
-  "$vmctl" exec net sh -c 'wget -qO- https://example.com | head -c 200 || curl -fsS https://example.com | head -c 200' \
+  "$vmctl" exec net sh -c '
+    body=$(
+      if command -v curl >/dev/null 2>&1; then
+        curl -fsS --max-time 15 https://example.com
+      elif command -v wget >/dev/null 2>&1; then
+        wget -T 15 -qO- https://example.com
+      else
+        echo "curl or wget is required for the HTTPS check" >&2
+        exit 127
+      fi
+    ) || exit 1
+    [ -n "$body" ] || exit 1
+    printf "%s\n" "$body" | head -c 200
+  ' \
     || fail "HTTPS fetch failed"
 
   step "net: forwarding sysctls are set"

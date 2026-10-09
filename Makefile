@@ -3,7 +3,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/monai/clankers/clankerd/internal/cli.Version=$(VERSION)
 TARGETS := darwin-arm64 linux-arm64
 
-.PHONY: build test vet clean rust-build rust-sign rust-verify rust-test rust-lint rust
+.PHONY: build test vet clean rust-build rust-sign rust-verify rust-test rust-lint rust rust-coverage rust-coverage-setup
 build:
 	@for t in $(TARGETS); do \
 	  progs="clankerd hostctl"; \
@@ -25,6 +25,11 @@ RUST_OUT := build/rust
 TARGET_DIR := $(or $(CARGO_TARGET_DIR),target)
 DARWIN := aarch64-apple-darwin
 MUSL := aarch64-unknown-linux-musl
+ifeq ($(shell uname -s),Darwin)
+DARWIN_SDKROOT = $$(xcrun --sdk macosx --show-sdk-path)
+else
+DARWIN_SDKROOT = $(CURDIR)/scripts/macos-sdk-stubs
+endif
 
 rust-lint:
 	cargo fmt --check
@@ -33,13 +38,31 @@ rust-lint:
 rust-test:
 	cargo test --workspace
 
+# Branch coverage requires nightly; production builds retain the pinned stable compiler.
+RUST_COVERAGE_TOOLCHAIN := nightly-2026-10-08
+COVERAGE_OUT ?= build/coverage
+COVERAGE_JOBS ?= 2
+
+rust-coverage-setup:
+	rustup toolchain install $(RUST_COVERAGE_TOOLCHAIN) --profile minimal --component llvm-tools-preview
+
+rust-coverage:
+	mkdir -p $(COVERAGE_OUT)
+	CARGO_TARGET_DIR="$(TARGET_DIR)/llvm-cov-target" CARGO_LLVM_COV_TARGET_DIR="$(TARGET_DIR)/llvm-cov-target" \
+	  CARGO_BUILD_JOBS="$(COVERAGE_JOBS)" LLVM_PROFILE_FILE_NAME="clankerd-%p-%m%c.profraw" \
+	  RUSTFLAGS="$(RUSTFLAGS) -Cllvm-args=-runtime-counter-relocation" \
+	  cargo +$(RUST_COVERAGE_TOOLCHAIN) llvm-cov --workspace --branch -j $(COVERAGE_JOBS) --json --output-path $(COVERAGE_OUT)/coverage.json
+	cargo +$(RUST_COVERAGE_TOOLCHAIN) llvm-cov report
+	cargo +$(RUST_COVERAGE_TOOLCHAIN) llvm-cov report --html --output-dir $(COVERAGE_OUT)
+
 # vmctl links Security.framework and CoreFoundation (TLS certificate
 # verification via rustls-platform-verifier). Linux has no macOS SDK, so the
 # darwin link uses an SDK root holding link-time stubs of just the symbols we
 # import (scripts/macos-sdk-stubs); dyld binds them to the real frameworks.
+# On macOS, host build scripts need the complete Apple SDK, including libSystem.
 rust-build:
-	SDKROOT=$(CURDIR)/scripts/macos-sdk-stubs cargo zigbuild --release --target $(DARWIN) -p vmctl -p clankerd-vmspawn
-	cargo zigbuild --release --target $(MUSL) -p clankerd-guestd
+	sdkroot="$(DARWIN_SDKROOT)" && SDKROOT="$$sdkroot" cargo zigbuild --release --target $(DARWIN) -p vmctl -p clankerd-vmspawn
+	cargo build --release --target $(MUSL) --config 'target.$(MUSL).linker="rust-lld"' -p clankerd-guestd
 	mkdir -p $(RUST_OUT)/darwin-arm64 $(RUST_OUT)/linux-arm64
 	cp $(TARGET_DIR)/$(DARWIN)/release/vmctl $(TARGET_DIR)/$(DARWIN)/release/clankerd-vmspawn $(RUST_OUT)/darwin-arm64/
 	cp $(TARGET_DIR)/$(MUSL)/release/clankerd-guestd $(RUST_OUT)/linux-arm64/

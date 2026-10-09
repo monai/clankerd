@@ -1,7 +1,6 @@
 //! Machine configuration, split like Docker's `Config` / `HostConfig`.
 
-use std::net::IpAddr;
-use std::path::PathBuf;
+pub use clankerd_proto::tunnel::{PortBinding, SocketBinding};
 
 use serde::{Deserialize, Serialize};
 
@@ -170,36 +169,4 @@ pub struct HostConfig {
     pub restart_policy: RestartPolicy,
     /// Applies whenever the machine's image is resolved (create, image change).
     pub pull_policy: PullPolicy,
-}
-
-/// A guest TCP port published on the host. The host side is loopback only:
-/// `host_ip` may name a loopback address but never anything else.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PortBinding {
-    /// Loopback address to listen on; `None` means 127.0.0.1.
-    #[serde(default)]
-    pub host_ip: Option<IpAddr>,
-    /// `0` picks a free port (see `PublishedPort::host_port`).
-    pub host_port: u16,
-    pub guest_port: u16,
-}
-
-impl PortBinding {
-    /// `127.0.0.1:host_port` -> guest `guest_port`.
-    pub fn loopback(host_port: u16, guest_port: u16) -> Self {
-        PortBinding {
-            host_ip: None,
-            host_port,
-            guest_port,
-        }
-    }
-}
-
-/// A host unix socket exposed inside the guest.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SocketBinding {
-    /// Where the guest sees the socket, e.g. `/var/run/clankerd.sock`.
-    pub guest_path: PathBuf,
-    /// The host socket it leads to.
-    pub host_path: PathBuf,
 }

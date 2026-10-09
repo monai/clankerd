@@ -11,7 +11,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use clankerd_proto::guest::{Event, METHOD_EVENTS};
+use clankerd_proto::guest::{Event, ExitAcknowledgment, ExitObserver, METHOD_EVENTS};
 use clankerd_proto::spawn::{
     BOOT_GUESTD, BOOT_WORKLOAD, GUEST_VSOCK_PORT, HOST_VSOCK_PORT, SpawnSpec,
 };
@@ -78,6 +78,7 @@ impl Hypervisor for Libkrun {
             .collect();
         // Make init.krun exec guestd as PID 1 instead of forking it.
         cfg.env = vec!["KRUN_INIT_PID1=1".into()];
+
         cfg.console_log = Some(spec.console_log.clone());
         if let Some(net) = &spec.net
             && !spec.populate
@@ -173,6 +174,18 @@ pub fn run(
     listener: UnixListener,
     hypervisor: &dyn Hypervisor,
 ) -> Result<(), String> {
+    let _forwarding = spec
+        .forwarding
+        .as_ref()
+        .map(|config| {
+            libclankerd::forwarding::ForwardingServer::start(
+                config,
+                spec.vsock_socket.clone(),
+                spec.host_socket.clone(),
+            )
+            .map_err(|e| e.to_string())
+        })
+        .transpose()?;
     let guest = spec.vsock_socket.clone();
     std::thread::spawn(move || proxy(listener, guest));
     if !spec.populate {
@@ -216,10 +229,21 @@ fn record_exit(guest: &Path, exit_file: &Path) {
     loop {
         if let Some(code) = wait_for_exit(guest) {
             let tmp = exit_file.with_extension("tmp");
-            if fs::write(&tmp, code.to_string()).is_ok() {
-                let _ = fs::rename(&tmp, exit_file);
+            if let Err(error) =
+                fs::write(&tmp, code.to_string()).and_then(|()| fs::rename(&tmp, exit_file))
+            {
+                eprintln!("clankerd-vmspawn: recording workload exit: {error}");
+            } else if clankerd_proto::guest::acknowledge_exit(
+                guest,
+                ExitAcknowledgment {
+                    exit_code: code,
+                    observer: ExitObserver::Recorded,
+                },
+            )
+            .is_ok()
+            {
+                return;
             }
-            return;
         }
         std::thread::sleep(Duration::from_millis(50));
     }

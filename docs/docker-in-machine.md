@@ -54,14 +54,31 @@ make rust
 scripts/m2-smoke-test.sh
 ```
 
-It boots the image with a 20G volume, publishes guest port 80 on `127.0.0.1:8080` and exposes a host loopback port (18081) to the guest, then walks: interactive exec, dockerd in nftables mode, `docker run -p 8080:80 nginx` fetched from the Mac, internet from a container, a compose project with a user-defined network, the host loopback port from the guest, stop/start with the volume and Docker's images intact, a changed image (`ALT_IMAGE`, default `debian:bookworm-slim`) on the same volume, and a second machine from the cached image. It cleans up after itself. Variables are listed at the top of the script. A fully interactive `vmctl run -it` / `exec -it` session is the one thing it cannot do without a terminal: try that by hand.
+It boots the image with a 20G volume, publishes guest port 8080 on `127.0.0.1:8080` and exposes a host loopback port (18081) to the guest, then walks: interactive exec, dockerd in nftables mode, `docker run -p 8080:80 nginx` fetched from the Mac, internet from a container, a compose project with a user-defined network, the host loopback port from the guest, stop/start with the volume and Docker's images intact, a changed image (`ALT_IMAGE`, default `debian:bookworm-slim`) on the same volume, and a second machine from the cached image. It cleans up after itself. Variables are listed at the top of the script. A fully interactive `vmctl run -it` / `exec -it` session is the one thing it cannot do without a terminal: try that by hand.
 
-## 3. Unverified (look here first if it fails)
+## Validated on the Mac (2026-10-09)
 
-1. **nftables mode on the stock libkrunfw kernel.** The check greps `docker info` for `nftables` and `nft list tables` for a docker table. Docker 29 marks the backend experimental, and the kernel needs nf_tables, nft NAT/masquerade, bridge netfilter and conntrack. On failure the script prints the dockerd log (`/var/log/dockerd.log`).
+`scripts/m2-smoke-dind.sh` passed end to end with Docker 29.9.0 on the stock
+libkrunfw kernel. The image was `127.0.0.1:5050/clankerd-dind:smoke`, derived
+from the official `docker:29-dind` image with nftables, a clankerd entrypoint and
+Docker storage on the named volume. Preparation, build and publishing are in
+`scripts/m2-prepare-dind-image.sh`, `scripts/m2-build-dind-image.sh` and
+`scripts/m2-publish-dind-image.sh`; publishing reuses the existing port-5050
+registry.
+
+Verified: interactive stdin, nftables mode, nginx fetched from the Mac,
+container internet access, Compose on a user-defined network, a host loopback
+service reached from the guest, Docker data and volume persistence across
+restart, image changes preserving the volume, forced removal, and cached
+creation in 0 seconds. This verifies the runtime with the derived DinD image;
+`ghcr.io/monai/clankers:slim` still lacks the Compose plugin observed in testing.
+
+## 3. Implementation checks and remaining verification
+
+1. **nftables mode on the stock libkrunfw kernel.** The check greps `docker info` for `nftables` and runs `nft list tables` as root to find a Docker table. The Docker CLI still runs as the image's user. Docker 29 marks the backend experimental, and the kernel needs nf_tables, nft NAT/masquerade, bridge netfilter and conntrack. On failure the script prints the dockerd log (`/var/log/dockerd.log`).
 2. **Storage driver.** Docker picks overlayfs on the ext4 volume if the kernel has `overlay`; otherwise it falls back to `vfs` (slow, large). `docker info | grep -i storage` shows which.
 3. **cgroup v2 delegation.** guestd delegates controllers; dockerd needs `cpu`, `memory`, `pids` at least.
-4. **Published port chain.** Mac 127.0.0.1:8080 -> vsock tunnel -> guest :80 -> docker-proxy/nftables DNAT -> container. The vmctl `-p` publication is fixed for the machine's life and is re-bound on `start`.
+4. **Published port chain.** Mac 127.0.0.1:8080 -> vsock tunnel -> guest :8080 -> docker-proxy/nftables DNAT -> container :80. The vmctl `-p` publication is fixed for the machine's life and is re-bound on `start`.
 5. **Host-gateway port.** The guest reaches the host's loopback port on its own `127.0.0.1:PORT` (a tunnel, not the gvproxy alias, which stays blocked).
 6. **Name resolution inside containers.** Docker's embedded DNS forwards to the guest's `/etc/resolv.conf` from gvproxy.
 
@@ -72,8 +89,9 @@ Record the result (dockerd log, `docker info`, `zcat /proc/config.gz | grep -E '
 ## Ticket 10 checklist for you
 
 - [ ] Image changes applied and `ghcr.io/monai/clankers:slim` rebuilt
-- [ ] dockerd starts in nftables mode on the stock kernel
-- [ ] `docker run -p` and a compose project with a user-defined network work; containers reach the internet
-- [ ] nginx is reachable from the Mac through the published port
-- [ ] `scripts/m2-smoke-test.sh` passes end to end
-- [ ] If nftables failed: result recorded here and the Kata fallback evaluated
+- [x] dockerd starts in nftables mode on the stock kernel
+- [x] `docker run -p` and a compose project with a user-defined network work; containers reach the internet
+- [x] nginx is reachable from the Mac through the published port
+- [x] `scripts/m2-smoke-dind.sh` passes end to end with the derived DinD image
+- [ ] The default `ghcr.io/monai/clankers:slim` image passes the Compose smoke after its image changes
+- Not needed for this validation: nftables worked on the stock kernel; the Kata fallback was not evaluated.

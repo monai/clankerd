@@ -4,3 +4,5 @@ rust = { version = "1.98.1", targets = "aarch64-apple-darwin,aarch64-unknown-lin
 zig = "0.15.2"
 "aqua:rust-cross/cargo-zigbuild" = "0.23.4"
 "github:indygreg/apple-platform-rs" = { version = "apple-codesign/0.29.0", bin = "rcodesign" }
+
+"github:taiki-e/cargo-llvm-cov" = { version = "v0.9.1", bin = "cargo-llvm-cov" }

@@ -80,6 +80,14 @@ jobs:
           sudo -E env "PATH=$PATH" "HOME=$HOME" mise exec -- cargo test -p libclankerd --test images --test seam_b_images -- --nocapture 2>&1 | tee -a seam-b.log
           if grep -q '^SKIPPED' seam-b.log; then echo "seam B tests were skipped:"; grep '^SKIPPED' seam-b.log; exit 1; fi
 
+      - name: Rust coverage (lines and branches)
+        run: mise exec -- make rust-coverage-setup rust-coverage
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: clankerd-rust-coverage
+          path: build/coverage/**
+
       # Cross-links the darwin binaries, builds the static musl guest binary,
       # signs clankerd-vmspawn and verifies the entitlement.
       - run: mise exec -- make rust

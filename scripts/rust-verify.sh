@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verifies the artifacts produced by `make rust-build` (run on Linux).
+# Verifies the artifacts produced by `make rust-build` on Linux or macOS.
 #   - darwin binaries are arm64 Mach-O
 #   - clankerd-vmspawn links Homebrew's libkrun and carries the hypervisor entitlement in its code signature
 #   - clankerd-guestd is a static aarch64 musl ELF
@@ -7,6 +7,14 @@
 set -euo pipefail
 
 out=${1:-build/rust}
+if command -v readelf >/dev/null 2>&1; then
+  elf_reader=readelf
+elif command -v greadelf >/dev/null 2>&1; then
+  elf_reader=greadelf
+else
+  echo "readelf missing: on macOS, install Homebrew binutils and add its bin directory to PATH" >&2
+  exit 1
+fi
 fail=0
 check() { # description, command...
   local d=$1; shift
@@ -22,7 +30,9 @@ has_entitlement() {
 static_aarch64_elf() { # ELF, machine 0xb7, no PT_INTERP / PT_DYNAMIC
   [ "$(od -An -c -N4 "$1" | tr -d ' ')" = '177ELF' ] || return 1
   [ "$(od -An -tx2 -j18 -N2 "$1" | tr -d ' ')" = "00b7" ] || return 1
-  ! readelf -lW "$1" | grep -qE 'INTERP|DYNAMIC'
+  local headers
+  headers=$("$elf_reader" -lW "$1") || return 1
+  ! printf '%s\n' "$headers" | grep -qE 'INTERP|DYNAMIC'
 }
 
 for b in vmctl clankerd-vmspawn; do

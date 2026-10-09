@@ -85,7 +85,7 @@ pub fn delegate_controllers(root: &Path) -> io::Result<Vec<String>> {
 /// Sets the wall clock to the host's time.
 pub fn set_clock(clock: &Clock) -> io::Result<()> {
     let ts = libc::timespec {
-        tv_sec: clock.secs as libc::time_t,
+        tv_sec: clock.secs as _,
         tv_nsec: clock.nanos as _,
     };
     // SAFETY: clock_settime reads one timespec from a valid pointer.
@@ -124,12 +124,27 @@ pub(crate) fn mount(
     };
     if rc < 0 {
         let e = io::Error::last_os_error();
+        let kernel = kernel_log_tail()
+            .map(|log| format!("\nkernel log:\n{log}"))
+            .unwrap_or_default();
         return Err(io::Error::new(
             e.kind(),
-            format!("mount {fstype} {src} on {target}: {e}"),
+            format!("mount {fstype} {src} on {target}: {e}{kernel}"),
         ));
     }
     Ok(())
+}
+
+fn kernel_log_tail() -> Option<String> {
+    let mut buffer = vec![0u8; 64 * 1024];
+    // SAFETY: SYSLOG_ACTION_READ_ALL reads non-destructively into the allocated buffer.
+    let count = unsafe { libc::klogctl(3, buffer.as_mut_ptr().cast(), buffer.len() as i32) };
+    if count <= 0 {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&buffer[..count as usize]);
+    let lines: Vec<_> = text.lines().collect();
+    Some(lines[lines.len().saturating_sub(16)..].join("\n"))
 }
 
 /// Mounts the root disk, keeps the boot directory reachable at

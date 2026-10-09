@@ -4,6 +4,8 @@
 //! Callers serialise read-modify-write cycles themselves.
 
 use std::fs;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -42,6 +44,40 @@ pub struct Store {
     volumes: PathBuf,
 }
 
+/// Serializes lifecycle transitions across library instances and processes.
+pub(crate) struct LifecycleLock {
+    _file: fs::File,
+}
+
+impl LifecycleLock {
+    pub(crate) fn acquire(dir: &Path, create: bool) -> Result<Self> {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(create)
+            .truncate(false)
+            .mode(0o600)
+            .open(dir.join("lifecycle.lock"))
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    Error::not_found(format!("no such machine: {}", dir.display()))
+                } else {
+                    error.into()
+                }
+            })?;
+        loop {
+            // SAFETY: flock operates on the valid owned file descriptor.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                return Ok(Self { _file: file });
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(error.into());
+            }
+        }
+    }
+}
+
 impl Store {
     pub fn open(state_dir: &Path) -> Result<Self> {
         let machines = state_dir.join("machines");
@@ -59,6 +95,14 @@ impl Store {
 
     pub fn machine_dir(&self, id: &str) -> PathBuf {
         self.machines.join(id)
+    }
+
+    pub(crate) fn lock_lifecycle(&self, id: &str) -> Result<LifecycleLock> {
+        LifecycleLock::acquire(&self.machine_dir(id), true)
+    }
+
+    pub(crate) fn lock_existing_lifecycle(&self, id: &str) -> Result<LifecycleLock> {
+        LifecycleLock::acquire(&self.machine_dir(id), false)
     }
 
     pub fn ids(&self) -> Result<Vec<String>> {

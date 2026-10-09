@@ -10,6 +10,40 @@ use common::*;
 use libclankerd::vmm::{BootHandle, BootSpec};
 use libclankerd::{Engine, ErrorKind, HostConfig, MachineConfig, Status, Vmm};
 
+#[test]
+fn wait_does_not_finish_until_the_guest_process_has_exited() {
+    let env = Env::new();
+    let engine = env.engine();
+    let machine = create(&engine, "finished", "sleep 0.1; exit 0");
+    machine.start().unwrap();
+    let pid = machine.inspect().unwrap().state.pid.unwrap();
+    machine.wait().unwrap();
+    // SAFETY: signal zero only checks process existence.
+    assert_eq!(
+        unsafe { libc::kill(pid as i32, 0) },
+        -1,
+        "wait returned while the guest was still completing shutdown"
+    );
+}
+
+#[test]
+fn stop_timeout_covers_guest_shutdown_after_the_workload_exits() {
+    let env = Env::new();
+    let engine = env.engine();
+    let machine = create(&engine, "shutdown-timeout", "sleep 60");
+    machine.start().unwrap();
+    // An active exec keeps a subscriber open after the main workload stops.
+    let exec = machine
+        .exec_create(libclankerd::ExecConfig {
+            cmd: vec!["sleep".into(), "60".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    let _streams = exec.start().unwrap();
+    machine.stop(Duration::from_millis(100)).unwrap();
+    assert_eq!(machine.wait().unwrap().exit_code, 137);
+}
+
 fn wait_script(marker: &std::path::Path, exit: i32) -> String {
     format!(
         "while [ ! -e {} ]; do sleep 0.05; done; exit {exit}",

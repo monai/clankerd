@@ -28,6 +28,7 @@ use crate::volumes::VolumeStore;
 enum StartKind {
     /// `Machine::start`: a fresh run, the restart count begins again.
     Requested,
+    RequestedAttached,
     /// The restart policy.
     PolicyRestart,
 }
@@ -104,9 +105,22 @@ impl Machine {
         self.start_with(StartKind::Requested)
     }
 
+    /// Starts and reserves the main attachment, including output from a command that exits immediately.
+    pub fn start_attached(&self, size: Option<(u16, u16)>) -> Result<ExecStreams> {
+        let info = self.inspect()?;
+        if !info.config.tty && !info.config.open_stdin {
+            return Err(Error::invalid_parameter(
+                "attached start needs tty or open_stdin",
+            ));
+        }
+        self.start_with(StartKind::RequestedAttached)?;
+        self.attach(size)
+    }
+
     /// A [`StartKind::PolicyRestart`] only proceeds while the machine is still
     /// waiting for that restart.
     fn start_with(&self, kind: StartKind) -> Result<()> {
+        let _lifecycle = self.inner.store.lock_lifecycle(&self.id)?;
         let restart = kind == StartKind::PolicyRestart;
         let info = self.inspect()?;
         {
@@ -118,6 +132,9 @@ impl Machine {
             // A restart whose machine was stopped or removed meanwhile is off.
             let cancelled = restart && status != Status::Restarting;
             if busy || cancelled {
+                if restart {
+                    return Ok(());
+                }
                 return Err(Error::conflict(format!(
                     "machine {} is already running",
                     info.name
@@ -187,6 +204,12 @@ impl Machine {
             None => None,
         };
         let spec = BootSpec {
+            forwarding: clankerd_proto::spawn::ForwardingConfig {
+                control_socket: socket.with_extension("tunnels"),
+                port_bindings: info.host_config.port_bindings.clone(),
+                host_gateway_ports: info.host_config.host_gateway_ports.clone(),
+                socket_bindings: info.host_config.socket_bindings.clone(),
+            },
             machine_id: self.id.clone(),
             dir,
             root_disk,
@@ -194,6 +217,7 @@ impl Machine {
             host_socket: self.inner.host_socket_path(&self.id),
             exit_file: exit_file.clone(),
             workload: Workload {
+                expect_attach: kind == StartKind::RequestedAttached,
                 argv,
                 env: info.config.env.clone(),
                 working_dir: info.config.working_dir.clone(),
@@ -252,12 +276,32 @@ impl Machine {
             s.exit_code = 0;
             s.started_at = Some(SystemTime::now());
             s.finished_at = None;
-            if kind == StartKind::Requested {
+            if kind != StartKind::PolicyRestart {
                 s.restart_count = 0;
             }
         })?;
         self.inner.emit(&self.id, EventAction::Started, None);
-        spawn_monitor(self.inner.clone(), self.id.clone(), ready);
+        if let Err(error) = guest::call(
+            &socket,
+            clankerd_proto::guest::METHOD_STARTUP_COMPLETE,
+            &serde_json::json!({}),
+        ) && read_exit_file(&exit_file).is_none()
+        {
+            kill_group(handle.pid);
+            self.inner.stop_net(&self.id);
+            self.inner.drop_tunnels(&self.id);
+            let _ = fs::remove_file(&socket);
+            self.inner.update_state(&self.id, |s| {
+                s.status = Status::Dead;
+                s.pid = None;
+                s.exit_code = -1;
+                s.finished_at = Some(SystemTime::now());
+                s.error = error.message().to_owned();
+            })?;
+            self.inner.emit(&self.id, EventAction::Exited, Some(-1));
+            return Err(fail(error));
+        }
+        spawn_monitor(self.inner.clone(), self.id.clone(), ready, Some(handle.pid));
         Ok(())
     }
 
@@ -336,6 +380,11 @@ impl Machine {
             let _ = fs::remove_file(&part);
             return Err(e.into());
         }
+        match fs::remove_file(dir.join(crate::rootdisk::ROOT_CAPACITY)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
         record.config = config;
         record.requested = Some(requested);
         record.image_id = image.id;
@@ -407,7 +456,9 @@ impl Machine {
                 }),
             },
         )?;
-        ExecStreams::open(reader, record.config.open_stdin)
+        let mut streams = ExecStreams::open(reader, record.config.open_stdin)?;
+        streams.acknowledge_workload_exit(self.inner.socket_path(&self.id));
+        Ok(streams)
     }
 
     fn tunnels(&self) -> Result<Arc<MachineTunnels>> {
@@ -421,10 +472,8 @@ impl Machine {
     /// Publishes a guest port on host loopback while the machine runs.
     /// Dropping the returned handle closes the listener.
     ///
-    /// Known limitation: the listeners live in the calling process. The machine
-    /// survives that process exiting, but its published ports (and host-gateway
-    /// ports and socket bindings) do not; a new process gets them back only by
-    /// restarting the machine.
+    /// With VmspawnVmm the helper owns the listener; dropping this handle
+    /// asks the helper to close it.
     pub fn publish(&self, binding: PortBinding) -> Result<PublishedPort> {
         validate_port_binding(&binding)?;
         self.tunnels()?.publish(&binding)
@@ -522,6 +571,7 @@ impl Machine {
             .filter(|s| !s.is_empty())
             .and_then(|s| crate::signal::parse_signal(s).ok())
             .unwrap_or(libc::SIGTERM);
+
         let asked = guest::call(
             &self.inner.socket_path(&self.id),
             METHOD_SHUTDOWN,
@@ -530,6 +580,7 @@ impl Machine {
         if asked.is_ok() && self.wait_until(Some(deadline), WaitFor::RunEnd)?.is_some() {
             return Ok(());
         }
+
         match self.kill(libc::SIGKILL) {
             // It ended between the check and the kill.
             Err(e) if e.kind() == ErrorKind::Conflict => Ok(()),
@@ -610,6 +661,7 @@ impl Machine {
     /// Deletes the machine and its state, keeping its named volume. A running
     /// machine needs `force`.
     pub fn remove(&self, force: bool) -> Result<()> {
+        let _lifecycle = self.inner.store.lock_lifecycle(&self.id)?;
         let mut starting = self.inner.lock();
         let (record, state) = self.inner.store.load(&self.id)?;
         if starting.contains(&self.id) {
@@ -627,6 +679,7 @@ impl Machine {
             }
             if let Some(pid) = state.pid {
                 kill_group(pid);
+                wait_for_helper_exit(pid);
             }
         }
         self.inner.stop_net(&self.id);
@@ -685,7 +738,7 @@ fn wait_ready(
 }
 
 /// Follows the guest's events until the workload exits, then records the result.
-fn spawn_monitor(inner: Arc<Inner>, id: String, ready: Ready) {
+fn spawn_monitor(inner: Arc<Inner>, id: String, ready: Ready, run_pid: Option<u32>) {
     std::thread::spawn(move || {
         let exit_file = inner.store.machine_dir(&id).join("exit");
         let code = match ready {
@@ -698,20 +751,51 @@ fn spawn_monitor(inner: Arc<Inner>, id: String, ready: Ready) {
                 }
             },
         };
-        record_exit(&inner, &id, code);
+
+        // The workload's exit event precedes guestd's sync, unmount and power-off.
+        // Drop its event stream before waiting, so guestd can drain subscribers.
+        if let Some(pid) = run_pid {
+            wait_for_helper_exit(pid);
+        }
+        record_exit(&inner, &id, code, run_pid);
     });
+}
+
+fn wait_for_helper_exit(pid: u32) {
+    loop {
+        // SAFETY: signal zero only checks the helper's existence.
+        let alive = pid > 0 && unsafe { libc::kill(pid as i32, 0) } == 0;
+        if !alive {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// Persists the end of a run. `None` means the guest vanished: status `dead`.
 /// When the machine's restart policy asks for it the machine goes to
 /// `restarting` instead and a restart is scheduled.
-fn record_exit(inner: &Arc<Inner>, id: &str, code: Option<i32>) {
+fn record_exit(inner: &Arc<Inner>, id: &str, code: Option<i32>, run_pid: Option<u32>) {
+    let Ok(_lifecycle) = inner.store.lock_existing_lifecycle(id) else {
+        return;
+    };
+    let Ok(state) = inner.store.load_state(id) else {
+        return;
+    };
+    if state.status != Status::Running || state.pid != run_pid {
+        return;
+    }
+
     // Release host resources first: whoever sees the new state sees them gone.
     inner.drop_tunnels(id);
     inner.stop_net(id);
     let _ = fs::remove_file(inner.socket_path(id));
     // A machine whose helper we killed ended by SIGKILL: Docker's 137.
-    let code = code.or_else(|| inner.forced().remove(id).then_some(137));
+    let code = if inner.forced().remove(id) {
+        Some(137)
+    } else {
+        code
+    };
     let policy = inner
         .store
         .load(id)
@@ -801,6 +885,11 @@ fn spawn_restarter(inner: Arc<Inner>, id: String, delay: Duration) {
 
 /// Starts the host side of the machine's tunnels and its configured bindings.
 fn start_tunnels(inner: &Inner, id: &str, host: &HostConfig, mode: Tunnels) -> Result<()> {
+    if inner.vmm.owns_forwarding() {
+        let tunnels = MachineTunnels::remote(inner.socket_path(id).with_extension("tunnels"))?;
+        inner.tunnels().insert(id.to_owned(), tunnels);
+        return Ok(());
+    }
     let tunnels = MachineTunnels::start(inner.socket_path(id), inner.host_socket_path(id))?;
     tunnels.publish_configured(host)?;
     if mode == Tunnels::Open {
@@ -831,11 +920,21 @@ pub(crate) fn reattach(inner: &Arc<Inner>, id: &str) {
             // Best effort: ports that cannot be re-published are simply absent.
             let _ = start_tunnels(inner, id, &record.host_config, Tunnels::Reattach);
         }
-        spawn_monitor(inner.clone(), id.to_owned(), Ready::Stream(stream));
+        let _ = guest::call(
+            &inner.socket_path(id),
+            clankerd_proto::guest::METHOD_STARTUP_COMPLETE,
+            &serde_json::json!({}),
+        );
+        spawn_monitor(
+            inner.clone(),
+            id.to_owned(),
+            Ready::Stream(stream),
+            state.pid,
+        );
         return;
     }
     let code = read_exit_file(&inner.store.machine_dir(id).join("exit"));
-    record_exit(inner, id, code);
+    record_exit(inner, id, code, state.pid);
 }
 
 /// Forcefully ends the VMM helper and everything in its process group.

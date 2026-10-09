@@ -6,6 +6,61 @@ pub const INTERFACE: &str = "io.clankerd.Guest";
 
 /// Streaming method: replies `ready` first, then `exited` when the workload ends.
 pub const METHOD_EVENTS: &str = "io.clankerd.Guest.Events";
+/// The library has completed startup and can recover the workload's exit result.
+pub const METHOD_STARTUP_COMPLETE: &str = "io.clankerd.Guest.StartupComplete";
+/// Confirms the helper recorded an exit code, or an attached client received it.
+pub const METHOD_ACKNOWLEDGE_EXIT: &str = "io.clankerd.Guest.AcknowledgeExit";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitObserver {
+    Recorded,
+    Attached,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ExitAcknowledgment {
+    pub exit_code: i32,
+    pub observer: ExitObserver,
+}
+
+/// Sends an exit acknowledgment while keeping the connection open for delivery.
+/// Power-off may close the reply transport after the guest consumes the acknowledgment.
+pub fn acknowledge_exit(socket: &std::path::Path, ack: ExitAcknowledgment) -> std::io::Result<()> {
+    use crate::varlink::{self, Call, Reply};
+    use std::io::{self, BufReader};
+    use std::os::unix::net::UnixStream;
+    let mut connection = UnixStream::connect(socket)?;
+    connection.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+    varlink::write(
+        &mut connection,
+        &Call {
+            method: METHOD_ACKNOWLEDGE_EXIT.into(),
+            parameters: serde_json::to_value(ack)?,
+            more: false,
+            upgrade: false,
+        },
+    )?;
+    let reply = match varlink::read::<Reply, _>(&mut BufReader::new(connection)) {
+        Ok(reply) => reply,
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::ConnectionReset | io::ErrorKind::UnexpectedEof
+            ) =>
+        {
+            None
+        }
+        Err(e) => return Err(e),
+    };
+    match reply {
+        Some(reply) if reply.error.is_some() => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "guest rejected exit acknowledgment",
+        )),
+        _ => Ok(()),
+    }
+}
 
 pub const ERROR_METHOD_NOT_FOUND: &str = "org.varlink.service.MethodNotFound";
 
@@ -40,6 +95,9 @@ pub struct Workload {
     /// `tty` the workload's output goes to the console only.
     #[serde(default)]
     pub open_stdin: bool,
+    /// Reserve a foreground attachment until its client consumes terminal status.
+    #[serde(default)]
+    pub expect_attach: bool,
 }
 
 /// One mount guestd performs at boot (`--boot` only).

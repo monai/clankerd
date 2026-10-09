@@ -8,7 +8,10 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
-use clankerd_proto::guest::{Event, METHOD_EVENTS};
+use clankerd_proto::guest::{
+    Event, ExitAcknowledgment, ExitObserver, METHOD_ACKNOWLEDGE_EXIT, METHOD_EVENTS,
+    METHOD_STARTUP_COMPLETE,
+};
 use clankerd_proto::varlink::{self, Call, Reply};
 
 fn config(dir: &std::path::Path, script: &str) -> std::path::PathBuf {
@@ -43,6 +46,10 @@ fn runs_without_an_exit_file_and_reports_exit_over_events() {
     }
     let mut child = cmd.spawn().unwrap();
 
+    // A slow observer must still recover an immediate exit beyond the old 300 ms linger.
+    std::thread::sleep(std::time::Duration::from_millis(350));
+    assert!(child.try_wait().unwrap().is_none());
+
     let mut conn = UnixStream::connect(&sock).unwrap();
     varlink::write(
         &mut conn,
@@ -63,6 +70,46 @@ fn runs_without_an_exit_file_and_reports_exit_over_events() {
         }
     }
     assert_eq!(last, Some(Event::Exited { exit_code: 7 }));
+    let rpc = |method: &str, parameters| {
+        let mut connection = UnixStream::connect(&sock).unwrap();
+        varlink::write(
+            &mut connection,
+            &Call {
+                method: method.into(),
+                parameters,
+                more: false,
+                upgrade: false,
+            },
+        )
+        .unwrap();
+        varlink::read::<Reply, _>(&mut BufReader::new(connection))
+            .unwrap()
+            .unwrap()
+    };
+    let bad = rpc(
+        METHOD_ACKNOWLEDGE_EXIT,
+        serde_json::to_value(ExitAcknowledgment {
+            exit_code: 3,
+            observer: ExitObserver::Recorded,
+        })
+        .unwrap(),
+    );
+    assert!(bad.error.is_some());
+    assert!(child.try_wait().unwrap().is_none());
+    assert!(
+        rpc(METHOD_STARTUP_COMPLETE, serde_json::json!({}))
+            .error
+            .is_none()
+    );
+    assert!(child.try_wait().unwrap().is_none());
+    clankerd_proto::guest::acknowledge_exit(
+        &sock,
+        ExitAcknowledgment {
+            exit_code: 7,
+            observer: ExitObserver::Recorded,
+        },
+    )
+    .unwrap();
     assert!(child.wait().unwrap().success());
 }
 

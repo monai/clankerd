@@ -3,10 +3,48 @@
 
 mod common;
 
-use std::path::PathBuf;
 use std::process::Command;
 
-use common::{guestd, vmctl};
+use common::{built, command, guestd, vmctl};
+
+#[test]
+fn immediate_foreground_commands_preserve_output_and_exit_codes() {
+    let dir = tempfile::Builder::new().prefix("vm").tempdir().unwrap();
+    let guestd = guestd();
+    let helper = built("clankerd-vmspawn");
+    for i in 0..10 {
+        let name = format!("quick-{i}");
+        let mut run = command(
+            dir.path(),
+            &guestd,
+            &[
+                "run",
+                "-i",
+                "--name",
+                &name,
+                "img",
+                "/bin/sh",
+                "-c",
+                "printf quick-output; exit 7",
+            ],
+        );
+        if i >= 5 {
+            run.env_remove("CLANKERD_DEV_GUESTD")
+                .env("CLANKERD_VMSPAWN", &helper)
+                .env("CLANKERD_GUESTD", &guestd)
+                .env("CLANKERD_VMSPAWN_DEV_LOCAL", "1")
+                .env("CLANKERD_BOOT_DIR_ROOT", "true");
+        }
+        let output = run.output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(7),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), "quick-output");
+    }
+}
 
 #[test]
 fn logs_show_workload_output() {
@@ -66,19 +104,6 @@ fn run_ps_inspect_rm() {
     assert!(v(&["rm", "ok", "three"]).status.success());
     let all = String::from_utf8(v(&["ps", "-a"]).stdout).unwrap();
     assert_eq!(all.lines().count(), 1, "{all}");
-}
-
-fn built(package: &str) -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let profile_dir = exe.parent().unwrap().parent().unwrap().to_path_buf();
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut cmd = Command::new(cargo);
-    cmd.args(["build", "-q", "-p", package]);
-    if profile_dir.file_name().is_some_and(|n| n == "release") {
-        cmd.arg("--release");
-    }
-    assert!(cmd.status().unwrap().success());
-    profile_dir.join(package)
 }
 
 #[test]

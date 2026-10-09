@@ -52,6 +52,51 @@ fn volume_file(env: &Env, name: &str) -> PathBuf {
 }
 
 #[test]
+fn volume_capacity_and_data_survive_discard_and_restart() {
+    use std::io::{Read, Write};
+    for discarded in [1, 4096, 65536, MIB] {
+        let env = Env::new();
+        let (engine, _) = recording(&env);
+        let capacity = 32 * MIB;
+        engine.create_volume("data", Some(capacity)).unwrap();
+        let machine = engine
+            .create(
+                Some("a"),
+                sh("sleep 60"),
+                with_mounts(vec![Mount::volume("data", "/storage")]),
+            )
+            .unwrap();
+        let path = volume_file(&env, "data");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"marker")
+            .unwrap();
+        machine.start().unwrap();
+        for _ in 0..2 {
+            machine.stop(std::time::Duration::from_secs(10)).unwrap();
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_len(capacity - discarded)
+                .unwrap();
+            assert_eq!(engine.volume("data").unwrap().size, capacity);
+            machine.start().unwrap();
+            assert_eq!(std::fs::metadata(&path).unwrap().len(), capacity);
+            let mut marker = [0; 6];
+            std::fs::File::open(&path)
+                .unwrap()
+                .read_exact(&mut marker)
+                .unwrap();
+            assert_eq!(&marker, b"marker");
+        }
+        machine.stop(std::time::Duration::from_secs(10)).unwrap();
+    }
+}
+
+#[test]
 fn a_new_volume_is_a_sparse_file_of_the_requested_size() {
     let env = Env::new();
     let (engine, _) = recording(&env);

@@ -62,13 +62,13 @@ pub(crate) fn validate_host_config(h: &HostConfig) -> Result<()> {
 
 /// A thread that accepts in a polling loop and can be stopped synchronously,
 /// so the listener it owns is closed by the time `stop` returns.
-struct Acceptor {
+pub(crate) struct Acceptor {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Acceptor {
-    fn spawn(mut accept_once: impl FnMut() -> bool + Send + 'static) -> Self {
+    pub(crate) fn spawn(mut accept_once: impl FnMut() -> bool + Send + 'static) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let thread = std::thread::spawn(move || {
@@ -122,7 +122,8 @@ fn dial_guest(
 /// Dropping it closes the listener (established connections finish).
 pub struct PublishedPort {
     addr: SocketAddr,
-    _acceptor: Acceptor,
+    _acceptor: Option<Acceptor>,
+    remote: Option<(PathBuf, u64)>,
 }
 
 impl PublishedPort {
@@ -154,7 +155,8 @@ impl PublishedPort {
         });
         Ok(PublishedPort {
             addr,
-            _acceptor: acceptor,
+            _acceptor: Some(acceptor),
+            remote: None,
         })
     }
 
@@ -165,6 +167,14 @@ impl PublishedPort {
 
     pub fn host_port(&self) -> u16 {
         self.addr.port()
+    }
+}
+
+impl Drop for PublishedPort {
+    fn drop(&mut self) {
+        if let Some((socket, id)) = &self.remote {
+            let _ = crate::forwarding::call(socket, "Remove", serde_json::json!({"id": id}));
+        }
     }
 }
 
@@ -288,6 +298,7 @@ pub struct GuestBinding {
     id: u64,
     target: Target,
     allowed: Allowed,
+    remote: Option<PathBuf>,
 }
 
 impl GuestBinding {
@@ -299,6 +310,10 @@ impl GuestBinding {
 
 impl Drop for GuestBinding {
     fn drop(&mut self) {
+        if let Some(socket) = &self.remote {
+            let _ = crate::forwarding::call(socket, "Remove", serde_json::json!({"id": self.id}));
+            return;
+        }
         let _ = guest_call(
             &self.guest_socket,
             METHOD_UNLISTEN,
@@ -319,7 +334,8 @@ fn revoke(allowed: &Allowed, target: &Target) {
 pub(crate) struct MachineTunnels {
     guest_socket: PathBuf,
     allowed: Allowed,
-    _server: HostServer,
+    _server: Option<HostServer>,
+    control_socket: Option<PathBuf>,
     /// Ports published by the machine's configuration; closed with the machine.
     configured: Mutex<Vec<PublishedPort>>,
 }
@@ -331,7 +347,19 @@ impl MachineTunnels {
         Ok(Arc::new(MachineTunnels {
             guest_socket,
             allowed,
-            _server: server,
+            _server: Some(server),
+            control_socket: None,
+            configured: Mutex::default(),
+        }))
+    }
+
+    pub(crate) fn remote(socket: PathBuf) -> Result<Arc<Self>> {
+        crate::forwarding::wait_ready(&socket)?;
+        Ok(Arc::new(Self {
+            guest_socket: PathBuf::new(),
+            allowed: Allowed::default(),
+            _server: None,
+            control_socket: Some(socket),
             configured: Mutex::default(),
         }))
     }
@@ -359,6 +387,15 @@ impl MachineTunnels {
     }
 
     pub fn publish(&self, binding: &PortBinding) -> Result<PublishedPort> {
+        if let Some(socket) = &self.control_socket {
+            let reply = crate::forwarding::call(socket, "Publish", serde_json::to_value(binding)?)?;
+            let (id, addr): (u64, SocketAddr) = serde_json::from_value(reply)?;
+            return Ok(PublishedPort {
+                addr,
+                _acceptor: None,
+                remote: Some((socket.clone(), id)),
+            });
+        }
         PublishedPort::bind(binding, self.guest_socket.clone())
     }
 
@@ -378,6 +415,23 @@ impl MachineTunnels {
     }
 
     fn listen(&self, listen: Target, target: Target) -> Result<GuestBinding> {
+        if let Some(socket) = &self.control_socket {
+            let reply = crate::forwarding::call(
+                socket,
+                "Listen",
+                serde_json::to_value(Listen {
+                    listen,
+                    target: target.clone(),
+                })?,
+            )?;
+            return Ok(GuestBinding {
+                guest_socket: PathBuf::new(),
+                id: serde_json::from_value(reply)?,
+                target,
+                allowed: self.allowed.clone(),
+                remote: Some(socket.clone()),
+            });
+        }
         self.allowed.lock().unwrap().push(target.clone());
         let reply = guest_call(
             &self.guest_socket,
@@ -396,6 +450,7 @@ impl MachineTunnels {
                 id,
                 target,
                 allowed: self.allowed.clone(),
+                remote: None,
             }),
             Err(e) => {
                 revoke(&self.allowed, &target);

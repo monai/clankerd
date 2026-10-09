@@ -102,6 +102,27 @@ fn a_helper_that_dies_explains_why() {
     assert!(err.message().contains("entitlement is missing"), "{err}");
 }
 
+#[test]
+fn a_silent_helper_crash_reports_its_signal_and_preserves_diagnostics() {
+    let env = Env::new();
+    let guest = guest_dir();
+    let fake = env.root().join("fake-vmspawn");
+    std::fs::write(&fake, "#!/bin/sh\nkill -TERM $$\n").unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let target = env.root().join("disk");
+    std::fs::create_dir(&target).unwrap();
+    let err = VmspawnPopulator::new(fake, guest.path())
+        .populate(&target, 1 << 30, &mut Cursor::new(Vec::new()))
+        .unwrap_err();
+    assert!(err.message().contains("population boot:"), "{err}");
+    assert!(err.message().contains("signal: 15"), "{err}");
+    let diagnostics = err.message().rsplit_once("diagnostics: ").unwrap().1;
+    let diagnostics = Path::new(diagnostics.trim_end_matches(')'));
+    assert!(diagnostics.join("vmspawn.json").exists());
+    assert!(diagnostics.join("vmspawn.log").exists());
+    std::fs::remove_dir_all(diagnostics).unwrap();
+}
+
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn the_real_helper_off_macos_explains_it_cannot_boot() {
