@@ -39,7 +39,7 @@ mod unpack;
 mod vsock;
 
 use std::io::BufReader;
-use std::os::fd::FromRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
@@ -616,7 +616,39 @@ fn events(out: &mut UnixStream, shared: &Shared) -> std::io::Result<()> {
         if let Some(code) = g.exit_code {
             break code;
         }
-        g = shared.cv.wait(g).unwrap();
+        // Events has no further client input. Observe its read half so a
+        // detached observer releases both descriptors and its worker thread,
+        // even when the workload has no events to wake the condition variable.
+        let mut byte = 0u8;
+        // SAFETY: out owns a live stream descriptor and byte is writable storage.
+        let received = unsafe {
+            libc::recv(
+                out.as_raw_fd(),
+                (&mut byte as *mut u8).cast(),
+                1,
+                libc::MSG_PEEK | libc::MSG_DONTWAIT,
+            )
+        };
+        if received == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionAborted,
+                "event observer disconnected",
+            ));
+        }
+        if received < 0 {
+            let error = std::io::Error::last_os_error();
+            if !matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+            ) {
+                return Err(error);
+            }
+        }
+        g = shared
+            .cv
+            .wait_timeout(g, Duration::from_millis(100))
+            .unwrap()
+            .0;
     };
     drop(g);
     varlink::write(out, &reply(&Event::Exited { exit_code: code }, false))

@@ -13,14 +13,33 @@ export VMNET_TEST_LIBRARY_PATH=${DYLD_FALLBACK_LIBRARY_PATH:-/opt/homebrew/lib:/
 export CLANKERD_VMSPAWN=$root/scripts/fixtures/vmnet-lifetimes.py
 export CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
 export CLANKERD_VMNET_HELPER=${CLANKERD_VMNET_HELPER:-/opt/vmnet-helper/bin/vmnet-helper}
+echo "Mac inherited open-file limits soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
+brew list --versions libkrun libkrunfw || true
 name=vmnet-lifetimes
 failed=0
 cleanup() {
   "$vmctl" rm -f "$name" >/dev/null 2>&1 || true
   if [ "$failed" = 1 ]; then echo "Retained diagnostics: $work"; else rm -rf "$work"; fi
 }
+sample_native() {
+  phase=$1
+  if [ -f "$work/native.pid" ]; then
+    native_pid=$(cat "$work/native.pid")
+    echo "FD sample $phase native pid=$native_pid"
+    cat "$work/native-limits"
+    lsof -nP -p "$native_pid" > "$work/native-fds-$phase.txt" 2>&1 || true
+    awk 'NR>1 && $4 ~ /^[0-9]/ {count[$5]++; n++} END {printf "native descriptors=%d",n; for (kind in count) printf " %s=%d",kind,count[kind]; print ""}' "$work/native-fds-$phase.txt"
+  fi
+}
+failure_diagnostics() {
+  failed=1
+  sample_native failure
+  sleep 10 # Longer than libkrun's ordinary deferred socket reap interval.
+  sample_native failure-idle
+  find "$work/state" -name "*.log" -exec tail -100 {} \;
+}
 trap cleanup EXIT
-trap 'failed=1; find "$work/state" -name "*.log" -exec tail -80 {} \;' ERR
+trap failure_diagnostics ERR
 python3 "$CLANKERD_VMSPAWN" --self-test
 services=$(cat "$root/scripts/fixtures/vmnet-ipv6-services.py")
 "$vmctl" run -d --name "$name" "${IMAGE:-python:3.13-alpine}" python3 -c "$services" server
@@ -92,7 +111,7 @@ PY
 }
 wait_for() {
   for attempt in $(seq 1 "$2"); do
-    if check "$1" > "$work/check.log" 2>&1; then cat "$work/check.log"; return; fi
+    if check "$1" > "$work/check.log" 2>&1; then cat "$work/check.log"; sample_native "$1"; return; fi
     sleep 1
   done
   cat "$work/check.log" >&2
@@ -100,6 +119,7 @@ wait_for() {
 }
 # Initial observation must precede T1, rather than silently skip the old DNS.
 wait_for initial 6
+"$vmctl" exec "$name" python3 -c 'import os; print("guestd descriptors", len(os.listdir("/proc/1/fd")), "threads", len(os.listdir("/proc/1/task")))'
 wait_for renewed 30
 wait_for renewed6 30
 "$vmctl" inspect "$name" > "$work/connected.json"
@@ -107,6 +127,7 @@ python3 "$root/scripts/fixtures/vmnet-ipv6-services.py" host "$work/connected.js
 touch "$work/stop-ra"
 wait_for deprecated 12
 wait_for ra-expired 20
+"$vmctl" exec "$name" python3 -c 'import os; print("guestd descriptors", len(os.listdir("/proc/1/fd")), "threads", len(os.listdir("/proc/1/task")))'
 touch "$work/nak"
 wait_for nak-reacquired 35
 "$vmctl" inspect "$name" > "$work/connected.json"

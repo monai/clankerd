@@ -10,6 +10,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import resource
 import signal
 import socket
 import struct
@@ -257,6 +258,9 @@ def main():
         modified.write_text(json.dumps(spec))
         args[args.index('--spec') + 1] = str(modified)
         child = subprocess.Popen([binary, *args], pass_fds=(3,))
+        Path(os.environ['VMNET_LIFETIME_CONTROL'], 'native.pid').write_text(str(child.pid))
+        limits = resource.getrlimit(resource.RLIMIT_NOFILE)
+        Path(os.environ['VMNET_LIFETIME_CONTROL'], 'native-limits').write_text(f'inherited native RLIMIT_NOFILE soft={limits[0]} hard={limits[1]}\n')
         print(f'lifetime fixture {time.time():.3f}: wrapper pid={os.getpid()} native pid={child.pid}', flush=True)
         transport_error = None
         def stop(signum, _):
