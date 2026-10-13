@@ -58,5 +58,36 @@ fn real_main() -> Result<(), String> {
     } else {
         Box::new(Libkrun)
     };
+    reserve_descriptor_capacity()?;
     run(&spec, listener, hypervisor.as_ref())
+}
+
+fn reserve_descriptor_capacity() -> Result<(), String> {
+    // The VMM owns virtio-fs pipes, vsock listeners and transient management
+    // connections. macOS commonly inherits a soft limit of only 256.
+    // Raise this process alone, preserving its hard limit and any larger soft limit.
+    // SAFETY: initialized writable rlimit storage is passed to getrlimit.
+    let mut limits: libc::rlimit = unsafe { std::mem::zeroed() };
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) } != 0 {
+        return Err(format!(
+            "reading VMM open-file limit: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let desired = limits.rlim_cur.max(4096.min(limits.rlim_max));
+    if desired != limits.rlim_cur {
+        limits.rlim_cur = desired;
+        // SAFETY: limits preserves the inherited hard bound and soft <= hard.
+        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limits) } != 0 {
+            return Err(format!(
+                "reserving VMM descriptor capacity: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+    eprintln!(
+        "clankerd-vmspawn: open-file limit soft={} hard={}",
+        limits.rlim_cur, limits.rlim_max
+    );
+    Ok(())
 }
