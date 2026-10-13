@@ -29,6 +29,19 @@ pub fn evidence(source: &str) -> bool {
         .is_some_and(|data| data.evidence)
 }
 
+pub fn clear() -> io::Result<()> {
+    let state = Path::new(STATE);
+    let _lock = lock(state)?;
+    for source in ["dhcp", "dhcp6", "ra"] {
+        match fs::remove_file(state.join(format!("{source}.json"))) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    refresh_locked()
+}
+
 pub fn run() -> io::Result<()> {
     let env: HashMap<String, String> = std::env::vars().collect();
     let interface = env.get("interface").map(String::as_str).unwrap_or("");
