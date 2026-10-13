@@ -254,6 +254,17 @@ pub struct HostConfig {
 }
 
 pub(crate) fn validate_bridge_config(host: &HostConfig) -> crate::error::Result<()> {
+    if host.network_mode == NetworkMode::Bridged && !host.shared_peer_participation {
+        return Err(crate::error::Error::invalid_parameter(
+            "shared peer isolation does not apply to a bridged physical interface",
+        ));
+    }
+    if host.network_mode == NetworkMode::Bridged && host.shared_network != SharedNetwork::default()
+    {
+        return Err(crate::error::Error::invalid_parameter(
+            "shared network selection does not apply to a bridged physical interface",
+        ));
+    }
     match (&host.network_mode, &host.bridge_interface) {
         (NetworkMode::Bridged, Some(interface))
             if !interface.is_empty()
