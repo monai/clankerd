@@ -24,6 +24,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'failed=1; find "$work/state" -name "*.log" -exec tail -100 {} \;' ERR
 fixture=$root/scripts/fixtures/vmnet-recovery-services.py
+python3 "$root/scripts/fixtures/vmnet-recovery-unix-self-test.py"
 python3 "$fixture" unix-server "$work/host.sock" &
 host_pid=$!
 services=$(cat "$root/scripts/fixtures/vmnet-ipv6-services.py")

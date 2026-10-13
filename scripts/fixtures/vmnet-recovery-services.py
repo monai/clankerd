@@ -63,7 +63,11 @@ if __name__ == '__main__':
         while True:
             connection, _ = listener.accept()
             with connection:
-                connection.sendall(connection.recv(4096))
+                try:
+                    while data := connection.recv(4096):
+                        connection.sendall(data)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
     elif action == 'bind':
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(10)
@@ -100,7 +104,7 @@ if __name__ == '__main__':
             connection.settimeout(5)
             connection.connect('/tmp/recovery-binding.sock')
             connection.sendall(b'recovery-unix')
-            assert connection.recv(4096) == b'recovery-unix'
+            assert exact(connection, len(b'recovery-unix')) == b'recovery-unix'
         print('PASS host Unix binding while Ethernet is unavailable')
     elif action == 'kill-client':
         clients = [int(entry.name) for entry in Path('/proc').iterdir()
