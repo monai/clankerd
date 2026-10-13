@@ -458,3 +458,40 @@ network survival after CLI exit, stop/restart and removal of sockets/PID records
 Inspect `console.log`, `vmspawn.log`, and `vmnet-helper.log` on failures. Packet
 delivery on macOS 15 is unverified until this gate passes. IPv6 readiness, renewal,
 additional modes and isolation remain subsequent slices of the parent spec.
+
+## Dual-stack automatic configuration
+
+The boot directory also carries checksum-pinned static dhcpcd 10.3.0 and a
+binary guestd resolver hook. Guest images provide neither a DHCP executable nor
+a shell for networking. dhcpcd handles DHCPv4, IPv6 RA/SLAAC and DHCPv6 on eth0;
+its userspace RA engine works while guest forwarding is enabled. No global
+address-family preference or application address-selection override is installed.
+
+Startup requires one usable family: an address past DAD, carrier and received
+DHCP/RA configuration or an IPv6 peer echo reply. A kernel-generated link-local
+address by itself does not launch the workload. Local-only connectivity needs
+no default gateway. DNS contributions from DHCPv4, DHCPv6 and RA remain separate;
+link-local DNS servers retain their interface scope and RA DNS lifetimes are
+honored. The bundled client remains running independently of the workload.
+
+`vmctl inspect` includes live address details (prefix, interface, scope and
+DAD/deprecation flags), routes, resolver state and separate per-family local and
+external status. `external: unverified` means a default route exists; it does
+not assert that an Internet destination answered. IPv6 link-local addresses
+require the Mac's actual vmnet interface scope, which differs from guest eth0.
+
+```sh
+mise exec -- make rust && scripts/m2-smoke-ipv6.sh
+```
+
+The real macOS 15 gate checks TCP/UDP through each available family, scoped
+link-local IPv6 and IPv4-only/IPv6-only startup using Ethernet filters attached
+before boot. It probes external IPv6 independently on the Mac and in the guest;
+a failed Mac probe leaves that acceptance outstanding. No Linux stand-in proves
+vmnet IPv6 delivery. Lease/client recovery and comprehensive lifetime fixtures
+remain the subsequent maintenance ticket.
+
+Primary implementation references: [dhcpcd 10.3.0 configuration](https://github.com/NetworkConfiguration/dhcpcd/blob/v10.3.0/src/dhcpcd.conf.5.in),
+[direct binary hook execution](https://github.com/NetworkConfiguration/dhcpcd/blob/v10.3.0/src/script.c),
+[Linux userspace RA ownership](https://github.com/NetworkConfiguration/dhcpcd/blob/v10.3.0/src/if-linux.c),
+and [Apple shared-mode IPv6 introduction](https://developer.apple.com/videos/play/wwdc2019/714/).

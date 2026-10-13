@@ -4,7 +4,6 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::net::Ipv4Addr;
 use std::path::Path;
 
 /// Docker needs IPv4 forwarding to route container traffic out through eth0.
@@ -35,9 +34,9 @@ pub fn write_sysctls(proc_sys: &Path, entries: &[(&str, &str)]) -> Vec<String> {
 
 /// Writes `/etc/resolv.conf` under `root`, replacing a symlink if the image
 /// ships one (systemd-resolved stubs point at files that do not exist here).
-pub fn write_resolv_conf(
+pub fn write_resolv_conf<T: std::fmt::Display>(
     root: &Path,
-    nameservers: &[Ipv4Addr],
+    nameservers: &[T],
     search: &[String],
 ) -> io::Result<()> {
     let mut text = String::new();
@@ -50,10 +49,24 @@ pub fn write_resolv_conf(
     let etc = root.join("etc");
     fs::create_dir_all(&etc)?;
     let path = etc.join("resolv.conf");
-    if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
-        fs::remove_file(&path)?;
+    if fs::symlink_metadata(&path).is_ok_and(|meta| !meta.file_type().is_symlink())
+        && fs::read_to_string(&path).is_ok_and(|existing| existing == text)
+    {
+        return Ok(());
     }
-    fs::write(path, text)
+    let temporary = etc.join(format!(".clankerd-resolv.{}.tmp", std::process::id()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    if let Err(error) = file
+        .write_all(text.as_bytes())
+        .and_then(|()| fs::rename(&temporary, &path))
+    {
+        let _ = fs::remove_file(temporary);
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// Writes `/etc/hostname` and makes sure `/etc/hosts` resolves the name.
@@ -128,7 +141,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         write_resolv_conf(
             root.path(),
-            &[Ipv4Addr::new(192, 168, 127, 1), Ipv4Addr::new(1, 1, 1, 1)],
+            &["192.168.127.1", "1.1.1.1"],
             &["corp.example".into(), "lan".into()],
         )
         .unwrap();
@@ -141,7 +154,7 @@ mod tests {
     #[test]
     fn resolv_conf_without_search_domains_has_no_search_line() {
         let root = tempfile::tempdir().unwrap();
-        write_resolv_conf(root.path(), &[Ipv4Addr::new(10, 0, 0, 1)], &[]).unwrap();
+        write_resolv_conf(root.path(), &["10.0.0.1"], &[]).unwrap();
         assert_eq!(
             fs::read_to_string(root.path().join("etc/resolv.conf")).unwrap(),
             "nameserver 10.0.0.1\n"
@@ -157,7 +170,7 @@ mod tests {
             root.path().join("etc/resolv.conf"),
         )
         .unwrap();
-        write_resolv_conf(root.path(), &[Ipv4Addr::new(10, 0, 0, 1)], &[]).unwrap();
+        write_resolv_conf(root.path(), &["10.0.0.1"], &[]).unwrap();
         let meta = fs::symlink_metadata(root.path().join("etc/resolv.conf")).unwrap();
         assert!(meta.is_file());
         assert!(

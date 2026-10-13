@@ -133,7 +133,54 @@ pub const METHOD_NETWORK_STATUS: &str = "io.clankerd.Guest.NetworkStatus";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NetworkStatus {
+    /// Live assigned addresses, retaining their standard application ordering.
     pub addresses: Vec<std::net::IpAddr>,
+    pub address_details: Vec<NetworkAddress>,
+    pub routes: Vec<NetworkRoute>,
+    pub nameservers: Vec<String>,
+    pub search: Vec<String>,
+    pub ipv4: FamilyConnectivity,
+    pub ipv6: FamilyConnectivity,
+    pub ready: bool,
+    pub diagnostic: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkAddress {
+    pub address: std::net::IpAddr,
+    pub prefix_len: u8,
+    pub interface: String,
+    /// Required zone when connecting to a link-local IPv6 address.
+    pub scope_id: u32,
+    pub tentative: bool,
+    pub dad_failed: bool,
+    pub deprecated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkRoute {
+    pub destination: std::net::IpAddr,
+    pub prefix_len: u8,
+    pub gateway: Option<std::net::IpAddr>,
+    pub interface: String,
+    pub metric: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FamilyConnectivity {
+    /// Configured address, carrier, and received packet/configuration evidence.
+    pub local_available: bool,
+    pub default_route: bool,
+    /// A route is configuration, not proof of an Internet destination being reachable.
+    pub external: ExternalConnectivity,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalConnectivity {
+    #[default]
+    Unavailable,
+    Unverified,
 }
 
 /// A point in time as seconds and nanoseconds since the Unix epoch.

@@ -88,6 +88,16 @@ struct Inner {
 }
 
 fn main() {
+    if std::env::args_os().next().is_some_and(|name| {
+        std::path::Path::new(&name)
+            .file_name()
+            .is_some_and(|name| name == "clankerd-guestd-network-hook")
+    }) {
+        if let Err(error) = network::hook::run() {
+            die(&format!("network hook: {error}"));
+        }
+        return;
+    }
     let mut config = None;
     let mut exit_file = None;
     let mut host_socket = None;
@@ -440,7 +450,11 @@ fn serve(
             let _ = reply(&mut out, result);
         }
         clankerd_proto::guest::METHOD_NETWORK_STATUS => {
-            let status = network::status("eth0");
+            let status = if BOOTED.load(std::sync::atomic::Ordering::Relaxed) {
+                network::status("eth0")
+            } else {
+                clankerd_proto::guest::NetworkStatus::default()
+            };
             let _ = reply(&mut out, Ok(serde_json::to_value(status).unwrap()));
         }
         METHOD_SET_CLOCK => {

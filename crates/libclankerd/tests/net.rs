@@ -268,3 +268,17 @@ exit 3
             .exists()
     );
 }
+
+#[test]
+fn inspection_reports_both_families_without_claiming_an_unconfigured_network_is_usable() {
+    let rig = rig(FAKE_VMNET);
+    let machine = long_running(&rig.engine, "family-status");
+    machine.start().unwrap();
+    let info = serde_json::to_value(machine.inspect().unwrap()).unwrap();
+    assert_eq!(info["network"]["ipv4"]["local_available"], false);
+    assert_eq!(info["network"]["ipv6"]["local_available"], false);
+    assert_eq!(info["network"]["ipv4"]["external"], "unavailable");
+    assert_eq!(info["network"]["ipv6"]["external"], "unavailable");
+    assert_eq!(info["network"]["ready"], false);
+    machine.stop(Duration::from_secs(10)).unwrap();
+}
