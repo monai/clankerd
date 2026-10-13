@@ -129,3 +129,70 @@ fn without_a_listening_socket_it_explains_what_it_needs() {
         "{err}"
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn disconnected_event_observers_release_guest_descriptors_while_workload_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("g.sock");
+    let listener = UnixListener::bind(&sock).unwrap();
+    let fd = listener.as_raw_fd();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_clankerd-guestd"));
+    cmd.arg("--config")
+        .arg(config(dir.path(), "exec sleep 60"))
+        .env("LISTEN_FDS", "1")
+        .stdin(Stdio::null())
+        .process_group(0);
+    // SAFETY: dup2/fcntl are async-signal-safe and fd belongs to our listener.
+    unsafe {
+        cmd.pre_exec(move || {
+            if fd == 3 {
+                let flags = libc::fcntl(3, libc::F_GETFD);
+                libc::fcntl(3, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+            } else if libc::dup2(fd, 3) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn().unwrap();
+    let descriptors = || {
+        std::fs::read_dir(format!("/proc/{}/fd", child.id()))
+            .unwrap()
+            .count()
+    };
+    let baseline = descriptors();
+    for _ in 0..100 {
+        let mut connection = UnixStream::connect(&sock).unwrap();
+        varlink::write(
+            &mut connection,
+            &Call {
+                method: METHOD_EVENTS.into(),
+                parameters: serde_json::Value::Null,
+                more: true,
+                upgrade: false,
+            },
+        )
+        .unwrap();
+        let reply = varlink::read::<Reply, _>(&mut BufReader::new(connection))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_value::<Event>(reply.parameters).unwrap(),
+            Event::Ready
+        );
+    }
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let after = descriptors();
+    let alive = child.try_wait().unwrap().is_none();
+    // SAFETY: only this test's VMM/workload process group is signalled.
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.wait();
+    assert!(alive, "observers must not terminate the workload");
+    assert!(
+        after <= baseline + 8,
+        "idle event observers leaked descriptors: baseline={baseline} after={after}"
+    );
+}
