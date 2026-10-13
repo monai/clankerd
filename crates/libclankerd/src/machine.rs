@@ -927,6 +927,15 @@ pub(crate) fn reattach(inner: &Arc<Inner>, id: &str) {
         return;
     }
     let code = read_exit_file(&inner.store.machine_dir(id).join("exit"));
+    if code.is_none()
+        && state
+            .pid
+            .is_some_and(|pid| inner.vmm.is_alive(&crate::vmm::BootHandle { pid }))
+    {
+        // A failed management reconnect says nothing about VMM/workload life.
+        // Preserve its network resources and retry on the next engine reopen.
+        return;
+    }
     record_exit(inner, id, code, state.pid);
 }
 
