@@ -75,7 +75,7 @@ def main():
     spec = json.loads(original.read_text())
     family = os.environ.get('VMNET_TEST_FAMILY', 'dual')
     binary = os.environ['VMNET_TEST_REAL_VMSPAWN']
-    if family == 'dual':
+    if family == 'dual' or not spec.get('net'):
         os.execv(binary, [binary, *args])
     with tempfile.TemporaryDirectory(prefix='vmnet-filter-', dir='/tmp') as directory:
         proxy = Proxy(directory, spec['net']['socket'], family)
@@ -148,7 +148,33 @@ def self_test():
         proxy.close()
         client.close()
         helper.close()
-    print('PASS local fixture: VLAN family filtering and real Unixgram peer handshake')
+    with tempfile.TemporaryDirectory(prefix='vmnet-populate-test-') as directory:
+        spec_path = Path(directory) / 'populate.json'
+        standin = Path(directory) / 'vmspawn'
+        result_path = Path(directory) / 'result.json'
+        standin.write_text(f'#!{sys.executable}\n' + "import json,os,socket,sys\n"
+            + "listener=socket.socket(fileno=3)\n"
+            + "assert listener.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)==socket.SOCK_STREAM\n"
+            + "assert sys.argv[1]=='--spec'\n"
+            + "open(os.environ['VMNET_TEST_RESULT'],'w').write(json.dumps(sys.argv[1:]))\n")
+        standin.chmod(0o755)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(directory + '/management.sock')
+        listener.listen()
+        env = dict(os.environ, VMNET_TEST_REAL_VMSPAWN=str(standin),
+            VMNET_TEST_FAMILY='ipv6', VMNET_TEST_RESULT=str(result_path))
+        bootstrap = 'import os,sys;os.dup2(int(sys.argv[1]),3,inheritable=True);os.execv(sys.argv[2],sys.argv[2:])'
+        try:
+            for spec in ({'populate': True, 'net': None}, {'populate': True}):
+                spec_path.write_text(json.dumps(spec))
+                subprocess.run([sys.executable, '-c', bootstrap, str(listener.fileno()),
+                    str(Path(__file__).resolve()), '--spec', str(spec_path)],
+                    env=env, pass_fds=(listener.fileno(),), check=True)
+                assert json.loads(result_path.read_text()) == ['--spec', str(spec_path)]
+                assert json.loads(spec_path.read_text()) == spec
+        finally:
+            listener.close()
+    print('PASS local fixture: VLAN/Unixgram filtering and population passthrough with management fd3')
 
 
 if __name__ == '__main__':
