@@ -1,9 +1,10 @@
 //! Binary dhcpcd hook. No OCI shell, resolvconf, hostname or mDNS hooks.
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::net::{IpAddr, Ipv6Addr};
-use std::path::{Path, PathBuf};
+use std::os::fd::AsRawFd;
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -36,7 +37,7 @@ pub fn run() -> io::Result<()> {
     }
     let reason = env.get("reason").map(String::as_str).unwrap_or("");
     let state = Path::new(STATE);
-    fs::create_dir_all(state)?;
+    let _lock = lock(state)?;
     if matches!(
         reason,
         "NOCARRIER" | "NOCARRIER_ROAMING" | "STOPPED" | "DEPARTED"
@@ -44,7 +45,7 @@ pub fn run() -> io::Result<()> {
         for source in ["dhcp", "dhcp6", "ra"] {
             let _ = fs::remove_file(state.join(format!("{source}.json")));
         }
-        return refresh();
+        return refresh_locked();
     }
     let source = match env.get("protocol").map(String::as_str) {
         Some("dhcp") => "dhcp",
@@ -58,7 +59,7 @@ pub fn run() -> io::Result<()> {
         "EXPIRE" | "EXPIRE6" | "RELEASE" | "RELEASE6" | "NAK" | "STOP" | "STOP6"
     ) {
         let _ = fs::remove_file(path);
-        return refresh();
+        return refresh_locked();
     }
     let mut data = Contribution::default();
     match source {
@@ -125,7 +126,7 @@ pub fn run() -> io::Result<()> {
     let temporary = state.join(format!("{source}.{}.tmp", std::process::id()));
     fs::write(&temporary, serde_json::to_vec(&data)?)?;
     fs::rename(temporary, path)?;
-    refresh()
+    refresh_locked()
 }
 
 fn number(env: &HashMap<String, String>, key: &str) -> Option<u64> {
@@ -184,15 +185,40 @@ fn monotonic_secs() -> u64 {
 }
 
 pub fn refresh() -> io::Result<()> {
+    let _lock = lock(Path::new(STATE))?;
+    refresh_locked()
+}
+
+// The hook runs in separate processes while PID1 expires DNS every second.
+// Hold one lock across contribution changes and publication so older snapshots
+// cannot overwrite a newer lease/RA event or collide on the PID1 temp file.
+fn lock(state: &Path) -> io::Result<File> {
+    fs::create_dir_all(state)?;
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(state.join("resolver.lock"))?;
+    loop {
+        // SAFETY: file owns a live descriptor. Closing it releases LOCK_EX.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            return Ok(file);
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+fn refresh_locked() -> io::Result<()> {
     let state = Path::new(STATE);
     let mut servers = Vec::new();
     let mut search = Vec::new();
     let now = monotonic_secs();
-    for entry in fs::read_dir(state)? {
-        let path: PathBuf = entry?.path();
-        if path.extension().is_none_or(|ext| ext != "json") {
-            continue;
-        }
+    for source in ["dhcp", "dhcp6", "ra"] {
+        let path = state.join(format!("{source}.json"));
         let Some(data) = fs::read(path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Contribution>(&bytes).ok())
