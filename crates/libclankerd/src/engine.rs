@@ -186,6 +186,11 @@ impl Inner {
     pub fn net_spec(&self, id: &str) -> NetSpec {
         NetSpec {
             machine_id: id.to_owned(),
+            host_config: self
+                .store
+                .load(id)
+                .map(|(record, _)| record.host_config)
+                .unwrap_or_default(),
             dir: self.store.machine_dir(id),
             socket: self.net_socket_path(id),
         }
@@ -318,6 +323,8 @@ impl Engine {
         }
         validate_stop_signal(&config.stop_signal)?;
         validate_host_config(&host_config)?;
+        crate::config::validate_bridge_config(&host_config)?;
+        crate::net::validate_host_config(&host_config)?;
         crate::mount::validate(&host_config.mounts)?;
         if let Some(name) = name {
             validate_name(name)?;

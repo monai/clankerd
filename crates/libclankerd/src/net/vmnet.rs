@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use super::{NetAttachment, NetBackend, NetSpec};
+use crate::NetworkMode;
 use crate::error::{Error, Result};
 
 const PID_FILE: &str = "net.pid";
@@ -31,9 +32,16 @@ impl Default for VmnetBackend {
 
 impl NetBackend for VmnetBackend {
     fn start(&self, spec: &NetSpec) -> Result<NetAttachment> {
+        crate::config::validate_bridge_config(&spec.host_config)?;
         let binary = &self.binary;
         // A leftover sidecar of an earlier run would hold the socket.
         self.stop(spec);
+        if let NetworkMode::Bridged = spec.host_config.network_mode {
+            super::bridge::validate_interface(
+                binary,
+                spec.host_config.bridge_interface.as_deref().unwrap(),
+            )?;
+        }
         let log_path = spec.dir.join(LOG_FILE);
         let log = OpenOptions::new()
             .create(true)
@@ -48,21 +56,37 @@ impl NetBackend for VmnetBackend {
             Command::new(binary)
         };
         let identity = interface_identity(&spec.machine_id);
-        let mut child = command
+        command
             .arg("--socket")
             .arg(&spec.socket)
-            .args([
-                "--operation-mode",
-                "shared",
-                "--interface-id",
-                &identity,
-                "--start-address",
-                "192.168.105.1",
-                "--end-address",
-                "192.168.105.254",
-                "--subnet-mask",
-                "255.255.255.0",
-            ])
+            .args(["--interface-id", &identity]);
+        match spec.host_config.network_mode {
+            NetworkMode::Shared => {
+                let (start, end, mask) = spec.host_config.shared_network.addresses()?;
+                command.args([
+                    "--operation-mode",
+                    "shared",
+                    "--start-address",
+                    &start.to_string(),
+                    "--end-address",
+                    &end.to_string(),
+                    "--subnet-mask",
+                    &mask.to_string(),
+                ]);
+                if !spec.host_config.shared_peer_participation {
+                    command.arg("--enable-isolation");
+                }
+            }
+            NetworkMode::Bridged => {
+                command.args([
+                    "--operation-mode",
+                    "bridged",
+                    "--shared-interface",
+                    spec.host_config.bridge_interface.as_deref().unwrap(),
+                ]);
+            }
+        }
+        let mut child = command
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log)
