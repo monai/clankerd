@@ -82,6 +82,7 @@ def reply(frame, parsed, ack_count, nak=False):
     options.update({51: struct.pack('!I', 24), 58: struct.pack('!I', 8), 59: struct.pack('!I', 16)})
     options[6] = socket.inet_aton('192.0.2.53' if ack_count < 2 else '192.0.2.54')
     options[15] = b'lifetime.test'
+    options[119] = b'\x08lifetime\x04test\x00'
     if nak:
         options = {53: b'\x06', 54: options[54]}
     payload = bytearray(frame[bootp:bootp+240])
@@ -197,8 +198,51 @@ class LifetimeProxy(family.Proxy):
             self.next_ra = time.monotonic() + 2
 
 
+def self_test():
+    with tempfile.TemporaryDirectory() as directory:
+        helper = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        helper.bind(directory + '/real.net')
+        helper.settimeout(1)
+        guest = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        guest.bind(directory + '/guest.net')
+        guest.settimeout(1)
+        proxy = LifetimeProxy(directory, directory + '/real.net', directory)
+        guest.connect(proxy.path)
+        guest.send(b'VFKT')
+        proxy.pump()
+        _, peer = helper.recvfrom(4096)
+        helper.connect(peer)
+        # Drain startup RA so the next response is the DHCPv4 wire packet.
+        guest.recv(4096)
+        bootp = bytearray(240)
+        bootp[0] = 2
+        bootp[236:240] = bytes.fromhex('63825363')
+        options = bytes.fromhex('3501053604c0a86901') + bytes([119, 11]) + b'\x04home\x04arpa\x00' + b'\xff'
+        body = bootp + options
+        ip = struct.pack('!BBHHHBBH4s4s', 0x45, 0, 28 + len(body), 0, 0, 64, 17, 0,
+                         socket.inet_aton('192.168.105.1'), socket.inet_aton('255.255.255.255'))
+        helper.send(bytes(12) + b'\x08\x00' + ip + struct.pack('!HHHH', 67, 68, 8+len(body), 0) + body)
+        proxy.pump()
+        output = guest.recv(4096)
+        # Decode option TLVs independently at the actual guest Ethernet boundary.
+        options = {}
+        cursor = 14 + (output[14] & 15)*4 + 8 + 240
+        while cursor < len(output):
+            code = output[cursor]; cursor += 1
+            if code == 255: break
+            if code == 0: continue
+            length = output[cursor]; cursor += 1
+            options[code] = output[cursor:cursor+length]; cursor += length
+        expected = b'\x08lifetime\x04test\x00'
+        assert options[119] == expected, f'guest DHCP search payload={options[119]!r}; expected lifetime.test'
+        print('PASS actual fixture Unixgram DHCP reply supplies lifetime.test in option119')
+        proxy.close(); helper.close(); guest.close()
+
 def main():
     args = sys.argv[1:]
+    if args == ['--self-test']:
+        self_test()
+        return 0
     original = Path(args[args.index('--spec') + 1])
     spec = json.loads(original.read_text())
     binary = os.environ['VMNET_TEST_REAL_VMSPAWN']

@@ -21,6 +21,7 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'failed=1; find "$work/state" -name "*.log" -exec tail -80 {} \;' ERR
+python3 "$CLANKERD_VMSPAWN" --self-test
 services=$(cat "$root/scripts/fixtures/vmnet-ipv6-services.py")
 "$vmctl" run -d --name "$name" "${IMAGE:-python:3.13-alpine}" python3 -c "$services" server
 check() {
