@@ -15,6 +15,8 @@ work=$(mktemp -d /tmp/clankerd-recovery.XXXXXX)
 export CLANKERD_STATE_DIR=$work/state CLANKERD_RUNTIME_DIR=$work/run
 name=vmnet-recovery
 failed=0
+native_pid=''
+fd_baseline=''
 host_pid=''
 cleanup() {
   "$vmctl" rm -f "$name" >/dev/null 2>&1 || true
@@ -22,7 +24,29 @@ cleanup() {
   if [ "$failed" = 1 ]; then echo "Retained diagnostics: $work"; else rm -rf "$work"; fi
 }
 trap cleanup EXIT
-trap 'failed=1; find "$work/state" -name "*.log" -exec tail -100 {} \;' ERR
+failure_diagnostics() {
+  failed=1
+  if [ -n "$native_pid" ]; then fd_sample failure || true; sleep 6; fd_sample failure-idle || true; fi
+  find "$work/state" -name "*.log" -exec tail -100 {} \;
+}
+fd_sample() {
+  tag=$1
+  kill -0 "$native_pid" || { echo "VMM exited before descriptor sample $tag"; return 1; }
+  lsof -nP -p "$native_pid" > "$work/native-fds-$tag.txt"
+  descriptors=$(awk 'NR>1 && $4 ~ /^[0-9]/ {n++} END {print n+0}' "$work/native-fds-$tag.txt")
+  echo "$descriptors" > "$work/native-count-$tag"
+  echo "FD sample $tag: native pid=$native_pid descriptors=$descriptors"
+  awk 'NR>1 && $4 ~ /^[0-9]/ {count[$5]++} END {for(kind in count) printf "%s=%d ",kind,count[kind]; print ""}' "$work/native-fds-$tag.txt"
+}
+fd_idle() {
+  sleep 6 # libkrun normally defers proxy reclamation for five seconds.
+  fd_sample "$1"
+  [ "$descriptors" -le "$((fd_baseline + 32))" ] || {
+    echo "FAIL descriptor growth after idle: baseline=$fd_baseline current=$descriptors" >&2
+    return 1
+  }
+}
+trap failure_diagnostics ERR
 fixture=$root/scripts/fixtures/vmnet-recovery-services.py
 python3 "$root/scripts/fixtures/vmnet-recovery-unix-self-test.py"
 python3 "$fixture" unix-server "$work/host.sock" &
@@ -48,6 +72,7 @@ if [ -z "$workload_pid" ]; then
   false
 fi
 "$vmctl" inspect "$name" > "$work/initial.json"
+native_pid=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[0]["state"]["pid"])' "$work/initial.json")
 python3 "$fixture" bind "$work/run/$short.tunnels" "$work/host.sock"
 check() {
   "$vmctl" inspect "$name" > "$work/current.json"
@@ -96,6 +121,19 @@ packets() {
 }
 wait_for up 100
 packets
+fd_sample startup-busy
+sleep 6
+fd_sample baseline-idle
+fd_baseline=$descriptors
+"$vmctl" exec "$name" python3 -c 'import os;print("guestd descriptors",len(os.listdir("/proc/1/fd")))'
+for attempt in $(seq 1 12); do
+  "$vmctl" inspect "$name" > "$work/stress.json"
+  "$vmctl" exec "$name" true
+  "$vmctl" exec "$name" python3 -c "$recovery" guest-unix
+done
+fd_sample burst-busy
+fd_idle burst-idle
+"$vmctl" exec "$name" python3 -c 'import os;print("guestd descriptors",len(os.listdir("/proc/1/fd")))'
 # Real link/address loss is held throughout management and Unix binding probes.
 "$vmctl" exec "$name" ip link set eth0 down
 "$vmctl" exec "$name" ip -4 addr flush dev eth0
@@ -122,6 +160,8 @@ for cycle in 1 2; do
   packets
   [ "$(find "$work/run" -name '*.relay' | wc -l | tr -d ' ')" = 1 ]
   [ "$(find "$work/run" -name '*.relay-peer' | wc -l | tr -d ' ')" = 1 ]
+  fd_sample "recovery-$cycle-busy"
+  fd_idle "recovery-$cycle-idle"
 done
 "$vmctl" stop "$name"
 [ -z "$(find "$work/run" \( -name '*.net' -o -name '*.relay' -o -name '*.relay-peer' \) -print)" ]

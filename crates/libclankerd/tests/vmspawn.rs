@@ -501,3 +501,43 @@ fn configured_unix_socket_survives_library_exit_and_machine_restart() {
     m.remove(true).unwrap();
     service.join().unwrap();
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn helper_descriptor_capacity_is_raised_within_its_inherited_hard_limit_only() {
+    // SAFETY: parent is writable initialized rlimit storage.
+    let mut parent: libc::rlimit = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut parent) },
+        0
+    );
+    let env = Env::new();
+    let wrapper = env.root().join("limited-vmspawn");
+    let native = vmspawn_path();
+    std::fs::write(&wrapper, format!("#!/usr/bin/env python3\nimport os,resource,sys\nresource.setrlimit(resource.RLIMIT_NOFILE,(64,512))\nos.execv({native:?},[{native:?},*sys.argv[1:]])\n", native=native.to_string_lossy())).unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let vmm = Arc::new(VmspawnVmm::new(wrapper, guestd_path()).dev_local());
+    let engine = libclankerd::Engine::new(env.config(vmm)).unwrap();
+    let observed = env.root().join("child-limits");
+    let machine = create(
+        &engine,
+        "bounded-descriptors",
+        &format!(
+            "awk '/Max open files/ {{print $4, $5}}' /proc/self/limits > {}",
+            observed.display()
+        ),
+    );
+    machine.start().unwrap();
+    machine.wait().unwrap();
+    assert_eq!(std::fs::read_to_string(observed).unwrap().trim(), "512 512");
+    // SAFETY: after is writable initialized rlimit storage; observation does not change limits.
+    let mut after: libc::rlimit = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut after) },
+        0
+    );
+    assert_eq!(
+        (after.rlim_cur, after.rlim_max),
+        (parent.rlim_cur, parent.rlim_max)
+    );
+}
