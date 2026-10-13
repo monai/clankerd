@@ -4,12 +4,10 @@
 
 use std::ffi::CString;
 use std::io;
-use std::net::Ipv4Addr;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::Path;
 use std::time::Duration;
 
-use super::dhcp::Lease;
 use crate::poll::poll_until;
 
 fn control_socket() -> io::Result<OwnedFd> {
@@ -39,19 +37,6 @@ fn ifreq(name: &str) -> io::Result<libc::ifreq> {
     Ok(req)
 }
 
-fn sockaddr_in(addr: Ipv4Addr) -> libc::sockaddr {
-    let sin = libc::sockaddr_in {
-        sin_family: libc::AF_INET as libc::sa_family_t,
-        sin_port: 0,
-        sin_addr: libc::in_addr {
-            s_addr: u32::from(addr).to_be(),
-        },
-        sin_zero: [0; 8],
-    };
-    // SAFETY: sockaddr and sockaddr_in have the same size; both are plain data.
-    unsafe { std::mem::transmute::<libc::sockaddr_in, libc::sockaddr>(sin) }
-}
-
 fn ioctl<T>(sock: &OwnedFd, request: libc::c_ulong, arg: &mut T, what: &str) -> io::Result<()> {
     // SAFETY: `arg` is the structure the request expects.
     if unsafe { libc::ioctl(sock.as_raw_fd(), request as _, arg as *mut T) } < 0 {
@@ -74,20 +59,6 @@ pub fn wait_for(name: &str, timeout: Duration) -> io::Result<()> {
     }
 }
 
-/// The interface's hardware address as the kernel reports it.
-pub fn mac(name: &str) -> io::Result<[u8; 6]> {
-    let text = std::fs::read_to_string(Path::new("/sys/class/net").join(name).join("address"))?;
-    let mut mac = [0u8; 6];
-    let mut parts = text.trim().split(':');
-    for byte in &mut mac {
-        *byte = parts
-            .next()
-            .and_then(|p| u8::from_str_radix(p, 16).ok())
-            .ok_or_else(|| io::Error::other(format!("unparsable MAC address {:?}", text.trim())))?;
-    }
-    Ok(mac)
-}
-
 pub fn set_up(name: &str) -> io::Result<()> {
     let sock = control_socket()?;
     let mut req = ifreq(name)?;
@@ -105,60 +76,4 @@ pub fn set_up(name: &str) -> io::Result<()> {
         &mut req,
         &format!("bringing {name} up"),
     )
-}
-
-/// Installs the lease: address and netmask, MTU, and the default route.
-pub fn apply_lease(name: &str, lease: &Lease) -> io::Result<()> {
-    let sock = control_socket()?;
-    let mask = Ipv4Addr::from(
-        u32::MAX
-            .checked_shl(32 - u32::from(lease.prefix_len))
-            .unwrap_or(0),
-    );
-
-    let mut req = ifreq(name)?;
-    req.ifr_ifru.ifru_addr = sockaddr_in(lease.address);
-    ioctl(
-        &sock,
-        libc::SIOCSIFADDR,
-        &mut req,
-        &format!("setting the address of {name}"),
-    )?;
-    let mut req = ifreq(name)?;
-    req.ifr_ifru.ifru_netmask = sockaddr_in(mask);
-    ioctl(
-        &sock,
-        libc::SIOCSIFNETMASK,
-        &mut req,
-        &format!("setting the netmask of {name}"),
-    )?;
-    if let Some(mtu) = lease.mtu {
-        let mut req = ifreq(name)?;
-        req.ifr_ifru.ifru_mtu = i32::from(mtu);
-        ioctl(
-            &sock,
-            libc::SIOCSIFMTU,
-            &mut req,
-            &format!("setting the MTU of {name}"),
-        )?;
-    }
-
-    if let Some(router) = lease.router {
-        let dev = CString::new(name).map_err(io::Error::other)?;
-        // SAFETY: rtentry is plain data; all-zero is valid.
-        let mut route: libc::rtentry = unsafe { std::mem::zeroed() };
-        route.rt_dst = sockaddr_in(Ipv4Addr::UNSPECIFIED);
-        route.rt_genmask = sockaddr_in(Ipv4Addr::UNSPECIFIED);
-        route.rt_gateway = sockaddr_in(router);
-        route.rt_flags = libc::RTF_UP | libc::RTF_GATEWAY;
-        route.rt_dev = dev.as_ptr() as *mut libc::c_char;
-        // `dev` outlives the ioctl below.
-        ioctl(
-            &sock,
-            libc::SIOCADDRT,
-            &mut route,
-            "adding the default route",
-        )?;
-    }
-    Ok(())
 }
