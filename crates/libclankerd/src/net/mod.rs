@@ -7,6 +7,7 @@
 //! machine directory and [`NetBackend::stop`] works from that record alone.
 
 mod bridge;
+pub mod recovery;
 mod vmnet;
 
 use std::path::PathBuf;
@@ -16,7 +17,7 @@ use crate::error::Result;
 pub use vmnet::VmnetBackend;
 
 /// What a backend needs to run one machine's sidecar.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NetSpec {
     pub machine_id: String,
     pub host_config: crate::HostConfig,
@@ -46,6 +47,11 @@ pub trait NetBackend: Send + Sync {
     /// Ends the machine's sidecar. Idempotent; safe for a sidecar started by
     /// an earlier process and for one that already died.
     fn stop(&self, spec: &NetSpec);
+
+    /// Current native attachment health, independent of guest management.
+    fn connected(&self, _spec: &NetSpec) -> bool {
+        true
+    }
 }
 
 pub(crate) fn validate_host_config(host: &crate::HostConfig) -> Result<()> {

@@ -35,7 +35,7 @@ impl NetBackend for VmnetBackend {
         crate::config::validate_bridge_config(&spec.host_config)?;
         let binary = &self.binary;
         // A leftover sidecar of an earlier run would hold the socket.
-        self.stop(spec);
+        self.stop_helper(spec);
         if let NetworkMode::Bridged = spec.host_config.network_mode {
             super::bridge::validate_interface(
                 binary,
@@ -118,7 +118,7 @@ impl NetBackend for VmnetBackend {
                 Err(e) => Some(format!("waiting for vmnet-helper: {e}")),
             };
             if let Some(failure) = failure {
-                self.stop(spec);
+                self.stop_helper(spec);
                 let _ = child.wait();
                 return Err(Error::unavailable(format!(
                     "{failure}: {}",
@@ -131,7 +131,7 @@ impl NetBackend for VmnetBackend {
                 match child.try_wait() {
                     Ok(None) => break,
                     Ok(Some(status)) => {
-                        self.stop(spec);
+                        self.stop_helper(spec);
                         let _ = child.wait();
                         return Err(Error::unavailable(format!(
                             "vmnet-helper exited ({status}) before attachment: {}",
@@ -139,7 +139,7 @@ impl NetBackend for VmnetBackend {
                         )));
                     }
                     Err(error) => {
-                        self.stop(spec);
+                        self.stop_helper(spec);
                         let _ = child.wait();
                         return Err(Error::unavailable(format!(
                             "waiting for vmnet-helper: {error}"
@@ -154,11 +154,11 @@ impl NetBackend for VmnetBackend {
         // can terminate it directly without sudo or a live parent.
         if cfg!(target_os = "macos") {
             let pid = helper_pid(&spec.socket).ok_or_else(|| {
-                self.stop(spec);
+                self.stop_helper(spec);
                 Error::unavailable("cannot identify the unprivileged vmnet-helper process")
             })?;
             if let Err(error) = fs::write(spec.dir.join(PID_FILE), pid.to_string()) {
-                self.stop(spec);
+                self.stop_helper(spec);
                 let _ = child.wait();
                 return Err(error.into());
             }
@@ -168,6 +168,7 @@ impl NetBackend for VmnetBackend {
             let _ = child.wait();
         });
 
+        super::recovery::record(binary, spec)?;
         Ok(NetAttachment {
             socket: spec.socket.clone(),
             mac: machine_mac(&spec.machine_id),
@@ -177,6 +178,24 @@ impl NetBackend for VmnetBackend {
     }
 
     fn stop(&self, spec: &NetSpec) {
+        super::recovery::remove(spec);
+        self.stop_helper(spec);
+    }
+
+    fn connected(&self, spec: &NetSpec) -> bool {
+        self.running(spec) && super::recovery::healthy(spec)
+    }
+}
+
+impl VmnetBackend {
+    pub(crate) fn running(&self, spec: &NetSpec) -> bool {
+        fs::read_to_string(spec.dir.join(PID_FILE))
+            .ok()
+            .and_then(|pid| pid.trim().parse::<i32>().ok())
+            .is_some_and(|pid| is_helper(pid, &spec.socket))
+    }
+
+    fn stop_helper(&self, spec: &NetSpec) {
         // A failed sudo startup may leave the monitor PID in the record.
         // Signal the actual dropped-privilege helper as well, if it exists.
         if cfg!(target_os = "macos")
