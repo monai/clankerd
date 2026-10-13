@@ -262,3 +262,37 @@ fn invalid_restart_and_pull_policies_are_usage_errors() {
         text(&out.stderr)
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn named_user_signals_reach_the_linux_workload_without_ending_it() {
+    let cli = Cli::new();
+    let ready = cli.root().join("ready");
+    let usr1 = cli.root().join("usr1");
+    let usr2 = cli.root().join("usr2");
+    let script = format!(
+        "trap 'echo received > {usr1}' USR1; trap 'echo received > {usr2}' USR2; touch {ready}; while :; do sleep 0.05; done",
+        usr1 = usr1.display(),
+        usr2 = usr2.display(),
+        ready = ready.display(),
+    );
+    let run = cli.run(&[
+        "run",
+        "-d",
+        "--name",
+        "user-signals",
+        "img",
+        "sh",
+        "-c",
+        &script,
+    ]);
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    cli.wait_for("ready");
+    for (signal, marker) in [("USR1", "usr1"), ("SIGUSR2", "usr2")] {
+        let delivered = cli.run(&["kill", "--signal", signal, "user-signals"]);
+        assert!(delivered.status.success(), "{}", text(&delivered.stderr));
+        cli.wait_for(marker);
+        assert_eq!(cli.status_of("user-signals"), "running 0");
+    }
+    assert!(cli.run(&["stop", "user-signals"]).status.success());
+}

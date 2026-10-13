@@ -82,7 +82,7 @@ management() {
   "$vmctl" kill --signal USR1 "$name"
   delivered=0
   for attempt in $(seq 1 10); do
-    current_signal=$("$vmctl" exec "$name" cat /tmp/recovery-signal)
+    current_signal=$("$vmctl" exec "$name" python3 -c 'from pathlib import Path;p=Path("/tmp/recovery-signal");print(p.read_text() if p.exists() else "none")')
     if [ "$current_signal" != "$previous_signal" ]; then delivered=1; break; fi
     sleep 0.1
   done
