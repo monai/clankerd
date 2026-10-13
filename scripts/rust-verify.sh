@@ -46,8 +46,10 @@ check "linux-arm64/clankerd-guestd is static aarch64 ELF" \
   static_aarch64_elf "$out/linux-arm64/clankerd-guestd"
 
 # The guest boot directory ships static e2fsprogs next to guestd.
-for b in mke2fs e2fsck resize2fs debugfs; do
+for b in mke2fs e2fsck resize2fs debugfs dhcpcd; do
   check "linux-arm64/$b is static aarch64 ELF" static_aarch64_elf "$out/linux-arm64/$b"
 done
+
+check "linux-arm64/dhcpcd.LICENSE accompanies dhcpcd" test -s "$out/linux-arm64/dhcpcd.LICENSE"
 
 exit $fail
