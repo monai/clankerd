@@ -64,6 +64,7 @@ pub struct MachineInfo {
     /// The image's runtime defaults the configuration above was merged over.
     pub image_config: Option<ImageConfig>,
     pub state: MachineState,
+    pub network: Option<clankerd_proto::guest::NetworkStatus>,
 }
 
 /// File in the machine directory that receives the console output.
@@ -87,6 +88,17 @@ impl Machine {
 
     pub fn inspect(&self) -> Result<MachineInfo> {
         let (record, state) = self.inner.store.load(&self.id)?;
+        let network = if state.status == Status::Running && self.inner.net.is_some() {
+            guest::call(
+                &self.inner.socket_path(&self.id),
+                clankerd_proto::guest::METHOD_NETWORK_STATUS,
+                &serde_json::json!({}),
+            )
+            .ok()
+            .and_then(|value| serde_json::from_value(value).ok())
+        } else {
+            None
+        };
         Ok(MachineInfo {
             id: record.id,
             name: record.name,
@@ -96,6 +108,7 @@ impl Machine {
             image_id: record.image_id,
             image_config: record.image_config,
             state,
+            network,
         })
     }
 
@@ -222,10 +235,9 @@ impl Machine {
                 user: info.config.user.clone(),
                 clock: Some(Clock::now()),
                 mounts: plan.guest,
-                network: net.as_ref().map(|n| NetworkConfig {
+                network: net.as_ref().map(|_| NetworkConfig {
                     interface: "eth0".into(),
                     hostname: self.id[..12].to_owned(),
-                    blocked: n.blocked.clone(),
                 }),
                 tty: info.config.tty,
                 open_stdin: info.config.open_stdin,

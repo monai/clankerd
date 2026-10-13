@@ -100,6 +100,11 @@ fn send(
 ) -> Result<(Value, BufReader<UnixStream>)> {
     let mut conn = UnixStream::connect(socket)
         .map_err(|e| Error::unavailable(format!("cannot reach the guest: {e}")))?;
+    if method == clankerd_proto::guest::METHOD_NETWORK_STATUS {
+        let timeout = Some(std::time::Duration::from_secs(2));
+        conn.set_read_timeout(timeout)?;
+        conn.set_write_timeout(timeout)?;
+    }
     varlink::write(
         &mut conn,
         &Call {

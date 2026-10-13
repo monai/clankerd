@@ -1,16 +1,8 @@
-//! Guest network setup (boot step 4), run by `boot::init` before the workload:
-//!
-//! 1. [`prepare`]: forwarding sysctls (always, NIC or not) and `lo` up;
-//! 2. [`setup`], when the machine has a NIC: hostname, the firewall block
-//!    list (`firewall`, fail closed), DHCP on the interface (`dhcp` over
-//!    `packet`), the lease on the interface (`iface`) and `/etc/resolv.conf`.
-//!
-//! A machine whose DHCP fails still runs its workload, offline; the console
-//! says why.
+//! Configure the guest NIC before workload launch. Interface addresses are
+//! inspected independently over vsock; networking requires no image firewall.
 
 pub mod dhcp;
 pub mod files;
-pub mod firewall;
 mod iface;
 mod packet;
 
@@ -41,10 +33,6 @@ pub fn setup(cfg: &NetworkConfig) -> Result<(), String> {
     if let Err(e) = set_hostname(&cfg.hostname) {
         eprintln!("clankerd-guestd: setting the hostname: {e}");
     }
-    // Before the interface is up: nothing may reach the blocked endpoints
-    // even for an instant.
-    firewall::apply(&cfg.blocked)?;
-
     iface::wait_for(&cfg.interface, INTERFACE_WAIT).map_err(|e| e.to_string())?;
     iface::set_up(&cfg.interface).map_err(|e| e.to_string())?;
     let mac = iface::mac(&cfg.interface).map_err(|e| format!("reading the MAC address: {e}"))?;
@@ -103,6 +91,47 @@ fn random_xid() -> u32 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     t.subsec_nanos() ^ std::process::id()
+}
+
+/// Read live interface addresses rather than retaining the startup lease.
+pub fn status(interface: &str) -> clankerd_proto::guest::NetworkStatus {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    let mut status = clankerd_proto::guest::NetworkStatus::default();
+    let mut head = std::ptr::null_mut();
+    // SAFETY: getifaddrs allocates a linked list valid until freeifaddrs.
+    unsafe {
+        if libc::getifaddrs(&mut head) != 0 {
+            return status;
+        }
+        let mut current = head;
+        while !current.is_null() {
+            let item = &*current;
+            if !item.ifa_name.is_null()
+                && !item.ifa_addr.is_null()
+                && std::ffi::CStr::from_ptr(item.ifa_name).to_bytes() == interface.as_bytes()
+            {
+                let address = match (*item.ifa_addr).sa_family as i32 {
+                    libc::AF_INET => {
+                        let addr = &*(item.ifa_addr as *const libc::sockaddr_in);
+                        Some(IpAddr::V4(Ipv4Addr::from(
+                            addr.sin_addr.s_addr.to_ne_bytes(),
+                        )))
+                    }
+                    libc::AF_INET6 => {
+                        let addr = &*(item.ifa_addr as *const libc::sockaddr_in6);
+                        Some(IpAddr::V6(Ipv6Addr::from(addr.sin6_addr.s6_addr)))
+                    }
+                    _ => None,
+                };
+                if let Some(address) = address {
+                    status.addresses.push(address);
+                }
+            }
+            current = item.ifa_next;
+        }
+        libc::freeifaddrs(head);
+    }
+    status
 }
 
 #[cfg(test)]

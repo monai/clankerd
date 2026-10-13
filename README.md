@@ -31,8 +31,8 @@ The build runs on Linux or macOS. Outputs are:
 - `build/rust/darwin-arm64/{vmctl,clankerd-vmspawn}`: Mac host binaries.
 - `build/rust/linux-arm64/`: static guest daemon and ext4 utilities.
 
-The Mac needs Homebrew libkrun/libkrunfw. The runtime can fetch the pinned
-gvproxy network sidecar.
+The Mac needs Homebrew libkrun/libkrunfw and an installed vmnet-helper.
+On macOS 15, install its supported passwordless sudoers rule; the VM stays unprivileged.
 See [Mac setup and validation](docs/libkrun-first-boot.md) for prerequisites,
 SDK setup, signing and hardware checks. `make rust` remains an alias for the
 complete build.

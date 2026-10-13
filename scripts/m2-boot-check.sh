@@ -18,11 +18,7 @@
 #       first use, mounted at /storage), persistence across stop/start and
 #       `rm` without -v, growth at the next start, `rm -v`, and a virtio-fs
 #       bind mount that is readable and writable from both sides.
-# net   (ticket 08): boots IMAGE with its gvproxy sidecar and checks DHCP on
-#       eth0, DNS, an HTTPS fetch, the forwarding sysctls, that gvproxy's
-#       control API (192.168.127.1:80) and the host-loopback alias
-#       (192.168.127.254) are unreachable, and that gvproxy ends with the
-#       machine. Needs network access on the Mac (first run downloads gvproxy).
+# net: boots IMAGE with vmnet-helper and checks DHCP, DNS, HTTPS and cleanup.
 set -euo pipefail
 
 export DYLD_FALLBACK_LIBRARY_PATH=${DYLD_FALLBACK_LIBRARY_PATH:-/opt/homebrew/lib:/usr/local/lib:/usr/lib}
@@ -45,7 +41,7 @@ cleanup() {
     done
     for machine_dir in "$CLANKERD_STATE_DIR"/machines/*; do
       [ -d "$machine_dir" ] || continue
-      for log_name in vmspawn-exit vmspawn.log console.log gvproxy.log; do
+      for log_name in vmspawn-exit vmspawn.log console.log vmnet-helper.log; do
         [ -f "$machine_dir/$log_name" ] || continue
         printf '\n== %s\n' "$machine_dir/$log_name" >&2
         tail -n 60 "$machine_dir/$log_name" >&2
@@ -278,12 +274,12 @@ volume_check() {
 }
 
 net_check() {
-  step "net: boot IMAGE with a gvproxy sidecar"
+  step "net: boot IMAGE with a vmnet-helper sidecar"
   "$vmctl" run -d --name net --entrypoint sleep "$image" infinity
   wait_exec net
 
-  step "net: eth0 got 192.168.127.2 by DHCP"
-  "$vmctl" exec net sh -c 'ip -4 addr show eth0 || ifconfig eth0' | tee /dev/stderr | grep -q 192.168.127.2 \
+  step "net: eth0 got an IPv4 address by DHCP"
+  "$vmctl" exec net sh -c 'ip -4 addr show eth0 || ifconfig eth0' | tee /dev/stderr | grep -Eq "inet (addr:)?[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" \
     || fail "eth0 has no DHCP address"
 
   step "net: DNS resolves and HTTPS works"
@@ -308,18 +304,10 @@ net_check() {
   step "net: forwarding sysctls are set"
   [ "$("$vmctl" exec net cat /proc/sys/net/ipv4/ip_forward)" = 1 ] || fail "net.ipv4.ip_forward is not 1"
 
-  step "net: gvproxy's control API and the host-loopback alias are unreachable"
-  if "$vmctl" exec net sh -c 'wget -T 3 -qO- http://192.168.127.1/services/forwarder/all || curl -m 3 -fsS http://192.168.127.1/services/forwarder/all'; then
-    fail "the guest reached gvproxy's control API"
-  fi
-  if "$vmctl" exec net sh -c 'wget -T 3 -qO- http://192.168.127.254:22 || curl -m 3 -sS http://192.168.127.254:22'; then
-    fail "the guest reached the host loopback alias"
-  fi
-
-  step "net: gvproxy stops with the machine"
-  pgrep -f "gvproxy.*$state" >/dev/null || fail "no gvproxy sidecar is running"
+  step "net: vmnet-helper stops with the machine"
+  pgrep -f "vmnet-helper.*$state" >/dev/null || fail "no vmnet-helper sidecar is running"
   "$vmctl" rm -f net >/dev/null
-  ! pgrep -f "gvproxy.*$state" >/dev/null || fail "gvproxy outlived its machine"
+  ! pgrep -f "vmnet-helper.*$state" >/dev/null || fail "vmnet-helper outlived its machine"
 }
 
 case "$mode" in

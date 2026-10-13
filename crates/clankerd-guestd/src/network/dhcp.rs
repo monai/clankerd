@@ -2,9 +2,8 @@
 //! abstract [`Transport`], so the protocol runs against a fake server in tests
 //! and over an AF_PACKET socket in the guest (`packet`).
 //!
-//! Scope: one interface, one lease, no renewal. gvproxy leases for an hour
-//! but never withdraws the address, and the address is installed without a
-//! lifetime, so it stays valid for the machine's life.
+//! Initial IPv4 slice: one interface, one lease. Lease renewal/expiry and
+//! dual-stack configuration are implemented by the following networking ticket.
 
 use std::io;
 use std::net::Ipv4Addr;

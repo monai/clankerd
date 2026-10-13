@@ -79,7 +79,7 @@ creation in 0 seconds. This verifies the runtime with the derived DinD image;
 2. **Storage driver.** Docker picks overlayfs on the ext4 volume if the kernel has `overlay`; otherwise it falls back to `vfs` (slow, large). `docker info | grep -i storage` shows which.
 3. **cgroup v2 delegation.** guestd delegates controllers; dockerd needs `cpu`, `memory`, `pids` at least.
 4. **Published port chain.** Mac 127.0.0.1:8080 -> vsock tunnel -> guest :8080 -> docker-proxy/nftables DNAT -> container :80. The vmctl `-p` publication is fixed for the machine's life and is re-bound on `start`.
-6. **Name resolution inside containers.** Docker's embedded DNS forwards to the guest's `/etc/resolv.conf` from gvproxy.
+6. **Name resolution inside containers.** Docker's embedded DNS forwards to the guest's `/etc/resolv.conf` from the vmnet DHCP lease.
 
 ## 4. If nftables mode fails
 

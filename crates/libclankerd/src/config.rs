@@ -151,10 +151,18 @@ impl std::fmt::Display for PullPolicy {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NetworkMode {
+    #[default]
+    Shared,
+}
+
 /// How the machine is hosted: resources, mounts, ports, policies.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HostConfig {
+    pub network_mode: NetworkMode,
     pub cpus: Option<u32>,
     /// Bytes.
     pub memory: Option<u64>,
