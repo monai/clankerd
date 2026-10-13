@@ -114,7 +114,11 @@ impl NetBackend for VmnetBackend {
                 self.stop(spec);
                 Error::unavailable("cannot identify the unprivileged vmnet-helper process")
             })?;
-            fs::write(spec.dir.join(PID_FILE), pid.to_string())?;
+            if let Err(error) = fs::write(spec.dir.join(PID_FILE), pid.to_string()) {
+                self.stop(spec);
+                let _ = child.wait();
+                return Err(error.into());
+            }
         }
         // Reap it when it ends while we are still alive.
         std::thread::spawn(move || {
@@ -175,7 +179,7 @@ fn process_exists(pid: i32) -> bool {
 
 /// Guards against a stale pid file (after a host reboot the pid may belong to
 /// anything): only signal a process whose command line mentions vmnet-helper. If
-/// `ps` cannot be run the pid file is trusted.
+/// `ps` cannot be run, no signal is sent.
 fn is_helper(pid: i32, socket: &Path) -> bool {
     if !process_exists(pid) {
         return false;
