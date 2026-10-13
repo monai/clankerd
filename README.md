@@ -14,8 +14,7 @@ Silicon Macs, using libkrun and the stock libkrunfw kernel.
 
 Machines boot the image as their root filesystem. Named volumes persist across
 restarts and image changes, host directories are shared through virtio-fs, and
-published ports bind to host loopback. Host ports and Unix sockets can be exposed
-through generic tunnels. Images with Docker and nftables can run containers and
+host Unix sockets can be exposed through management relays. Images with Docker and nftables can run containers and
 Compose inside the machine.
 
 ## Build

@@ -15,14 +15,12 @@
 #                       volume" step (default debian:bookworm-slim)
 #   OUT                 build output directory (default build/rust)
 #   VMCTL               use this vmctl as is; skips the macOS and build checks
-#   SMOKE_HOST_PORT     host port published to nginx (default 8080)
-#   SMOKE_HOSTGW_PORT   host loopback port the guest must reach (default 18081)
 #   SMOKE_TIMEOUT       seconds to wait for dockerd and for services (default 120)
 #
 # What it proves, in order: boot with a volume; interactive exec; dockerd in
 # nftables mode on the stock kernel; `docker run -p 8080:80 nginx` reachable
 # from the Mac; a compose project with a user-defined network; containers reach
-# the internet; a host loopback port reachable from the guest; stop/start with
+# the internet; stop/start with
 # the volume (and Docker's data on it) intact; a changed image on the same
 # volume; a second machine from the cached image.
 set -Eeuo pipefail
@@ -31,8 +29,6 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 out=${OUT:-$root/build/rust}
 image=${IMAGE:-ghcr.io/monai/clankers:slim}
 alt_image=${ALT_IMAGE:-debian:bookworm-slim}
-host_port=${SMOKE_HOST_PORT:-8080}
-gw_port=${SMOKE_HOSTGW_PORT:-18081}
 timeout_s=${SMOKE_TIMEOUT:-120}
 vol=smoke-data
 
@@ -46,10 +42,8 @@ fi
 state=$(mktemp -d "${TMPDIR:-/tmp}/clankerd-smoke.XXXXXX")
 export CLANKERD_STATE_DIR=$state/state
 export CLANKERD_RUNTIME_DIR=$state/run
-http_pid=
 
 cleanup() {
-  [ -z "$http_pid" ] || kill "$http_pid" >/dev/null 2>&1 || true
   for m in smoke smoke-alt smoke2; do
     "$vmctl" rm -f -v "$m" >/dev/null 2>&1 || true
   done
@@ -80,7 +74,12 @@ retry() { # description, command...
   done
 }
 
-host_get() { curl -fsS --max-time 5 "http://127.0.0.1:$host_port/"; }
+host_get() {
+  local guest_ip
+  guest_ip=$(guest "ip -4 -o addr show dev eth0 | awk '{split(\$4,a,"/"); print a[1]}'")
+  [ -n "$guest_ip" ] || return 1
+  curl -fsS --max-time 5 "http://$guest_ip:8080/"
+}
 nginx_up() { host_get | grep -q 'Welcome to nginx'; }
 dockerd_up() { guest 'docker info'; }
 exec_up() { "$vmctl" exec "$1" true; }
@@ -109,15 +108,8 @@ step "pull $image and $alt_image"
 "$vmctl" pull "$image"
 "$vmctl" pull "$alt_image"
 
-step "host loopback service on 127.0.0.1:$gw_port"
-mkdir -p "$state/www"
-echo from-host > "$state/www/hello"
-python3 -m http.server "$gw_port" --bind 127.0.0.1 --directory "$state/www" >/dev/null 2>&1 &
-http_pid=$!
-
-step "boot with a volume, a published port and a host-gateway port"
-"$vmctl" run -d --name smoke -v "$vol:/storage" --volume-size 20G \
-  -p "$host_port:8080" --host-gateway-port "$gw_port" "$image" sleep infinity
+step "boot with a volume"
+"$vmctl" run -d --name smoke -v "$vol:/storage" --volume-size 20G "$image" sleep infinity
 retry "the machine to accept exec" exec_up smoke
 
 step "interactive exec: stdin reaches the guest and output returns"
@@ -136,9 +128,9 @@ if ! "$vmctl" exec -u root smoke sh -c 'nft list tables | grep -q docker'; then
 fi
 guest 'docker version --format "docker {{.Server.Version}}"'
 
-step "docker run -p 8080:80 nginx is reachable from the Mac on 127.0.0.1:$host_port"
+step "docker run -p 8080:80 nginx is reachable from the Mac at the guest IP"
 guest 'docker run -d --name web -p 8080:80 nginx'
-retry "nginx on the Mac's published port" nginx_up
+retry "nginx on the guest IP" nginx_up
 echo "fetched nginx from the Mac"
 
 step "containers reach the internet (DNS and TCP)"
@@ -164,10 +156,6 @@ guest 'docker compose -p proj -f /tmp/proj/compose.yaml exec -T client wget -qO-
 guest 'docker network inspect proj_appnet >/dev/null' || fail "the user-defined network is missing"
 guest 'docker compose -p proj -f /tmp/proj/compose.yaml down'
 
-step "a host loopback port is reachable from the guest"
-guest "wget -qO- http://127.0.0.1:$gw_port/hello | grep -q from-host" \
-  || fail "the guest cannot reach the host's loopback port $gw_port"
-
 step "stop and start keep the volume and Docker's data"
 "$vmctl" exec -u root smoke sh -c 'echo persisted > /storage/marker && sync'
 "$vmctl" stop smoke
@@ -178,7 +166,7 @@ retry "dockerd after restart" dockerd_up
 guest '[ "$(cat /storage/marker)" = persisted ]' || fail "volume marker (persisted) lost across stop/start"
 guest 'docker image inspect nginx >/dev/null' || fail "Docker's data-root did not persist (nginx image gone)"
 guest 'docker start web >/dev/null'
-retry "nginx on the published port after restart" nginx_up
+retry "nginx at the guest IP after restart" nginx_up
 
 step "a changed image keeps the volume"
 "$vmctl" stop smoke

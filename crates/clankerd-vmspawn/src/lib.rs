@@ -138,10 +138,6 @@ impl Hypervisor for DevLocal {
         }
         cmd.arg("--host-socket")
             .arg(&spec.host_socket)
-            // The local process shares the host's loopback, so the guest's
-            // loopback is another address (same as LocalProcessVmm).
-            .arg("--loopback")
-            .arg("127.0.0.2")
             .env("LISTEN_FDS", "1")
             .stdin(Stdio::null())
             .stdout(console.try_clone().map_err(|e| e.to_string())?)

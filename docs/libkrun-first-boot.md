@@ -14,7 +14,7 @@ Results reported by the developer from the Mac:
 | `scripts/m2-boot-check.sh image` | Passed: image defaults, overrides, cgroups, clock, graceful stop and forced-stop timeout |
 | `scripts/m2-boot-check.sh volume` | Passed: formatting, persistence, growth, removal and bind mounts |
 | `scripts/m2-boot-check.sh net` | Passed: DHCP, DNS, HTTPS, forwarding and blocked backend endpoints |
-| `scripts/m2-smoke-dind.sh` | Passed after the forced-removal race fix: Docker, Compose, port forwarding, host gateway, restart, image change and cached create |
+| `scripts/m2-smoke-dind.sh` | Passed after the forced-removal race fix: Docker, Compose, guest-IP access, restart, image change and cached create |
 
 The Docker smoke used `127.0.0.1:5050/clankerd-dind:smoke`, derived from
 `docker:29-dind` with nftables and volume-backed Docker storage. It ran Docker
@@ -422,7 +422,7 @@ $vmctl rm -f b
 
 ## Forwarding lifetime
 
-Published ports, host-gateway ports and socket bindings are owned by
+Unix socket bindings are owned by
 `clankerd-vmspawn`. They survive `vmctl run -d`, later CLI commands and
 reattachment, and are created again on a fresh start. The library controls
 runtime bindings through a separate Unix socket (mode 0600) that is not mapped

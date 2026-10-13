@@ -1,8 +1,8 @@
-//! Parsers for CLI values (`-v`, `-p`).
+//! Parsers for CLI values (`-v`).
 
 use std::path::PathBuf;
 
-use libclankerd::{Mount, PortBinding};
+use libclankerd::Mount;
 
 /// Parses `SOURCE:TARGET[:OPTIONS]` where OPTIONS are comma-separated `ro` and
 /// `size=N`. A source starting with `.`, `/` or `~` is a host directory (made
@@ -54,22 +54,4 @@ pub fn parse_mount(s: &str) -> Result<Mount, String> {
         Some(bytes) => mount.with_size(bytes),
         None => mount,
     })
-}
-
-/// Parses `[IP:]HOST_PORT:GUEST_PORT`. The library rejects non-loopback IPs.
-pub fn parse_publish(s: &str) -> Result<PortBinding, String> {
-    let port = |p: &str| {
-        p.parse::<u16>()
-            .map_err(|_| format!("invalid port \"{p}\""))
-    };
-    let parts: Vec<&str> = s.rsplitn(3, ':').collect();
-    match parts.as_slice() {
-        [guest, host] => Ok(PortBinding::loopback(port(host)?, port(guest)?)),
-        [guest, host, ip] => Ok(PortBinding {
-            host_ip: Some(ip.parse().map_err(|_| format!("invalid IP \"{ip}\""))?),
-            host_port: port(host)?,
-            guest_port: port(guest)?,
-        }),
-        _ => Err("expected [IP:]HOST_PORT:GUEST_PORT".into()),
-    }
 }

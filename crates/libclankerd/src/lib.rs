@@ -20,7 +20,7 @@
 //! * `exec`: [`Exec`] lifecycle (create, start, resize, kill, inspect) and its streams.
 //! * `guest`: host-side varlink client for clankerd-guestd (private).
 //! * [`vmm`]: the [`Vmm`] trait and its implementations; the only seam tests fake.
-//! * `tunnel`: published ports, host-gateway ports and socket bindings.
+//! * `tunnel`: Unix socket bindings.
 //! * `error`: [`Error`] and [`ErrorKind`] (Docker's kinds).
 //!
 //! Machines outlive the process that started them: state lives on disk, the
@@ -53,9 +53,7 @@ pub mod vmm;
 mod vmspawn_populator;
 mod volumes;
 
-pub use config::{
-    HostConfig, MachineConfig, PortBinding, PullPolicy, RestartPolicy, SocketBinding,
-};
+pub use config::{HostConfig, MachineConfig, PullPolicy, RestartPolicy, SocketBinding};
 pub use engine::{Engine, EngineConfig, ROOT_DISK};
 pub use error::{Error, ErrorKind, Result};
 pub use events::{EventAction, Events, MachineEvent};
@@ -67,7 +65,7 @@ pub use mount::{Mount, parse_size};
 pub use rootdisk::{DiskPopulator, LocalGuestdPopulator};
 pub use signal::parse_signal;
 pub use state::{MachineState, Status, WaitResult};
-pub use tunnel::{GuestBinding, PublishedPort};
+pub use tunnel::GuestBinding;
 pub use vmm::Vmm;
 pub use vmspawn_populator::VmspawnPopulator;
 pub use volumes::{DEFAULT_SIZE as DEFAULT_VOLUME_SIZE, VolumeInfo};
