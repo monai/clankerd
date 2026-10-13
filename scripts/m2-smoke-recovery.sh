@@ -28,14 +28,26 @@ python3 "$fixture" unix-server "$work/host.sock" &
 host_pid=$!
 services=$(cat "$root/scripts/fixtures/vmnet-ipv6-services.py")
 recovery=$(cat "$fixture")
-"$vmctl" run -d -i --name "$name" "${IMAGE:-python:3.13-alpine}" python3 -c "$services
-$recovery" recovery-server
-"$vmctl" inspect "$name" > "$work/initial.json"
-id=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[0]["id"])' "$work/initial.json")
+id=$("$vmctl" run -d -i --name "$name" "${IMAGE:-python:3.13-alpine}" python3 -c "$services
+$recovery" recovery-server)
+echo "$id"
 short=${id:0:12}
 dir=$work/state/machines/$id
+workload_pid=''
+startup_deadline=$((SECONDS + 30))
+while [ "$SECONDS" -lt "$startup_deadline" ]; do
+  if workload_pid=$("$vmctl" exec "$name" python3 -c "$recovery" ready 2> "$work/startup.log"); then
+    break
+  fi
+  sleep 0.2
+done
+if [ -z "$workload_pid" ]; then
+  cat "$work/startup.log" >&2
+  echo 'Workload fixture PID/listeners did not become ready within 30 seconds' >&2
+  false
+fi
+"$vmctl" inspect "$name" > "$work/initial.json"
 python3 "$fixture" bind "$work/run/$short.tunnels" "$work/host.sock"
-workload_pid=$("$vmctl" exec "$name" cat /tmp/recovery-workload.pid)
 check() {
   "$vmctl" inspect "$name" > "$work/current.json"
   python3 - "$work/initial.json" "$work/current.json" "$1" <<'PY'
