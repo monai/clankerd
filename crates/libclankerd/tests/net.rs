@@ -363,3 +363,24 @@ fn external_observations_report_actual_family_specific_endpoint_success_and_fail
         machine.stop(Duration::from_secs(10)).unwrap();
     }
 }
+
+#[test]
+fn bridged_network_requires_an_explicit_physical_interface() {
+    let rig = rig(FAKE_VMNET);
+    for config in [
+        serde_json::json!({"network_mode":"bridged"}),
+        serde_json::json!({"network_mode":"bridged","bridge_interface":""}),
+        serde_json::json!({"network_mode":"bridged","bridge_interface":"../en0"}),
+        serde_json::json!({"network_mode":"shared","bridge_interface":"en0"}),
+    ] {
+        let host: HostConfig = serde_json::from_value(config).unwrap();
+        let error = rig
+            .engine
+            .create(Some("bridge-invalid"), sh("exit 0"), host)
+            .err()
+            .expect("invalid interface must fail");
+        assert_eq!(error.kind(), ErrorKind::InvalidParameter);
+        assert!(error.message().contains("interface"), "{error}");
+        assert!(rig.vmm.specs.lock().unwrap().is_empty());
+    }
+}

@@ -324,6 +324,7 @@ impl Machine {
     /// applied on failure.
     pub fn update(&self, config: &MachineConfig, host_config: HostConfig) -> Result<()> {
         crate::tunnel::validate_host_config(&host_config)?;
+        crate::config::validate_bridge_config(&host_config)?;
         crate::mount::validate(&host_config.mounts)?;
         let starting = self.inner.lock();
         let (mut record, state) = self.inner.store.load(&self.id)?;
