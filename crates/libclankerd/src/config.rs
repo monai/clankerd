@@ -158,11 +158,74 @@ pub enum NetworkMode {
     Shared,
 }
 
+/// macOS 15 selects a common vmnet network by its private IPv4 subnet.
+/// IPv6 configuration remains automatic and has no global family preference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SharedNetwork {
+    pub address: std::net::Ipv4Addr,
+    pub prefix_len: u8,
+}
+impl Default for SharedNetwork {
+    fn default() -> Self {
+        Self {
+            address: std::net::Ipv4Addr::new(192, 168, 105, 0),
+            prefix_len: 24,
+        }
+    }
+}
+impl SharedNetwork {
+    pub(crate) fn addresses(
+        &self,
+    ) -> crate::Result<(std::net::Ipv4Addr, std::net::Ipv4Addr, std::net::Ipv4Addr)> {
+        use std::net::Ipv4Addr;
+        if !(8..=30).contains(&self.prefix_len) {
+            return Err(crate::Error::invalid_parameter(
+                "shared network requires an RFC1918 IPv4 subnet with prefix /8 through /30",
+            ));
+        }
+        let mask = u32::MAX << (32 - self.prefix_len);
+        let base = u32::from(self.address);
+        let end = Ipv4Addr::from(base | !mask);
+        if base & !mask != 0 || !self.address.is_private() || !end.is_private() {
+            return Err(crate::Error::invalid_parameter(
+                "shared network must be an aligned RFC1918 IPv4 subnet",
+            ));
+        }
+        Ok((
+            Ipv4Addr::from(base + 1),
+            Ipv4Addr::from(u32::from(end) - 1),
+            Ipv4Addr::from(mask),
+        ))
+    }
+}
+impl std::str::FromStr for SharedNetwork {
+    type Err = String;
+    fn from_str(text: &str) -> Result<Self, String> {
+        let (address, prefix) = text
+            .split_once('/')
+            .ok_or_else(|| "shared network needs IPv4 CIDR, e.g. 192.168.109.0/24".to_owned())?;
+        let network = Self {
+            address: address
+                .parse()
+                .map_err(|_| "shared network needs an IPv4 address")?,
+            prefix_len: prefix
+                .parse()
+                .map_err(|_| "shared network needs a numeric prefix")?,
+        };
+        network
+            .addresses()
+            .map_err(|error| error.message().to_owned())?;
+        Ok(network)
+    }
+}
+
 /// How the machine is hosted: resources, mounts, ports, policies.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HostConfig {
     pub network_mode: NetworkMode,
+    pub shared_network: SharedNetwork,
+    pub shared_peer_participation: bool,
     pub cpus: Option<u32>,
     /// Bytes.
     pub memory: Option<u64>,
@@ -173,4 +236,20 @@ pub struct HostConfig {
     pub restart_policy: RestartPolicy,
     /// Applies whenever the machine's image is resolved (create, image change).
     pub pull_policy: PullPolicy,
+}
+
+impl Default for HostConfig {
+    fn default() -> Self {
+        Self {
+            network_mode: NetworkMode::default(),
+            shared_network: SharedNetwork::default(),
+            shared_peer_participation: true,
+            cpus: None,
+            memory: None,
+            mounts: Vec::new(),
+            socket_bindings: Vec::new(),
+            restart_policy: RestartPolicy::default(),
+            pull_policy: PullPolicy::default(),
+        }
+    }
 }

@@ -18,6 +18,7 @@ pub use vmnet::VmnetBackend;
 #[derive(Debug, Clone)]
 pub struct NetSpec {
     pub machine_id: String,
+    pub host_config: crate::HostConfig,
     /// The machine's state directory (pid file, sidecar log).
     pub dir: PathBuf,
     /// Where the sidecar must listen for the VMM's NIC (short path: unix
@@ -44,4 +45,9 @@ pub trait NetBackend: Send + Sync {
     /// Ends the machine's sidecar. Idempotent; safe for a sidecar started by
     /// an earlier process and for one that already died.
     fn stop(&self, spec: &NetSpec);
+}
+
+pub(crate) fn validate_host_config(host: &crate::HostConfig) -> Result<()> {
+    host.shared_network.addresses()?;
+    Ok(())
 }

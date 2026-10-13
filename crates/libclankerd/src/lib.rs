@@ -54,7 +54,7 @@ mod vmspawn_populator;
 mod volumes;
 
 pub use config::{
-    HostConfig, MachineConfig, NetworkMode, PullPolicy, RestartPolicy, SocketBinding,
+    HostConfig, MachineConfig, NetworkMode, PullPolicy, RestartPolicy, SharedNetwork, SocketBinding,
 };
 pub use engine::{Engine, EngineConfig, ROOT_DISK};
 pub use error::{Error, ErrorKind, Result};
