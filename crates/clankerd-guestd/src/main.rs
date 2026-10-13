@@ -448,6 +448,10 @@ fn serve(
             let result = signal_workload(&call, &shared);
             let _ = reply(&mut out, result);
         }
+        clankerd_proto::guest::METHOD_NETWORK_STATUS => {
+            let status = network::status("eth0");
+            let _ = reply(&mut out, Ok(serde_json::to_value(status).unwrap()));
+        }
         METHOD_SET_CLOCK => {
             let result = params::<clankerd_proto::guest::Clock>(&call).and_then(|clock| {
                 // Only a booted guest owns its clock; a local stand-in must

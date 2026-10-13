@@ -38,12 +38,12 @@ pub fn init(workload: &Workload) -> Result<(), String> {
         Err(e) => eprintln!("clankerd-guestd: delegating cgroup controllers: {e}"),
     }
     // Forwarding sysctls always; the NIC only when the machine has one. A
-    // machine whose network cannot be brought up safely still runs, offline.
+    // machine whose network cannot be brought up fails before workload launch.
     crate::network::prepare();
     if let Some(net) = &workload.network
         && let Err(e) = crate::network::setup(net)
     {
-        eprintln!("clankerd-guestd: network is not configured: {e}");
+        return Err(format!("network setup failed: {e}"));
     }
     if let Some(clock) = &workload.clock
         && let Err(e) = set_clock(clock)

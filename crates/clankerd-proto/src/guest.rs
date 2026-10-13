@@ -121,25 +121,19 @@ pub enum GuestMount {
 }
 
 /// Guest network setup done before the workload starts (DHCP, resolv.conf,
-/// hostname, forwarding sysctls and the firewall rules below).
+/// hostname and forwarding sysctls).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkConfig {
     /// The interface to run DHCP on (`eth0`).
     pub interface: String,
     pub hostname: String,
-    /// Network-backend addresses the guest, and containers behind it, must not
-    /// reach (the backend's control API, host loopback aliases). guestd drops
-    /// them in nftables before configuring the interface.
-    #[serde(default)]
-    pub blocked: Vec<BlockedEndpoint>,
 }
 
-/// An IPv4 destination to drop: one TCP port, or every protocol when `tcp_port` is `None`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BlockedEndpoint {
-    pub addr: std::net::Ipv4Addr,
-    #[serde(default)]
-    pub tcp_port: Option<u16>,
+pub const METHOD_NETWORK_STATUS: &str = "io.clankerd.Guest.NetworkStatus";
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NetworkStatus {
+    pub addresses: Vec<std::net::IpAddr>,
 }
 
 /// A point in time as seconds and nanoseconds since the Unix epoch.
