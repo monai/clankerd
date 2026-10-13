@@ -501,3 +501,31 @@ Primary implementation references: [dhcpcd 10.3.0 configuration](https://github.
 [direct binary hook execution](https://github.com/NetworkConfiguration/dhcpcd/blob/v10.3.0/src/script.c),
 [Linux userspace RA ownership](https://github.com/NetworkConfiguration/dhcpcd/blob/v10.3.0/src/if-linux.c),
 and [Apple shared-mode IPv6 introduction](https://developer.apple.com/videos/play/wwdc2019/714/).
+
+## Selectable shared networks and peer isolation
+
+`vmctl create/run --shared-network 192.168.109.0/24` selects an aligned RFC1918
+IPv4 subnet. macOS15 vmnet joins attachments with matching start/end/mask
+configuration; the selection is distinct from each machine's stable interface
+UUID. IPv6 stays automatic on the selected attachment. The default remains
+192.168.105.0/24 with peer participation enabled.
+
+`--isolate-peers` enables vmnet's native per-interface isolation, blocking peers
+in both directions while keeping Mac access and shared NAT. Inspection exposes
+`host_config.shared_network` and `shared_peer_participation`. API updates use the
+existing stopped-machine contract: stop, update HostConfig, then start. A running
+attachment is never replaced, and selections are retained across restarts.
+
+```sh
+mise exec -- make rust && scripts/m2-smoke-shared.sh
+```
+
+The hardware gate verifies direct IPv4/IPv6 TCP+UDP between participating peers,
+forbidden peer paths in both directions for an isolated machine, Mac access,
+IPv4 NAT, restart and cleanup. One-hop packet probes distinguish a common
+Ethernet network from routed reachability between separate selected networks.
+Other-VMM interoperability and isolation, user-owned mDNS responders and
+external IPv6 on a capable host remain explicit ticket09 acceptance work.
+The [pinned helper integration guide](https://github.com/nirs/vmnet-helper/blob/v0.13.0/docs/integration.md#network-address-options)
+documents macOS15-compatible subnet selection and native isolation; no broker
+network API is used.
