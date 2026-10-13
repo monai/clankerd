@@ -11,9 +11,12 @@ use std::ffi::CString;
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+static CLIENT_SPAWN: Mutex<()> = Mutex::new(());
 static CLIENT_RUNNING: AtomicBool = AtomicBool::new(false);
 static IPV6_PEER: AtomicBool = AtomicBool::new(false);
 const INITIAL_WAIT: Duration = Duration::from_secs(20);
@@ -107,13 +110,62 @@ pub fn setup(config: &NetworkConfig) -> Result<(), String> {
         "clankerd-guestd: network ready: {}",
         serde_json::to_string(&status(&config.interface)).unwrap()
     );
-    probe::start(config.probe_endpoints.clone().unwrap_or_default());
+    probe::start_network(
+        config.interface.clone(),
+        config.probe_endpoints.clone().unwrap_or_default(),
+    );
     // dhcpcd maintains both families; its failure must not stop a running workload.
+    let interface = config.interface.clone();
     std::thread::spawn(move || {
-        let result = child.wait();
-        crate::power::release(child.id());
-        CLIENT_RUNNING.store(false, Ordering::Relaxed);
-        eprintln!("clankerd-guestd: automatic network configuration client stopped: {result:?}");
+        let mut delay = Duration::from_secs(1);
+        loop {
+            let started = Instant::now();
+            let result = child.wait();
+            CLIENT_RUNNING.store(false, Ordering::Relaxed);
+            IPV6_PEER.store(false, Ordering::Relaxed);
+            probe::invalidate();
+            crate::power::release(child.id());
+            if let Err(error) = hook::clear() {
+                eprintln!("clankerd-guestd: clearing client evidence: {error}");
+            }
+            eprintln!(
+                "clankerd-guestd: automatic network configuration client stopped: {result:?}"
+            );
+            if started.elapsed() >= Duration::from_secs(30) {
+                delay = Duration::from_secs(1);
+            }
+            loop {
+                if SHUTTING_DOWN.load(Ordering::Relaxed) {
+                    return;
+                }
+                std::thread::sleep(delay);
+                let _spawn = CLIENT_SPAWN
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if SHUTTING_DOWN.load(Ordering::Relaxed) {
+                    return;
+                }
+                match crate::power::spawn_owned(&mut command) {
+                    Ok(replacement) => {
+                        child = replacement;
+                        CLIENT_RUNNING.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    Err(error) => {
+                        eprintln!("clankerd-guestd: restarting configuration client: {error}")
+                    }
+                }
+                delay = (delay * 2).min(Duration::from_secs(30));
+            }
+            delay = (delay * 2).min(Duration::from_secs(30));
+        }
+    });
+    std::thread::spawn(move || {
+        loop {
+            let reachable = client_running() && peer::reachable(&interface).unwrap_or(false);
+            IPV6_PEER.store(reachable, Ordering::Relaxed);
+            std::thread::sleep(Duration::from_secs(1));
+        }
     });
     std::thread::spawn(|| {
         loop {
@@ -124,6 +176,13 @@ pub fn setup(config: &NetworkConfig) -> Result<(), String> {
         }
     });
     Ok(())
+}
+
+pub fn shutdown() {
+    let _spawn = CLIENT_SPAWN
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    SHUTTING_DOWN.store(true, Ordering::Relaxed);
 }
 
 fn stop_failed(child: &mut std::process::Child, message: String) -> Result<(), String> {

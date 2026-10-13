@@ -80,11 +80,22 @@ impl Hypervisor for Libkrun {
         cfg.env = vec!["KRUN_INIT_PID1=1".into()];
 
         cfg.console_log = Some(spec.console_log.clone());
+        let relay = if let Some(net) = &spec.net {
+            libclankerd::net::recovery::Relay::start(
+                spec.boot_dir.parent().unwrap_or(&spec.boot_dir),
+                &net.socket,
+            )
+            .map_err(|error| format!("starting stable native Ethernet attachment: {error}"))?
+        } else {
+            None
+        };
         if let Some(net) = &spec.net
             && !spec.populate
         {
             cfg.nets = vec![libkrun_sys::NetDevice {
-                socket: net.socket.clone(),
+                socket: relay
+                    .as_ref()
+                    .map_or_else(|| net.socket.clone(), |relay| relay.socket().to_owned()),
                 mac: net.mac,
                 features: net.features,
                 vfkit: net.vfkit,

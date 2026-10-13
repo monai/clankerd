@@ -88,17 +88,29 @@ impl Machine {
 
     pub fn inspect(&self) -> Result<MachineInfo> {
         let (record, state) = self.inner.store.load(&self.id)?;
-        let network = if state.status == Status::Running && self.inner.net.is_some() {
-            guest::call(
-                &self.inner.socket_path(&self.id),
-                clankerd_proto::guest::METHOD_NETWORK_STATUS,
-                &serde_json::json!({}),
-            )
-            .ok()
-            .and_then(|value| serde_json::from_value(value).ok())
-        } else {
-            None
-        };
+        let mut network: Option<clankerd_proto::guest::NetworkStatus> =
+            if state.status == Status::Running && self.inner.net.is_some() {
+                guest::call(
+                    &self.inner.socket_path(&self.id),
+                    clankerd_proto::guest::METHOD_NETWORK_STATUS,
+                    &serde_json::json!({}),
+                )
+                .ok()
+                .and_then(|value| serde_json::from_value(value).ok())
+            } else {
+                None
+            };
+        if let (Some(network), Some(backend)) = (&mut network, &self.inner.net)
+            && !backend.connected(&self.inner.net_spec(&self.id))
+        {
+            for family in [&mut network.ipv4, &mut network.ipv6] {
+                family.local_available = false;
+                family.external = clankerd_proto::guest::ExternalConnectivity::Unavailable;
+                family.probe = None;
+            }
+            network.ready = false;
+            network.diagnostic = "native Ethernet attachment is unavailable or reconnecting; vsock management remains independent".into();
+        }
         Ok(MachineInfo {
             id: record.id,
             name: record.name,
