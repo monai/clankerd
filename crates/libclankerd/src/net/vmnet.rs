@@ -111,9 +111,9 @@ impl NetBackend for VmnetBackend {
                 Ok(Some(status)) => Some(format!(
                     "vmnet-helper exited ({status}) before it was ready"
                 )),
-                Ok(None) if Instant::now() >= deadline => {
-                    Some(format!("vmnet-helper not ready after {READY_TIMEOUT:?}"))
-                }
+                Ok(None) if Instant::now() >= deadline => Some(format!(
+                    "vmnet-helper not ready after {READY_TIMEOUT:?} (waiting for native interface metadata and socket)"
+                )),
                 Ok(None) => None,
                 Err(e) => Some(format!("waiting for vmnet-helper: {e}")),
             };
@@ -125,8 +125,27 @@ impl NetBackend for VmnetBackend {
                     log_tail(&log_path)
                 )));
             }
-            if spec.socket.exists() {
-                break;
+            if spec.socket.exists() && interface_ready(&log_path) {
+                // Recheck after reading the completion record: a helper that
+                // exited during publication cannot launch the workload.
+                match child.try_wait() {
+                    Ok(None) => break,
+                    Ok(Some(status)) => {
+                        self.stop(spec);
+                        let _ = child.wait();
+                        return Err(Error::unavailable(format!(
+                            "vmnet-helper exited ({status}) before attachment: {}",
+                            log_tail(&log_path)
+                        )));
+                    }
+                    Err(error) => {
+                        self.stop(spec);
+                        let _ = child.wait();
+                        return Err(Error::unavailable(format!(
+                            "waiting for vmnet-helper: {error}"
+                        )));
+                    }
+                }
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -288,4 +307,43 @@ fn helper_pid(socket: &Path) -> Option<i32> {
             None
         }
     })
+}
+
+/// Native vmnet publishes a flushed, single-line JSON record after creating
+/// the interface. Log text, partial JSON and socket existence are not a handshake.
+fn interface_ready(path: &Path) -> bool {
+    #[derive(serde::Deserialize)]
+    struct InterfaceReady {
+        vmnet_mac_address: String,
+        vmnet_mtu: u64,
+        vmnet_max_packet_size: u64,
+    }
+    let bytes = fs::read(path).unwrap_or_default();
+    String::from_utf8_lossy(&bytes)
+        .split_inclusive('\n')
+        .any(|line| {
+            if !line.ends_with('\n') {
+                return false;
+            }
+            let Ok(info) = serde_json::from_str::<InterfaceReady>(line.trim()) else {
+                return false;
+            };
+            let mac: Option<Vec<u8>> = info
+                .vmnet_mac_address
+                .split(':')
+                .map(|part| {
+                    (part.len() == 2)
+                        .then(|| u8::from_str_radix(part, 16).ok())
+                        .flatten()
+                })
+                .collect();
+            let Some(mac) = mac else {
+                return false;
+            };
+            mac.len() == 6
+                && mac[0] & 1 == 0
+                && mac.iter().any(|byte| *byte != 0)
+                && (576..=65535).contains(&info.vmnet_mtu)
+                && info.vmnet_max_packet_size >= info.vmnet_mtu + 14
+        })
 }

@@ -22,6 +22,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 echo $$ > "$0.pid"
+echo 'INFO starting interface' >&2
+echo '{"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514}'
 : > "$sock"
 trap 'rm -f "$sock"; exit 0' TERM
 while :; do sleep 0.1; done
@@ -457,6 +459,8 @@ while [ $# -gt 0 ]; do
   case "$1" in --socket) sock=$2 ;; esac
   shift
 done
+echo 'INFO starting interface' >&2
+echo '{"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514}'
 : > "$sock"
 trap 'rm -f "$sock"; exit 0' TERM
 while :; do sleep 0.1; done
@@ -562,4 +566,31 @@ fn invalid_shared_network_selection_fails_before_creating_or_attaching_a_machine
         );
         assert!(rig.vmm.specs.lock().unwrap().is_empty());
     }
+}
+
+#[test]
+fn a_bound_socket_without_native_interface_metadata_is_not_a_ready_attachment() {
+    let rig = rig(r#"#!/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in --socket) sock=$2 ;; esac
+  shift
+done
+: > "$sock"
+echo 'interface still initializing, no completion metadata' >&2
+trap 'rm -f "$sock"; exit 0' TERM
+while :; do sleep 0.1; done
+"#);
+    let machine = long_running(&rig.engine, "socket-without-interface");
+    let error = machine.start().unwrap_err();
+    assert!(error.message().contains("no completion metadata"));
+    assert!(rig.vmm.specs.lock().unwrap().is_empty());
+    assert_eq!(machine.inspect().unwrap().state.status, Status::Created);
+    assert!(
+        !rig._env
+            .root()
+            .join("state/machines")
+            .join(machine.id())
+            .join("net.pid")
+            .exists()
+    );
 }
