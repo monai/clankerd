@@ -3,6 +3,7 @@ pub mod files;
 pub mod hook;
 mod iface;
 mod peer;
+pub mod probe;
 mod snapshot;
 
 use clankerd_proto::guest::{NetworkConfig, NetworkStatus};
@@ -106,6 +107,7 @@ pub fn setup(config: &NetworkConfig) -> Result<(), String> {
         "clankerd-guestd: network ready: {}",
         serde_json::to_string(&status(&config.interface)).unwrap()
     );
+    probe::start(config.probe_endpoints.clone().unwrap_or_default());
     // dhcpcd maintains both families; its failure must not stop a running workload.
     std::thread::spawn(move || {
         let result = child.wait();
@@ -142,7 +144,9 @@ fn stop_failed(child: &mut std::process::Child, message: String) -> Result<(), S
 }
 
 pub fn status(interface: &str) -> NetworkStatus {
-    snapshot::read(interface)
+    let mut status = snapshot::read(interface);
+    probe::apply(&mut status);
+    status
 }
 fn client_running() -> bool {
     CLIENT_RUNNING.load(Ordering::Relaxed)

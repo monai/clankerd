@@ -238,6 +238,7 @@ impl Machine {
                 network: net.as_ref().map(|_| NetworkConfig {
                     interface: "eth0".into(),
                     hostname: self.id[..12].to_owned(),
+                    probe_endpoints: None,
                 }),
                 tty: info.config.tty,
                 open_stdin: info.config.open_stdin,

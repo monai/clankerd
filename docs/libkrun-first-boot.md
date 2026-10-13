@@ -476,8 +476,14 @@ honored. The bundled client remains running independently of the workload.
 
 `vmctl inspect` includes live address details (prefix, interface, scope and
 DAD/deprecation flags), routes, resolver state and separate per-family local and
-external status. `external: unverified` means a default route exists; it does
-not assert that an Internet destination answered. IPv6 link-local addresses
+external status. Before the first observation, `external: unverified` means a
+default route exists. Separate numeric TCP probes target `1.1.1.1:443` and
+`[2606:4700:4700::1111]:443` independently every 30 seconds, with a two-second
+connection timeout. They begin asynchronously after local readiness and never
+gate workload startup. `available`/`unavailable` report the last connection
+result for that particular destination; they do not guarantee or deny general
+Internet access. Inspection includes the destination, check timestamp and
+endpoint-specific diagnostic. IPv6 link-local addresses
 require the Mac's actual vmnet interface scope, which differs from guest eth0.
 
 ```sh

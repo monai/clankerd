@@ -40,12 +40,19 @@ fn script(dir: &Path, body: &str) -> PathBuf {
 struct Recording {
     inner: LocalProcessVmm,
     specs: Mutex<Vec<BootSpec>>,
+    probe_endpoints: Option<serde_json::Value>,
 }
 
 impl Vmm for Recording {
     fn boot(&self, spec: &BootSpec) -> libclankerd::Result<BootHandle> {
+        let mut spec = spec.clone();
+        if let Some(endpoints) = &self.probe_endpoints {
+            let mut config = serde_json::to_value(spec.workload.network.as_ref().unwrap()).unwrap();
+            config["probe_endpoints"] = endpoints.clone();
+            spec.workload.network = Some(serde_json::from_value(config).unwrap());
+        }
         self.specs.lock().unwrap().push(spec.clone());
-        self.inner.boot(spec)
+        self.inner.boot(&spec)
     }
 }
 
@@ -57,11 +64,15 @@ struct Rig {
 }
 
 fn rig(helper_body: &str) -> Rig {
+    rig_with_probes(helper_body, None)
+}
+fn rig_with_probes(helper_body: &str, probe_endpoints: Option<serde_json::Value>) -> Rig {
     let env = Env::new();
     let helper = script(env.root(), helper_body);
     let vmm = Arc::new(Recording {
         inner: LocalProcessVmm::new(guestd_path()),
         specs: Mutex::default(),
+        probe_endpoints,
     });
     let mut cfg = env.config(vmm.clone());
     cfg.net = Some(Arc::new(VmnetBackend::new(&helper)));
@@ -188,6 +199,7 @@ fn without_a_net_backend_machines_boot_without_a_nic() {
     let vmm = Arc::new(Recording {
         inner: LocalProcessVmm::new(guestd_path()),
         specs: Mutex::default(),
+        probe_endpoints: None,
     });
     let engine = Engine::new(env.config(vmm.clone())).unwrap();
     let m = engine
@@ -281,4 +293,73 @@ fn inspection_reports_both_families_without_claiming_an_unconfigured_network_is_
     assert_eq!(info["network"]["ipv6"]["external"], "unavailable");
     assert_eq!(info["network"]["ready"], false);
     machine.stop(Duration::from_secs(10)).unwrap();
+}
+
+#[test]
+fn external_observations_report_actual_family_specific_endpoint_success_and_failure() {
+    for ipv4_connected in [true, false] {
+        let ipv4 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let ipv6 = std::net::TcpListener::bind("[::1]:0").unwrap();
+        let destination4 = ipv4.local_addr().unwrap();
+        let destination6 = ipv6.local_addr().unwrap();
+        let _listener = if ipv4_connected {
+            drop(ipv6);
+            ipv4
+        } else {
+            drop(ipv4);
+            ipv6
+        };
+        let rig = rig_with_probes(
+            FAKE_VMNET,
+            Some(serde_json::json!({
+                "ipv4":destination4.to_string(), "ipv6":destination6.to_string()
+            })),
+        );
+        let machine = long_running(&rig.engine, "observed-endpoints");
+        machine.start().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let info = serde_json::to_value(machine.inspect().unwrap()).unwrap();
+            if !info["network"]["ipv4"]["probe"].is_null()
+                && !info["network"]["ipv6"]["probe"].is_null()
+            {
+                for (family, destination, connected) in [
+                    ("ipv4", destination4, ipv4_connected),
+                    ("ipv6", destination6, !ipv4_connected),
+                ] {
+                    assert_eq!(
+                        info["network"][family]["external"],
+                        if connected {
+                            "available"
+                        } else {
+                            "unavailable"
+                        }
+                    );
+                    assert_eq!(info["network"][family]["probe"]["connected"], connected);
+                    assert_eq!(
+                        info["network"][family]["probe"]["destination"],
+                        destination.to_string()
+                    );
+                    let diagnostic = info["network"][family]["probe"]["diagnostic"]
+                        .as_str()
+                        .unwrap();
+                    assert!(diagnostic.contains(&destination.to_string()));
+                    assert!(diagnostic.contains("other destinations are unverified"));
+                    assert!(
+                        info["network"][family]["probe"]["checked_at_unix_seconds"]
+                            .as_u64()
+                            .unwrap()
+                            > 0
+                    );
+                }
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no observed probe result: {info}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        machine.stop(Duration::from_secs(10)).unwrap();
+    }
 }
