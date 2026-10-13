@@ -6,6 +6,8 @@ set -Eeuo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${OUT:-$root/build/rust}
 vmctl=$out/darwin-arm64/vmctl
+# Carry the library search path across protected Python/shebang interpreters.
+export VMNET_TEST_LIBRARY_PATH=${VMNET_TEST_LIBRARY_PATH:-${DYLD_FALLBACK_LIBRARY_PATH:-/opt/homebrew/lib:/usr/local/lib:/usr/lib}}
 export VMNET_TEST_REAL_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn
 export CLANKERD_VMSPAWN=$root/scripts/fixtures/vmnet-family-filter.py
 export CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
