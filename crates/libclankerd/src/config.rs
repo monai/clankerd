@@ -1,6 +1,6 @@
 //! Machine configuration, split like Docker's `Config` / `HostConfig`.
 
-pub use clankerd_proto::tunnel::{PortBinding, SocketBinding};
+pub use clankerd_proto::tunnel::SocketBinding;
 
 use serde::{Deserialize, Serialize};
 
@@ -168,10 +168,6 @@ pub struct HostConfig {
     pub memory: Option<u64>,
     /// Bind mounts and the machine's (at most one) named volume.
     pub mounts: Vec<Mount>,
-    /// Guest ports published on host loopback, fixed for the machine's life.
-    pub port_bindings: Vec<PortBinding>,
-    /// Host loopback ports reachable at the same port on the guest's loopback.
-    pub host_gateway_ports: Vec<u16>,
     /// Host unix sockets exposed at paths inside the guest.
     pub socket_bindings: Vec<SocketBinding>,
     pub restart_policy: RestartPolicy,

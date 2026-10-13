@@ -201,49 +201,6 @@ fn the_real_helper_off_macos_explains_it_cannot_boot() {
     assert!(err.message().contains("only supported on macOS"), "{err}");
 }
 
-#[test]
-fn published_ports_work_through_the_helper_proxy() {
-    use libclankerd::PortBinding;
-    use std::io::{Read, Write};
-    use std::net::{Shutdown, TcpListener, TcpStream};
-
-    let env = Env::new();
-    let engine = libclankerd::Engine::new(env.config(dev_vmm())).unwrap();
-    let m = create(&engine, "ported", "sleep 60");
-    m.start().unwrap();
-
-    // The dev-local guest's loopback is 127.0.0.2.
-    let service = TcpListener::bind(("127.0.0.2", 0)).unwrap();
-    let guest_port = service.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        for mut c in service.incoming().flatten() {
-            let mut seen = String::new();
-            c.read_to_string(&mut seen).unwrap();
-            write!(c, "guest saw {seen}").unwrap();
-        }
-    });
-
-    let published = m.publish(PortBinding::loopback(0, guest_port)).unwrap();
-    let mut conn = TcpStream::connect(published.local_addr()).unwrap();
-    conn.write_all(b"ping").unwrap();
-    conn.shutdown(Shutdown::Write).unwrap();
-    let mut out = String::new();
-    conn.read_to_string(&mut out).unwrap();
-    assert_eq!(out, "guest saw ping");
-    let addr = published.local_addr();
-    let conflict = m
-        .publish(PortBinding::loopback(addr.port(), guest_port))
-        .err()
-        .unwrap();
-    assert_eq!(conflict.kind(), ErrorKind::Conflict);
-    drop(published);
-    assert!(TcpStream::connect(addr).is_err());
-    let _republished = m
-        .publish(PortBinding::loopback(addr.port(), guest_port))
-        .unwrap();
-    m.remove(true).unwrap();
-}
-
 fn spawn_spec(env: &Env, id: &str) -> serde_json::Value {
     let path = env
         .root()
@@ -494,4 +451,53 @@ fn force_remove_finishes_machine_writers_before_deleting_state() {
             ErrorKind::NotFound
         );
     }
+}
+
+#[test]
+fn configured_unix_socket_survives_library_exit_and_machine_restart() {
+    use std::io::{Read, Write};
+    use std::os::unix::net::{UnixListener, UnixStream};
+    let env = Env::new();
+    let host = env.root().join("host.sock");
+    let guest = env.root().join("guest.sock");
+    let listener = UnixListener::bind(&host).unwrap();
+    let service = std::thread::spawn(move || {
+        for _ in 0..3 {
+            let (mut conn, _) = listener.accept().unwrap();
+            conn.write_all(b"hello").unwrap();
+        }
+    });
+    let fetch = || {
+        let mut conn = UnixStream::connect(&guest).unwrap();
+        conn.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut response = [0; 5];
+        conn.read_exact(&mut response).unwrap();
+        assert_eq!(&response, b"hello");
+    };
+    {
+        let engine = libclankerd::Engine::new(env.config(dev_vmm())).unwrap();
+        let m = engine
+            .create(
+                Some("socket"),
+                sh("sleep 60"),
+                libclankerd::HostConfig {
+                    socket_bindings: vec![libclankerd::SocketBinding {
+                        guest_path: guest.clone(),
+                        host_path: host,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        m.start().unwrap();
+        fetch();
+    }
+    fetch();
+    let engine = libclankerd::Engine::new(env.config(dev_vmm())).unwrap();
+    let m = engine.get("socket").unwrap();
+    m.stop(Duration::from_secs(3)).unwrap();
+    m.start().unwrap();
+    fetch();
+    m.remove(true).unwrap();
+    service.join().unwrap();
 }

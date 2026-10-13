@@ -11,7 +11,7 @@ use clankerd_proto::guest::{
 };
 use serde::Serialize;
 
-use crate::config::{HostConfig, MachineConfig, PortBinding};
+use crate::config::{HostConfig, MachineConfig};
 use crate::engine::Inner;
 use crate::error::{Error, ErrorKind, Result};
 use crate::events::EventAction;
@@ -19,7 +19,7 @@ use crate::exec::{Exec, ExecConfig, ExecStreams};
 use crate::guest::{self, EventStream, Next};
 use crate::image_config::ImageConfig;
 use crate::state::{MachineState, Status, WaitResult};
-use crate::tunnel::{GuestBinding, MachineTunnels, PublishedPort, validate_port_binding};
+use crate::tunnel::{GuestBinding, MachineTunnels};
 use crate::vmm::BootSpec;
 use crate::volumes::VolumeStore;
 
@@ -219,8 +219,6 @@ impl Machine {
         let spec = BootSpec {
             forwarding: clankerd_proto::spawn::ForwardingConfig {
                 control_socket: socket.with_extension("tunnels"),
-                port_bindings: info.host_config.port_bindings.clone(),
-                host_gateway_ports: info.host_config.host_gateway_ports.clone(),
                 socket_bindings: info.host_config.socket_bindings.clone(),
             },
             machine_id: self.id.clone(),
@@ -479,25 +477,6 @@ impl Machine {
             .get(&self.id)
             .cloned()
             .ok_or_else(|| Error::conflict("machine is not running"))
-    }
-
-    /// Publishes a guest port on host loopback while the machine runs.
-    /// Dropping the returned handle closes the listener.
-    ///
-    /// With VmspawnVmm the helper owns the listener; dropping this handle
-    /// asks the helper to close it.
-    pub fn publish(&self, binding: PortBinding) -> Result<PublishedPort> {
-        validate_port_binding(&binding)?;
-        self.tunnels()?.publish(&binding)
-    }
-
-    /// Makes host loopback `port` reachable at the same port on the guest's
-    /// loopback. Dropping the handle removes it.
-    pub fn expose_host_port(&self, port: u16) -> Result<GuestBinding> {
-        if port == 0 {
-            return Err(Error::invalid_parameter("host-gateway port must not be 0"));
-        }
-        self.tunnels()?.expose_host_port(port)
     }
 
     /// Exposes the host unix socket `host_path` at `guest_path` inside the guest.
@@ -903,7 +882,6 @@ fn start_tunnels(inner: &Inner, id: &str, host: &HostConfig, mode: Tunnels) -> R
         return Ok(());
     }
     let tunnels = MachineTunnels::start(inner.socket_path(id), inner.host_socket_path(id))?;
-    tunnels.publish_configured(host)?;
     if mode == Tunnels::Open {
         tunnels.listen_configured(host)?;
     }
@@ -929,7 +907,7 @@ pub(crate) fn reattach(inner: &Arc<Inner>, id: &str) {
         && let Next::Event(Event::Ready) = stream.next(Some(deadline))
     {
         if let Ok((record, _)) = inner.store.load(id) {
-            // Best effort: ports that cannot be re-published are simply absent.
+            // Best effort: reconnect the Unix socket relay endpoint.
             let _ = start_tunnels(inner, id, &record.host_config, Tunnels::Reattach);
         }
         let _ = guest::call(

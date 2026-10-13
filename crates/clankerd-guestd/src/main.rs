@@ -3,13 +3,12 @@
 //! (a unix socket standing in for vsock). Boot-level setup (pivot, mounts) comes later.
 //!
 //! Usage: `clankerd-guestd --config WORKLOAD.json [--exit-file PATH]
-//! [--vsock-port N] [--host-socket PATH | --host-vsock-port N] [--loopback ADDR]`
+//! [--vsock-port N] [--host-socket PATH | --host-vsock-port N]`
 //!
 //! The listening socket is either inherited via `LISTEN_FDS` (local-process
 //! stand-in) or an `AF_VSOCK` listener on `--vsock-port` (real VM). The host
 //! tunnel endpoint is a unix socket (`--host-socket`) or a vsock port on the
-//! host (`--host-vsock-port`). `--loopback` shifts the guest loopback address
-//! for the local stand-in VMM.
+//! host (`--host-vsock-port`).
 //!
 //! The optional exit file receives the workload's exit code so the result
 //! survives the death of whoever was subscribed. Inside a VM the boot directory
@@ -94,7 +93,6 @@ fn main() {
     let mut host_socket = None;
     let mut host_vsock_port = None;
     let mut vsock_port = None;
-    let mut loopback = None;
     let mut populate = false;
     let mut boot_dir = None;
     let mut lenient = false;
@@ -109,7 +107,6 @@ fn main() {
                 host_vsock_port = Some(port_arg(args.next(), "--host-vsock-port"))
             }
             "--vsock-port" => vsock_port = Some(port_arg(args.next(), "--vsock-port")),
-            "--loopback" => loopback = args.next(),
             "--populate" => populate = true,
             "--boot-dir" => boot_dir = args.next().map(PathBuf::from),
             "--lenient-ownership" => lenient = true,
@@ -171,13 +168,7 @@ fn main() {
         (None, None) => None,
     };
 
-    let loopback = loopback
-        .map(|l| {
-            l.parse()
-                .unwrap_or_else(|_| die("invalid --loopback address"))
-        })
-        .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
-    let tunnels = Arc::new(tunnel::Tunnels::new(loopback, host));
+    let tunnels = Arc::new(tunnel::Tunnels::new(host));
 
     let shared = Arc::new(Shared {
         inner: Mutex::new(Inner {

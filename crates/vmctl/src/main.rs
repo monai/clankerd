@@ -14,10 +14,9 @@ use libclankerd::net::VmnetBackend;
 use libclankerd::vmm::{LocalProcessVmm, VmspawnVmm};
 use libclankerd::{
     Engine, EngineConfig, Error, HostConfig, ImageInfo, LocalGuestdPopulator, MachineConfig,
-    MachineInfo, Mount, PortBinding, PullPolicy, RestartPolicy, Status, VmspawnPopulator,
-    VolumeInfo,
+    MachineInfo, Mount, PullPolicy, RestartPolicy, Status, VmspawnPopulator, VolumeInfo,
 };
-use parse::{parse_mount, parse_publish};
+use parse::parse_mount;
 
 #[derive(Parser)]
 #[command(name = "vmctl", version, about = "Run Linux machines from OCI images")]
@@ -174,15 +173,6 @@ struct CreateArgs {
     /// Memory, e.g. 2G or 512M.
     #[arg(short = 'm', long)]
     memory: Option<String>,
-    /// Publish a guest port on host loopback: [IP:]HOST_PORT:GUEST_PORT. Only
-    /// open while the vmctl process that started the machine runs (`run`
-    /// without -d); the machine itself outlives it.
-    #[arg(short = 'p', long = "publish", value_parser = parse_publish)]
-    publish: Vec<PortBinding>,
-    /// Make a host loopback port reachable at the same port on the guest's
-    /// loopback.
-    #[arg(long = "host-gateway-port", value_name = "PORT")]
-    host_gateway_port: Vec<u16>,
     /// Mount a named volume (`data:/storage[:size=20G]`) or a host directory
     /// (`./dir:/path[:ro]`; a source starting with `.`, `/` or `~` is a path).
     #[arg(short = 'v', long = "volume", value_parser = parse_mount)]
@@ -318,8 +308,6 @@ fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error>
         *volume = volume.clone().with_size(bytes);
     }
     let host_config = HostConfig {
-        port_bindings: a.publish,
-        host_gateway_ports: a.host_gateway_port,
         mounts,
         cpus: a.cpus,
         memory,

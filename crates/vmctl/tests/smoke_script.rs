@@ -31,7 +31,7 @@ fn run_script(fail_on: Option<&str>) -> Run {
         &bin.join("vmctl"),
         r#"#!/bin/sh
 echo "$*" >> "$STUB_LOG"
-case "$*" in "exec -i "*) cat; exit 0 ;; esac
+case "$*" in "exec -i "*) cat; exit 0 ;; *"ip -4 -o addr"*) echo 192.168.64.2; exit 0 ;; esac
 case "$*" in *"$STUB_FAIL_ON"*) [ -n "$STUB_FAIL_ON" ] && { echo "stub: failing $*" >&2; exit 1; } ;; esac
 exit 0
 "#,
@@ -44,7 +44,6 @@ exit 0
         .env("VMCTL", bin.join("vmctl"))
         .env("STUB_LOG", &log)
         .env("STUB_FAIL_ON", fail_on.unwrap_or(""))
-        .env("SMOKE_HOSTGW_PORT", "18931")
         .env("SMOKE_TIMEOUT", "3")
         .output()
         .unwrap();
@@ -61,8 +60,6 @@ fn a_clean_run_walks_the_whole_prototype_and_cleans_up() {
     assert!(stdout.contains("PASS"), "{stdout}");
     for expected in [
         "pull ghcr.io/monai/clankers:slim",
-        "-p 8080:8080",
-        "--host-gateway-port 18931",
         "-v smoke-data:/storage",
         "stop smoke",
         "start smoke",

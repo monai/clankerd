@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::io::BufReader;
-use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -17,11 +16,10 @@ use clankerd_proto::varlink::{self, Call, Reply};
 use serde_json::{Value, json};
 
 use crate::guest::{EventStream, Next};
-use crate::tunnel::{Acceptor, GuestBinding, MachineTunnels, PublishedPort, validate_host_config};
-use crate::{Error, ErrorKind, HostConfig, PortBinding, Result};
+use crate::tunnel::{Acceptor, GuestBinding, MachineTunnels, validate_host_config};
+use crate::{Error, ErrorKind, HostConfig, Result};
 
 enum Binding {
-    Published(PublishedPort),
     Guest(GuestBinding),
 }
 
@@ -41,14 +39,11 @@ pub struct ForwardingServer {
 impl ForwardingServer {
     pub fn start(config: &ForwardingConfig, guest: PathBuf, host: PathBuf) -> Result<Self> {
         let host_config = HostConfig {
-            port_bindings: config.port_bindings.clone(),
-            host_gateway_ports: config.host_gateway_ports.clone(),
             socket_bindings: config.socket_bindings.clone(),
             ..Default::default()
         };
         validate_host_config(&host_config)?;
         let tunnels = MachineTunnels::start(guest.clone(), host)?;
-        tunnels.publish_configured(&host_config)?;
         match std::fs::remove_file(&config.control_socket) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -145,26 +140,9 @@ fn dispatch(request: Call, control: &Control) -> Result<Value> {
             Some(Ok(())) => Ok(json!(true)),
             Some(Err(message)) => Err(Error::unavailable(message.clone())),
         },
-        "Publish" => {
-            let binding: PortBinding = serde_json::from_value(request.parameters)?;
-            let port = control.tunnels.publish(&binding)?;
-            let addr: SocketAddr = port.local_addr();
-            let id = control.next.fetch_add(1, Ordering::Relaxed);
-            control
-                .bindings
-                .lock()
-                .unwrap()
-                .insert(id, Binding::Published(port));
-            Ok(json!([id, addr]))
-        }
         "Listen" => {
             let listen: Listen = serde_json::from_value(request.parameters)?;
             let binding = match (listen.listen, listen.target) {
-                (Target::Tcp { port }, Target::Tcp { port: target })
-                    if port == target && port != 0 =>
-                {
-                    control.tunnels.expose_host_port(port)?
-                }
                 (Target::Unix { path: guest }, Target::Unix { path: host })
                     if guest.is_absolute() && host.is_absolute() =>
                 {
@@ -184,7 +162,6 @@ fn dispatch(request: Call, control: &Control) -> Result<Value> {
             let id: u64 = serde_json::from_value(request.parameters["id"].clone())?;
             let binding = control.bindings.lock().unwrap().remove(&id);
             match binding {
-                Some(Binding::Published(port)) => drop(port),
                 Some(Binding::Guest(binding)) => drop(binding),
                 None => {}
             }

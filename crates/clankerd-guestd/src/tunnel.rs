@@ -1,10 +1,7 @@
-//! Guest side of tunnels: dials guest targets for the host (published ports) and
-//! listens in the guest for connections to carry to the host (host-gateway
-//! ports and socket bindings).
+//! Unix socket relays over the network-independent management transport.
 
 use std::collections::HashMap;
 use std::io::BufReader;
-use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -22,8 +19,6 @@ use serde_json::{Value, json};
 const POLL: Duration = Duration::from_millis(20);
 
 pub struct Tunnels {
-    /// The guest's loopback address (127.0.0.1; the stand-in VMM shifts it).
-    loopback: IpAddr,
     /// Endpoint of the host's tunnel server (vsock in production).
     host: Option<HostEndpoint>,
     next_id: AtomicU64,
@@ -69,9 +64,8 @@ impl HostEndpoint {
 }
 
 impl Tunnels {
-    pub fn new(loopback: IpAddr, host: Option<HostEndpoint>) -> Self {
+    pub fn new(host: Option<HostEndpoint>) -> Self {
         Tunnels {
-            loopback,
             host,
             next_id: AtomicU64::new(1),
             listeners: Mutex::default(),
@@ -101,23 +95,6 @@ impl Tunnels {
             );
         };
         match target {
-            Target::Tcp { port } => {
-                match TcpStream::connect_timeout(
-                    &SocketAddr::new(self.loopback, port),
-                    Duration::from_secs(5),
-                ) {
-                    Ok(sock) => {
-                        reply(&mut out, json!({}), None)?;
-                        pump(input, out, sock);
-                        Ok(())
-                    }
-                    Err(e) => reply(
-                        &mut out,
-                        json!({"message": e.to_string()}),
-                        Some(ERROR_CONNECT_FAILED),
-                    ),
-                }
-            }
             Target::Unix { path } => match UnixStream::connect(&path) {
                 Ok(sock) => {
                     reply(&mut out, json!({}), None)?;
@@ -175,18 +152,6 @@ impl Tunnels {
         stop: Arc<AtomicBool>,
     ) -> std::io::Result<std::thread::JoinHandle<()>> {
         match listen {
-            Target::Tcp { port } => {
-                let l = TcpListener::bind(SocketAddr::new(self.loopback, *port))?;
-                l.set_nonblocking(true)?;
-                Ok(std::thread::spawn(move || {
-                    while !stop.load(Ordering::Relaxed) {
-                        match l.accept() {
-                            Ok((sock, _)) => carry(sock, &host_socket, &target),
-                            Err(_) => std::thread::sleep(POLL),
-                        }
-                    }
-                }))
-            }
             Target::Unix { path } => {
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent)?;

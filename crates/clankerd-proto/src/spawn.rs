@@ -68,8 +68,6 @@ pub struct SpawnSpec {
 /// Host-only forwarding configuration, shared with the VM helper.
 pub struct ForwardingConfig {
     pub control_socket: PathBuf,
-    pub port_bindings: Vec<crate::tunnel::PortBinding>,
-    pub host_gateway_ports: Vec<u16>,
     pub socket_bindings: Vec<crate::tunnel::SocketBinding>,
 }
 
