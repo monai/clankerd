@@ -323,6 +323,7 @@ impl Engine {
         }
         validate_stop_signal(&config.stop_signal)?;
         validate_host_config(&host_config)?;
+        crate::config::validate_bridge_config(&host_config)?;
         crate::net::validate_host_config(&host_config)?;
         crate::mount::validate(&host_config.mounts)?;
         if let Some(name) = name {

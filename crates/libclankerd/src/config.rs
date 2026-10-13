@@ -156,6 +156,19 @@ impl std::fmt::Display for PullPolicy {
 pub enum NetworkMode {
     #[default]
     Shared,
+    Bridged,
+}
+
+impl std::str::FromStr for NetworkMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "shared" => Ok(Self::Shared),
+            "bridged" => Ok(Self::Bridged),
+            _ => Err("network mode must be shared or bridged".into()),
+        }
+    }
 }
 
 /// macOS 15 selects a common vmnet network by its private IPv4 subnet.
@@ -224,6 +237,8 @@ impl std::str::FromStr for SharedNetwork {
 #[serde(default)]
 pub struct HostConfig {
     pub network_mode: NetworkMode,
+    /// Explicit physical interface for bridged networking; never follows the host default route.
+    pub bridge_interface: Option<String>,
     pub shared_network: SharedNetwork,
     pub shared_peer_participation: bool,
     pub cpus: Option<u32>,
@@ -238,10 +253,43 @@ pub struct HostConfig {
     pub pull_policy: PullPolicy,
 }
 
+pub(crate) fn validate_bridge_config(host: &HostConfig) -> crate::error::Result<()> {
+    if host.network_mode == NetworkMode::Bridged && !host.shared_peer_participation {
+        return Err(crate::error::Error::invalid_parameter(
+            "shared peer isolation does not apply to a bridged physical interface",
+        ));
+    }
+    if host.network_mode == NetworkMode::Bridged && host.shared_network != SharedNetwork::default()
+    {
+        return Err(crate::error::Error::invalid_parameter(
+            "shared network selection does not apply to a bridged physical interface",
+        ));
+    }
+    match (&host.network_mode, &host.bridge_interface) {
+        (NetworkMode::Bridged, Some(interface))
+            if !interface.is_empty()
+                && interface.len() < libc::IFNAMSIZ
+                && interface
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.')) =>
+        {
+            Ok(())
+        }
+        (NetworkMode::Bridged, _) => Err(crate::error::Error::invalid_parameter(
+            "bridged networking requires an explicit physical bridge interface name",
+        )),
+        (_, Some(_)) => Err(crate::error::Error::invalid_parameter(
+            "bridge interface is only valid for bridged networking",
+        )),
+        (_, None) => Ok(()),
+    }
+}
+
 impl Default for HostConfig {
     fn default() -> Self {
         Self {
             network_mode: NetworkMode::default(),
+            bridge_interface: None,
             shared_network: SharedNetwork::default(),
             shared_peer_participation: true,
             cpus: None,

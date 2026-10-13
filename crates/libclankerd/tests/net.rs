@@ -365,6 +365,29 @@ fn external_observations_report_actual_family_specific_endpoint_success_and_fail
 }
 
 #[test]
+fn bridged_network_requires_an_explicit_physical_interface() {
+    let rig = rig(FAKE_VMNET);
+    for config in [
+        serde_json::json!({"network_mode":"bridged"}),
+        serde_json::json!({"network_mode":"bridged","bridge_interface":""}),
+        serde_json::json!({"network_mode":"bridged","bridge_interface":"../en0"}),
+        serde_json::json!({"network_mode":"shared","bridge_interface":"en0"}),
+        serde_json::json!({"network_mode":"bridged","bridge_interface":"en0","shared_peer_participation":false}),
+        serde_json::json!({"network_mode":"bridged","bridge_interface":"en0","shared_network":{"address":"192.168.109.0","prefix_len":24}}),
+    ] {
+        let host: HostConfig = serde_json::from_value(config).unwrap();
+        let error = rig
+            .engine
+            .create(Some("bridge-invalid"), sh("exit 0"), host)
+            .err()
+            .expect("invalid interface must fail");
+        assert_eq!(error.kind(), ErrorKind::InvalidParameter);
+        assert!(error.message().contains("interface"), "{error}");
+        assert!(rig.vmm.specs.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
 fn selected_shared_network_and_peer_isolation_are_used_until_the_next_restart() {
     let rig = rig(FAKE_VMNET);
     let host: HostConfig = serde_json::from_value(serde_json::json!({
@@ -425,6 +448,93 @@ fn selected_shared_network_and_peer_isolation_are_used_until_the_next_restart() 
         "selected network must persist across another restart"
     );
     machine.stop(Duration::from_secs(10)).unwrap();
+}
+
+const BRIDGE_VMNET: &str = r#"#!/bin/sh
+if [ "$1" = --list-shared-interfaces ]; then echo en0; echo en1; exit 0; fi
+echo "$@" > "$0.args"
+while [ $# -gt 0 ]; do
+  case "$1" in --socket) sock=$2 ;; esac
+  shift
+done
+: > "$sock"
+trap 'rm -f "$sock"; exit 0' TERM
+while :; do sleep 0.1; done
+"#;
+
+#[test]
+fn a_selected_physical_interface_is_attached_and_preserved_across_restart() {
+    let rig = rig(BRIDGE_VMNET);
+    let host: HostConfig = serde_json::from_value(serde_json::json!({
+        "network_mode":"bridged", "bridge_interface":"en0"
+    }))
+    .unwrap();
+    let machine = rig
+        .engine
+        .create(
+            Some("bridge-selected"),
+            sh("while true; do sleep 0.05; done"),
+            host,
+        )
+        .unwrap();
+    machine.start().unwrap();
+    assert!(
+        rig.args().contains("--operation-mode bridged"),
+        "{}",
+        rig.args()
+    );
+    assert!(
+        rig.args().contains("--shared-interface en0"),
+        "{}",
+        rig.args()
+    );
+    assert!(!rig.args().contains("--start-address"));
+    assert!(!rig.args().contains("--enable-isolation"));
+    let info = machine.inspect().unwrap();
+    let mut next = info.host_config.clone();
+    next.bridge_interface = Some("en1".into());
+    assert_eq!(
+        machine
+            .update(&info.config, next.clone())
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Conflict
+    );
+    machine.stop(Duration::from_secs(10)).unwrap();
+    machine.update(&info.config, next).unwrap();
+    machine.start().unwrap();
+    assert!(rig.args().contains("--shared-interface en1"));
+    machine.stop(Duration::from_secs(10)).unwrap();
+    machine.start().unwrap();
+    assert!(rig.args().contains("--shared-interface en1"));
+    machine.stop(Duration::from_secs(10)).unwrap();
+}
+
+#[test]
+fn an_unsupported_physical_interface_fails_before_the_workload_is_launched() {
+    let rig = rig(BRIDGE_VMNET);
+    let host: HostConfig = serde_json::from_value(serde_json::json!({
+        "network_mode":"bridged", "bridge_interface":"en9"
+    }))
+    .unwrap();
+    let machine = rig
+        .engine
+        .create(Some("bridge-unavailable"), sh("exit 0"), host)
+        .unwrap();
+    let error = machine.start().unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Unavailable);
+    assert!(error.message().contains("en9"));
+    assert!(error.message().contains("unsupported"));
+    assert!(rig.vmm.specs.lock().unwrap().is_empty());
+    assert_eq!(machine.inspect().unwrap().state.status, Status::Created);
+    assert!(
+        !rig._env
+            .root()
+            .join("state/machines")
+            .join(machine.id())
+            .join("net.pid")
+            .exists()
+    );
 }
 
 #[test]

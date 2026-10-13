@@ -168,6 +168,12 @@ struct CreateArgs {
     /// Signal `vmctl stop` sends the main process (default: the image's StopSignal, else SIGTERM).
     #[arg(long = "stop-signal", value_name = "SIGNAL")]
     stop_signal: Option<String>,
+    /// Attachment mode; bridged mode requires --bridge-interface.
+    #[arg(long, default_value = "shared")]
+    network_mode: libclankerd::NetworkMode,
+    /// Physical LAN interface for bridged mode (for example en0).
+    #[arg(long)]
+    bridge_interface: Option<String>,
     /// Common shared vmnet network (RFC1918 IPv4 CIDR; IPv6 remains automatic).
     #[arg(long)]
     shared_network: Option<SharedNetwork>,
@@ -315,6 +321,8 @@ fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error>
         *volume = volume.clone().with_size(bytes);
     }
     let host_config = HostConfig {
+        network_mode: a.network_mode,
+        bridge_interface: a.bridge_interface,
         shared_network: a.shared_network.unwrap_or_default(),
         shared_peer_participation: !a.isolate_peers,
         mounts,

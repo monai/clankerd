@@ -6,6 +6,7 @@
 //! outlive it), so backends keep their own record of the sidecar in the
 //! machine directory and [`NetBackend::stop`] works from that record alone.
 
+mod bridge;
 mod vmnet;
 
 use std::path::PathBuf;
