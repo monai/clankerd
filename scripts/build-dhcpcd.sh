@@ -38,7 +38,9 @@ chmod +x "$wrap/cc"
 cd "$src"
 # Guestd supervises this root process and supplies its binary hook; no image
 # account, shell hook, udev service or privilege-separation chroot is required.
-CC="$wrap/cc" LDFLAGS="-static -s" ./configure --target=aarch64-linux-musl \
+# Upstream derives OS from --host, not --target; otherwise a Mac build
+# omits the Linux source files, netlink includes and libc feature macros.
+CC="$wrap/cc" LDFLAGS="-static -s" ./configure --host="$TARGET" \
   --disable-privsep --without-dev --dbdir=/run/clankerd/dhcpcd \
   --rundir=/run/clankerd/dhcpcd >/dev/null
 if command -v nproc >/dev/null 2>&1; then
