@@ -110,6 +110,19 @@ fn serve(
     let mut delay = Duration::from_secs(2);
     let mut peer = false;
     let mut buffer = [0u8; 65536];
+    let diagnostics = std::env::var_os("CLANKERD_NET_DIAGNOSTICS").is_some();
+    let mut counts = [0u64; 4]; // front receive, backend send, backend receive, front send.
+    let mut errors = [0u64; 4];
+    let mut sampled = Instant::now();
+    let mut poll_errors = 0;
+    if diagnostics {
+        eprintln!(
+            "native relay: front={:?} backend={:?} upstream={} helper_pid={helper_pid}",
+            front.local_addr(),
+            back.as_ref().map(UnixDatagram::local_addr),
+            config.spec.socket.display()
+        );
+    }
     while active.load(Ordering::Relaxed) && config.spec.dir.join(CONFIG).exists() {
         if back.is_some() && !process_alive(helper_pid) {
             back = None;
@@ -147,33 +160,131 @@ fn serve(
             },
         ];
         // SAFETY: descriptors is valid storage for two pollfd entries.
-        unsafe {
-            libc::poll(descriptors.as_mut_ptr(), 2, 100);
-        }
-        if descriptors[0].revents & libc::POLLIN != 0
-            && let Ok((count, address)) = front.recv_from(&mut buffer)
-        {
-            if !peer && let Some(path) = address.as_pathname() {
-                peer = front.connect(path).is_ok();
+        let polled = unsafe { libc::poll(descriptors.as_mut_ptr(), 2, 100) };
+        if polled < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                poll_errors += 1;
+                if poll_errors <= 3 {
+                    eprintln!(
+                        "native relay: poll failed: {error}; fds={:?}",
+                        [descriptors[0].fd, descriptors[1].fd]
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(100));
             }
-            if let Some(socket) = &back
-                && let Err(error) = socket.send(&buffer[..count])
-                && error.kind() != io::ErrorKind::WouldBlock
-            {
-                eprintln!("clankerd-vmspawn: native Ethernet attachment lost: {error}");
-                back = None;
-                let _ = fs::write(config.spec.dir.join(HEALTH), b"0");
-                retry_at = Instant::now() + delay;
+        }
+        if diagnostics && sampled.elapsed() >= Duration::from_secs(3) {
+            eprintln!(
+                "native relay: counts front_rx={} back_tx={} back_rx={} front_tx={} errors={errors:?} peer={peer} poll={polled} flags={:?}",
+                counts[0],
+                counts[1],
+                counts[2],
+                counts[3],
+                [descriptors[0].revents, descriptors[1].revents]
+            );
+            sampled = Instant::now();
+        }
+        if descriptors[0].revents & libc::POLLIN != 0 {
+            match front.recv_from(&mut buffer) {
+                Ok((count, address)) => {
+                    counts[0] += 1;
+                    if diagnostics && counts[0] <= 3 {
+                        eprintln!(
+                            "native relay: guest frame len={count} sender={address:?} ethernet={:02x?}",
+                            &buffer[..count.min(14)]
+                        );
+                    }
+                    if !peer && let Some(path) = address.as_pathname() {
+                        match front.connect(path) {
+                            Ok(()) => {
+                                peer = true;
+                                if diagnostics {
+                                    eprintln!(
+                                        "native relay: connected guest peer {}",
+                                        path.display()
+                                    );
+                                }
+                            }
+                            Err(error) => eprintln!(
+                                "native relay: cannot connect guest peer {}: {error}",
+                                path.display()
+                            ),
+                        }
+                    }
+                    if let Some(socket) = &back {
+                        match socket.send(&buffer[..count]) {
+                            Ok(_) => counts[1] += 1,
+                            Err(error) => {
+                                errors[1] += 1;
+                                if diagnostics && errors[1] <= 3 {
+                                    eprintln!(
+                                        "native relay: helper send failed len={count}: {error}"
+                                    );
+                                }
+                                if error.kind() != io::ErrorKind::WouldBlock {
+                                    eprintln!(
+                                        "clankerd-vmspawn: native Ethernet attachment lost: {error}"
+                                    );
+                                    back = None;
+                                    let _ = fs::write(config.spec.dir.join(HEALTH), b"0");
+                                    retry_at = Instant::now() + delay;
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    errors[0] += 1;
+                    if diagnostics && errors[0] <= 3 {
+                        eprintln!("native relay: guest receive failed: {error}");
+                    }
+                }
             }
         }
         if descriptors[1].revents & libc::POLLIN != 0
             && let Some(socket) = &back
-            && let Ok(count) = socket.recv(&mut buffer)
-            && peer
         {
-            let _ = front.send(&buffer[..count]);
+            match socket.recv(&mut buffer) {
+                Ok(count) => {
+                    counts[2] += 1;
+                    if diagnostics && counts[2] <= 3 {
+                        eprintln!(
+                            "native relay: helper frame len={count} ethernet={:02x?}",
+                            &buffer[..count.min(14)]
+                        );
+                    }
+                    if peer {
+                        match front.send(&buffer[..count]) {
+                            Ok(_) => counts[3] += 1,
+                            Err(error) => {
+                                errors[3] += 1;
+                                if diagnostics && errors[3] <= 3 {
+                                    eprintln!(
+                                        "native relay: guest send failed len={count}: {error}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    errors[2] += 1;
+                    if diagnostics && errors[2] <= 3 {
+                        eprintln!("native relay: helper receive failed: {error}");
+                    }
+                }
+            }
         }
     }
+    if diagnostics {
+        eprintln!(
+            "native relay: stopped active={} config_exists={} counts={counts:?} errors={errors:?}",
+            active.load(Ordering::Relaxed),
+            config.spec.dir.join(CONFIG).exists()
+        );
+    }
+
     if let Ok(address) = front.local_addr()
         && let Some(path) = address.as_pathname()
     {
