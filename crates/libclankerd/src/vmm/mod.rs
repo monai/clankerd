@@ -69,6 +69,18 @@ pub trait Vmm: Send + Sync {
     /// Starts the machine and returns without waiting for guest readiness.
     fn boot(&self, spec: &BootSpec) -> Result<BootHandle>;
 
+    /// Whether the recorded VMM process is still alive, independently of its
+    /// guest management transport. Reattaching must not destroy a live machine
+    /// merely because vsock is temporarily unavailable.
+    fn is_alive(&self, handle: &BootHandle) -> bool {
+        if handle.pid == 0 {
+            return false;
+        }
+        // SAFETY: signal zero checks existence without delivering a signal.
+        (unsafe { libc::kill(handle.pid as i32, 0) == 0 })
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+
     /// Polled while waiting for the guest to become ready: fail fast, with the
     /// reason, if the VMM is known to have died. Implementations without a
     /// way to tell keep the default and rely on the start timeout.

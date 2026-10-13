@@ -111,3 +111,88 @@ fn several_machines_run_side_by_side_independently() {
         assert_eq!(machines[i].wait().unwrap().exit_code, 10 + i as i32);
     }
 }
+
+#[test]
+fn temporary_management_loss_does_not_end_a_live_machine_on_reattach() {
+    let env = Env::new();
+    let first = env.engine();
+    let machine = create(&first, "management-gap", "sleep 60");
+    machine.start().unwrap();
+    let socket = env
+        .root()
+        .join("run")
+        .join(format!("{}.sock", &machine.id()[..12]));
+    let hidden = socket.with_extension("hidden");
+    std::fs::rename(&socket, &hidden).unwrap();
+    let second = env.engine();
+    let status = second
+        .get("management-gap")
+        .unwrap()
+        .inspect()
+        .unwrap()
+        .state
+        .status;
+    std::fs::rename(&hidden, &socket).unwrap();
+    // Restore transport before cleanup even on the failing implementation.
+    let third = env.engine();
+    if status == Status::Running {
+        let recovered = third.get("management-gap").unwrap();
+        recovered.stop(std::time::Duration::from_secs(2)).unwrap();
+        assert_eq!(recovered.inspect().unwrap().state.status, Status::Exited);
+    } else {
+        let state_path = env
+            .root()
+            .join("state/machines")
+            .join(machine.id())
+            .join("state.json");
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+        state["status"] = "running".into();
+        std::fs::write(&state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+        let cleanup = env.engine();
+        cleanup
+            .get("management-gap")
+            .unwrap()
+            .stop(std::time::Duration::from_secs(2))
+            .unwrap();
+    }
+    assert_eq!(
+        status,
+        Status::Running,
+        "management loss must not be recorded as guest death"
+    );
+}
+
+#[test]
+fn a_vmm_that_really_died_is_recorded_dead_on_reattach() {
+    let env = Env::new();
+    let first = env.engine();
+    let machine = create(&first, "vanished-vmm", "sleep 60");
+    machine.start().unwrap();
+    let state_path = env
+        .root()
+        .join("state/machines")
+        .join(machine.id())
+        .join("state.json");
+    let persisted = std::fs::read(&state_path).unwrap();
+    let state: serde_json::Value = serde_json::from_slice(&persisted).unwrap();
+    let pid = state["pid"].as_u64().unwrap() as i32;
+    // SAFETY: this is our test's live VMM process group; no other machine shares it.
+    assert_eq!(unsafe { libc::kill(-pid, libc::SIGKILL) }, 0);
+    wait_for("the actual VMM death", || {
+        machine.inspect().unwrap().state.status == Status::Dead
+    });
+    // Stand in for a library that was away when the VMM disappeared.
+    std::fs::write(&state_path, persisted).unwrap();
+    let second = env.engine();
+    assert_eq!(
+        second
+            .get("vanished-vmm")
+            .unwrap()
+            .inspect()
+            .unwrap()
+            .state
+            .status,
+        Status::Dead
+    );
+}

@@ -4,6 +4,7 @@
 Only test traffic is changed; standard protocol timers run in bundled dhcpcd.
 A fresh prefix avoids RFC4862's two-hour valid-lifetime protection.
 """
+import errno
 import importlib.util
 import ipaddress
 import json
@@ -256,14 +257,27 @@ def main():
         modified.write_text(json.dumps(spec))
         args[args.index('--spec') + 1] = str(modified)
         child = subprocess.Popen([binary, *args], pass_fds=(3,))
+        print(f'lifetime fixture {time.time():.3f}: wrapper pid={os.getpid()} native pid={child.pid}', flush=True)
+        transport_error = None
         def stop(signum, _):
+            print(f'lifetime fixture {time.time():.3f}: forwarding signal {signum}; native status={child.poll()}', flush=True)
             if child.poll() is None:
                 child.send_signal(signum)
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
         try:
             while child.poll() is None:
-                proxy.pump()
+                try:
+                    proxy.pump()
+                except OSError as error:
+                    if error.errno not in {errno.ECONNRESET, errno.ECONNREFUSED, errno.ENOTCONN, errno.EPIPE, errno.ENOENT}:
+                        raise
+                    if transport_error != error.errno:
+                        print(f'lifetime fixture {time.time():.3f}: network transport error {error}; native status={child.poll()}', flush=True)
+                        transport_error = error.errno
+                    # Teardown or backend loss must not terminate a live guest.
+                    time.sleep(0.05)
+            print(f'lifetime fixture {time.time():.3f}: native pid={child.pid} exited status={child.returncode}', flush=True)
             return child.returncode
         finally:
             if child.poll() is None:

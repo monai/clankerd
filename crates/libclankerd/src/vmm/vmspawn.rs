@@ -197,9 +197,7 @@ impl Vmm for VmspawnVmm {
     }
 
     fn check_alive(&self, spec: &BootSpec, handle: &BootHandle) -> Result<()> {
-        // SAFETY: signal 0 only checks that the process exists.
-        let alive = unsafe { libc::kill(handle.pid as i32, 0) } == 0;
-        if alive {
+        if self.is_alive(handle) {
             return Ok(());
         }
         let log = fs::read_to_string(spec.dir.join(LOG_FILE)).unwrap_or_default();
