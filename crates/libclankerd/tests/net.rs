@@ -363,3 +363,93 @@ fn external_observations_report_actual_family_specific_endpoint_success_and_fail
         machine.stop(Duration::from_secs(10)).unwrap();
     }
 }
+
+#[test]
+fn selected_shared_network_and_peer_isolation_are_used_until_the_next_restart() {
+    let rig = rig(FAKE_VMNET);
+    let host: HostConfig = serde_json::from_value(serde_json::json!({
+        "shared_network":{"address":"192.168.109.0","prefix_len":24},
+        "shared_peer_participation":false
+    }))
+    .unwrap();
+    let machine = rig
+        .engine
+        .create(
+            Some("selected-network"),
+            sh("while true; do sleep 0.05; done"),
+            host,
+        )
+        .unwrap();
+    machine.start().unwrap();
+    let args = rig.args();
+    assert!(args.contains("--start-address 192.168.109.1"), "{args}");
+    assert!(args.contains("--end-address 192.168.109.254"), "{args}");
+    assert!(args.contains("--subnet-mask 255.255.255.0"), "{args}");
+    assert!(args.contains("--enable-isolation"), "{args}");
+    let before = machine.inspect().unwrap();
+    let next: HostConfig = serde_json::from_value(serde_json::json!({
+        "shared_network":{"address":"192.168.110.0","prefix_len":25},
+        "shared_peer_participation":true
+    }))
+    .unwrap();
+    assert_eq!(
+        machine
+            .update(&before.config, next.clone())
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Conflict
+    );
+    assert_eq!(rig.args(), args, "a running attachment cannot be replaced");
+    machine.stop(Duration::from_secs(10)).unwrap();
+    machine.update(&before.config, next).unwrap();
+    machine.start().unwrap();
+    let changed = rig.args();
+    assert!(
+        changed.contains("--start-address 192.168.110.1"),
+        "{changed}"
+    );
+    assert!(
+        changed.contains("--end-address 192.168.110.126"),
+        "{changed}"
+    );
+    assert!(
+        changed.contains("--subnet-mask 255.255.255.128"),
+        "{changed}"
+    );
+    assert!(!changed.contains("--enable-isolation"), "{changed}");
+    machine.stop(Duration::from_secs(10)).unwrap();
+    machine.start().unwrap();
+    assert_eq!(
+        rig.args(),
+        changed,
+        "selected network must persist across another restart"
+    );
+    machine.stop(Duration::from_secs(10)).unwrap();
+}
+
+#[test]
+fn invalid_shared_network_selection_fails_before_creating_or_attaching_a_machine() {
+    let rig = rig(FAKE_VMNET);
+    for (address, prefix_len) in [
+        ("192.168.109.3", 24),
+        ("203.0.113.0", 24),
+        ("10.0.0.0", 7),
+        ("192.168.105.0", 31),
+    ] {
+        let host = serde_json::from_value(
+            serde_json::json!({"shared_network":{"address":address,"prefix_len":prefix_len}}),
+        )
+        .unwrap();
+        let error = rig
+            .engine
+            .create(Some("invalid-selection"), sh("exit 0"), host)
+            .err()
+            .expect("invalid network was accepted");
+        assert_eq!(error.kind(), ErrorKind::InvalidParameter);
+        assert_eq!(
+            rig.engine.get("invalid-selection").err().unwrap().kind(),
+            ErrorKind::NotFound
+        );
+        assert!(rig.vmm.specs.lock().unwrap().is_empty());
+    }
+}

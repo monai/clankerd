@@ -31,6 +31,7 @@ impl Default for VmnetBackend {
 
 impl NetBackend for VmnetBackend {
     fn start(&self, spec: &NetSpec) -> Result<NetAttachment> {
+        let (start, end, mask) = spec.host_config.shared_network.addresses()?;
         let binary = &self.binary;
         // A leftover sidecar of an earlier run would hold the socket.
         self.stop(spec);
@@ -48,21 +49,22 @@ impl NetBackend for VmnetBackend {
             Command::new(binary)
         };
         let identity = interface_identity(&spec.machine_id);
+        command.arg("--socket").arg(&spec.socket).args([
+            "--operation-mode",
+            "shared",
+            "--interface-id",
+            &identity,
+            "--start-address",
+            &start.to_string(),
+            "--end-address",
+            &end.to_string(),
+            "--subnet-mask",
+            &mask.to_string(),
+        ]);
+        if !spec.host_config.shared_peer_participation {
+            command.arg("--enable-isolation");
+        }
         let mut child = command
-            .arg("--socket")
-            .arg(&spec.socket)
-            .args([
-                "--operation-mode",
-                "shared",
-                "--interface-id",
-                &identity,
-                "--start-address",
-                "192.168.105.1",
-                "--end-address",
-                "192.168.105.254",
-                "--subnet-mask",
-                "255.255.255.0",
-            ])
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log)

@@ -14,7 +14,8 @@ use libclankerd::net::VmnetBackend;
 use libclankerd::vmm::{LocalProcessVmm, VmspawnVmm};
 use libclankerd::{
     Engine, EngineConfig, Error, HostConfig, ImageInfo, LocalGuestdPopulator, MachineConfig,
-    MachineInfo, Mount, PullPolicy, RestartPolicy, Status, VmspawnPopulator, VolumeInfo,
+    MachineInfo, Mount, PullPolicy, RestartPolicy, SharedNetwork, Status, VmspawnPopulator,
+    VolumeInfo,
 };
 use parse::parse_mount;
 
@@ -167,6 +168,12 @@ struct CreateArgs {
     /// Signal `vmctl stop` sends the main process (default: the image's StopSignal, else SIGTERM).
     #[arg(long = "stop-signal", value_name = "SIGNAL")]
     stop_signal: Option<String>,
+    /// Common shared vmnet network (RFC1918 IPv4 CIDR; IPv6 remains automatic).
+    #[arg(long)]
+    shared_network: Option<SharedNetwork>,
+    /// Block VM peers in both directions while retaining Mac and shared NAT access.
+    #[arg(long)]
+    isolate_peers: bool,
     /// Number of virtual CPUs.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     cpus: Option<u32>,
@@ -308,6 +315,8 @@ fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error>
         *volume = volume.clone().with_size(bytes);
     }
     let host_config = HostConfig {
+        shared_network: a.shared_network.unwrap_or_default(),
+        shared_peer_participation: !a.isolate_peers,
         mounts,
         cpus: a.cpus,
         memory,
