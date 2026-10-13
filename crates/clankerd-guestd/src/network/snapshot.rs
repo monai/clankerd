@@ -171,6 +171,7 @@ pub fn read(interface: &str) -> NetworkStatus {
             .iter()
             .any(|r| r.destination.is_ipv4() == v4 && r.prefix_len == 0);
         FamilyConnectivity {
+            probe: None,
             local_available,
             default_route,
             external: if local_available && default_route {
@@ -193,7 +194,7 @@ pub fn read(interface: &str) -> NetworkStatus {
     } else if !status.ready {
         "waiting for a usable address and received network configuration/peer packet"
     } else {
-        "local connectivity configured; external destinations require independent verification"
+        "local connectivity configured; external status reports independent endpoint observations"
     }
     .into();
     status

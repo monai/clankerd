@@ -180,6 +180,17 @@ fn main() {
 
     let tunnels = Arc::new(tunnel::Tunnels::new(host));
 
+    // A local-process stand-in can observe explicitly configured loopback
+    // destinations without configuring any host interface or resolver.
+    if !boot_root
+        && let Some(endpoints) = workload
+            .as_ref()
+            .and_then(|workload| workload.network.as_ref())
+            .and_then(|network| network.probe_endpoints.clone())
+    {
+        network::probe::start(endpoints);
+    }
+
     let shared = Arc::new(Shared {
         inner: Mutex::new(Inner {
             expect_attach: workload.as_ref().is_some_and(|w| w.expect_attach),
@@ -453,7 +464,9 @@ fn serve(
             let status = if BOOTED.load(std::sync::atomic::Ordering::Relaxed) {
                 network::status("eth0")
             } else {
-                clankerd_proto::guest::NetworkStatus::default()
+                let mut status = clankerd_proto::guest::NetworkStatus::default();
+                network::probe::apply(&mut status);
+                status
             };
             let _ = reply(&mut out, Ok(serde_json::to_value(status).unwrap()));
         }

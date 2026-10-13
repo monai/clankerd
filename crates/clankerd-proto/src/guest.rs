@@ -127,6 +127,9 @@ pub struct NetworkConfig {
     /// The interface to run DHCP on (`eth0`).
     pub interface: String,
     pub hostname: String,
+    /// Optional numeric destinations for independent family observations.
+    #[serde(default)]
+    pub probe_endpoints: Option<NetworkProbeEndpoints>,
 }
 
 pub const METHOD_NETWORK_STATUS: &str = "io.clankerd.Guest.NetworkStatus";
@@ -173,6 +176,7 @@ pub struct FamilyConnectivity {
     pub default_route: bool,
     /// A route is configuration, not proof of an Internet destination being reachable.
     pub external: ExternalConnectivity,
+    pub probe: Option<NetworkProbeObservation>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -181,6 +185,30 @@ pub enum ExternalConnectivity {
     #[default]
     Unavailable,
     Unverified,
+    Available,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkProbeEndpoints {
+    pub ipv4: std::net::SocketAddr,
+    pub ipv6: std::net::SocketAddr,
+}
+impl Default for NetworkProbeEndpoints {
+    fn default() -> Self {
+        Self {
+            ipv4: "1.1.1.1:443".parse().unwrap(),
+            ipv6: "[2606:4700:4700::1111]:443".parse().unwrap(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkProbeObservation {
+    pub destination: std::net::SocketAddr,
+    pub connected: bool,
+    pub checked_at_unix_seconds: u64,
+    /// Reports only the chosen endpoint; failure is not a blanket Internet claim.
+    pub diagnostic: String,
 }
 
 /// A point in time as seconds and nanoseconds since the Unix epoch.
