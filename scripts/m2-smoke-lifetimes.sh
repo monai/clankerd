@@ -103,14 +103,14 @@ wait_for initial 6
 wait_for renewed 30
 wait_for renewed6 30
 "$vmctl" inspect "$name" > "$work/connected.json"
-python3 "$root/scripts/fixtures/vmnet-ipv6-services.py" host "$work/connected.json" ipv4
+python3 "$root/scripts/fixtures/vmnet-ipv6-services.py" host "$work/connected.json" ipv4-services
 touch "$work/stop-ra"
 wait_for deprecated 12
 wait_for ra-expired 20
 touch "$work/nak"
 wait_for nak-reacquired 35
 "$vmctl" inspect "$name" > "$work/connected.json"
-python3 "$root/scripts/fixtures/vmnet-ipv6-services.py" host "$work/connected.json" ipv4
+python3 "$root/scripts/fixtures/vmnet-ipv6-services.py" host "$work/connected.json" ipv4-services
 touch "$work/drop-dhcp"
 wait_for dhcp-expired 40
 touch "$work/drop-dhcp6"
