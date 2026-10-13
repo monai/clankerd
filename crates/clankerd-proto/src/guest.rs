@@ -239,7 +239,7 @@ pub const METHOD_SHUTDOWN: &str = "io.clankerd.Guest.Shutdown";
 /// Parameters of [`METHOD_SHUTDOWN`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShutdownParams {
-    /// The machine's stop signal.
+    /// The machine's stop signal, using Linux guest ABI numbers on every host.
     #[serde(default = "default_stop_signal")]
     pub signal: i32,
 }
@@ -335,6 +335,7 @@ pub struct ResizeParams {
 pub struct SignalParams {
     #[serde(default)]
     pub id: String,
+    /// Linux guest ABI signal number; host-native libc numbers must not be sent.
     pub signal: i32,
 }
 
