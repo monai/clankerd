@@ -75,6 +75,10 @@ def main():
     spec = json.loads(original.read_text())
     family = os.environ.get('VMNET_TEST_FAMILY', 'dual')
     binary = os.environ['VMNET_TEST_REAL_VMSPAWN']
+    # macOS protected interpreters may strip DYLD_* before this wrapper starts.
+    # Restore immediately before exec/spawn of the signed native VMM.
+    os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = os.environ.get(
+        'VMNET_TEST_LIBRARY_PATH', '/opt/homebrew/lib:/usr/local/lib:/usr/lib')
     if family == 'dual' or not spec.get('net'):
         os.execv(binary, [binary, *args])
     with tempfile.TemporaryDirectory(prefix='vmnet-filter-', dir='/tmp') as directory:
@@ -155,6 +159,7 @@ def self_test():
         standin.write_text(f'#!{sys.executable}\n' + "import json,os,socket,sys\n"
             + "listener=socket.socket(fileno=3)\n"
             + "assert listener.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)==socket.SOCK_STREAM\n"
+            + "assert sys.platform=='darwin' or os.environ.get('DYLD_FALLBACK_LIBRARY_PATH')==os.environ['VMNET_TEST_LIBRARY_PATH']\n"
             + "assert sys.argv[1]=='--spec'\n"
             + "open(os.environ['VMNET_TEST_RESULT'],'w').write(json.dumps(sys.argv[1:]))\n")
         standin.chmod(0o755)
@@ -162,7 +167,9 @@ def self_test():
         listener.bind(directory + '/management.sock')
         listener.listen()
         env = dict(os.environ, VMNET_TEST_REAL_VMSPAWN=str(standin),
-            VMNET_TEST_FAMILY='ipv6', VMNET_TEST_RESULT=str(result_path))
+            VMNET_TEST_FAMILY='ipv6', VMNET_TEST_RESULT=str(result_path),
+            VMNET_TEST_LIBRARY_PATH='/fixture/custom/lib:/opt/homebrew/lib')
+        env.pop('DYLD_FALLBACK_LIBRARY_PATH', None)
         bootstrap = 'import os,sys;os.dup2(int(sys.argv[1]),3,inheritable=True);os.execv(sys.argv[2],sys.argv[2:])'
         try:
             for spec in ({'populate': True, 'net': None}, {'populate': True}):
@@ -172,9 +179,29 @@ def self_test():
                     env=env, pass_fds=(listener.fileno(),), check=True)
                 assert json.loads(result_path.read_text()) == ['--spec', str(spec_path)]
                 assert json.loads(spec_path.read_text()) == spec
+            helper = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            helper.bind(directory + '/network.sock')
+            try:
+                spec = {'net': {'socket': directory + '/network.sock'}}
+                spec_path.write_text(json.dumps(spec))
+                for family in ('dual', 'ipv6'):
+                    env['VMNET_TEST_FAMILY'] = family
+                    subprocess.run([sys.executable, '-c', bootstrap, str(listener.fileno()),
+                        str(Path(__file__).resolve()), '--spec', str(spec_path)],
+                        env=env, pass_fds=(listener.fileno(),), check=True)
+                    args = json.loads(result_path.read_text())
+                    assert args[0] == '--spec'
+                    assert (args[1] == str(spec_path)) == (family == 'dual')
+                    assert json.loads(spec_path.read_text()) == spec
+            finally:
+                helper.close()
         finally:
             listener.close()
     print('PASS local fixture: VLAN/Unixgram filtering and population passthrough with management fd3')
+    if sys.platform == 'darwin':
+        print('Library environment restoration tested on Linux; protected Mac stand-in may strip DYLD again')
+    else:
+        print('PASS library environment restored at actual child exec boundary')
 
 
 if __name__ == '__main__':
