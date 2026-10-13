@@ -17,9 +17,12 @@ path=sys.argv[sys.argv.index('--socket')+1]
 sock=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)
 sock.bind(path)
 print('{"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514}',flush=True)
+first,peer=sock.recvfrom(65536,socket.MSG_PEEK)
+sock.connect(peer)
+if len(first)<64: sock.recv(65536)
 while True:
-    packet,peer=sock.recvfrom(65536)
-    if len(packet)>=14: sock.sendto(packet,peer)
+    packet=sock.recv(65536)
+    if len(packet)>=64: sock.send(packet)
 "#).unwrap();
     std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
     let backend = VmnetBackend::new(&helper);
@@ -39,10 +42,10 @@ while True:
     guest
         .set_read_timeout(Some(Duration::from_millis(100)))
         .unwrap();
-    let packet = [0x61; 64];
+    let packet = [0x61; 1514];
     guest.send(&packet).unwrap();
-    let mut response = [0u8; 64];
-    assert_eq!(guest.recv(&mut response).unwrap(), 64);
+    let mut response = [0u8; 1514];
+    assert_eq!(guest.recv(&mut response).unwrap(), 1514);
     assert_eq!(response, packet);
     for _ in 0..2 {
         let attempts = std::fs::read_to_string(helper.with_extension("args"))
