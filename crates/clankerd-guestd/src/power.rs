@@ -99,6 +99,7 @@ fn power_off() -> ! {
 
 /// SIGTERM everything, wait, SIGKILL what is left, then sync and unmount.
 fn teardown() {
+    crate::network::shutdown();
     // Progress goes to the console (`vmctl logs`), the only trace of a shutdown.
     eprintln!("clankerd-guestd: stopping processes");
     signal_all(libc::SIGTERM);

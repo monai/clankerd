@@ -11,9 +11,12 @@ use std::ffi::CString;
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+static CLIENT_SPAWN: Mutex<()> = Mutex::new(());
 static CLIENT_RUNNING: AtomicBool = AtomicBool::new(false);
 static IPV6_PEER: AtomicBool = AtomicBool::new(false);
 const INITIAL_WAIT: Duration = Duration::from_secs(20);
@@ -132,7 +135,16 @@ pub fn setup(config: &NetworkConfig) -> Result<(), String> {
                 delay = Duration::from_secs(1);
             }
             loop {
+                if SHUTTING_DOWN.load(Ordering::Relaxed) {
+                    return;
+                }
                 std::thread::sleep(delay);
+                let _spawn = CLIENT_SPAWN
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if SHUTTING_DOWN.load(Ordering::Relaxed) {
+                    return;
+                }
                 match crate::power::spawn_owned(&mut command) {
                     Ok(replacement) => {
                         child = replacement;
@@ -164,6 +176,13 @@ pub fn setup(config: &NetworkConfig) -> Result<(), String> {
         }
     });
     Ok(())
+}
+
+pub fn shutdown() {
+    let _spawn = CLIENT_SPAWN
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    SHUTTING_DOWN.store(true, Ordering::Relaxed);
 }
 
 fn stop_failed(child: &mut std::process::Child, message: String) -> Result<(), String> {
