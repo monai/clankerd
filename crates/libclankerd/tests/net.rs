@@ -426,3 +426,30 @@ fn selected_shared_network_and_peer_isolation_are_used_until_the_next_restart() 
     );
     machine.stop(Duration::from_secs(10)).unwrap();
 }
+
+#[test]
+fn invalid_shared_network_selection_fails_before_creating_or_attaching_a_machine() {
+    let rig = rig(FAKE_VMNET);
+    for (address, prefix_len) in [
+        ("192.168.109.3", 24),
+        ("203.0.113.0", 24),
+        ("10.0.0.0", 7),
+        ("192.168.105.0", 31),
+    ] {
+        let host = serde_json::from_value(
+            serde_json::json!({"shared_network":{"address":address,"prefix_len":prefix_len}}),
+        )
+        .unwrap();
+        let error = rig
+            .engine
+            .create(Some("invalid-selection"), sh("exit 0"), host)
+            .err()
+            .expect("invalid network was accepted");
+        assert_eq!(error.kind(), ErrorKind::InvalidParameter);
+        assert_eq!(
+            rig.engine.get("invalid-selection").err().unwrap().kind(),
+            ErrorKind::NotFound
+        );
+        assert!(rig.vmm.specs.lock().unwrap().is_empty());
+    }
+}

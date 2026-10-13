@@ -171,3 +171,48 @@ fn cpus_and_memory_are_recorded_in_the_machine_config() {
         assert!(!out.status.success(), "{bad:?}");
     }
 }
+
+#[test]
+fn shared_network_cli_options_are_persisted_and_invalid_subnets_are_rejected() {
+    let dir = tempfile::Builder::new().prefix("vm").tempdir().unwrap();
+    let guestd = guestd();
+    let output = vmctl(
+        dir.path(),
+        &guestd,
+        &[
+            "create",
+            "--name",
+            "shared-config",
+            "--shared-network",
+            "192.168.109.0/24",
+            "--isolate-peers",
+            "img",
+            "true",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = vmctl(dir.path(), &guestd, &["inspect", "shared-config"]);
+    let info: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        info[0]["host_config"]["shared_network"],
+        serde_json::json!({"address":"192.168.109.0","prefix_len":24})
+    );
+    assert_eq!(info[0]["host_config"]["shared_peer_participation"], false);
+    let invalid = vmctl(
+        dir.path(),
+        &guestd,
+        &[
+            "create",
+            "--shared-network",
+            "192.168.109.3/24",
+            "img",
+            "true",
+        ],
+    );
+    assert!(!invalid.status.success());
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("aligned RFC1918"));
+}
