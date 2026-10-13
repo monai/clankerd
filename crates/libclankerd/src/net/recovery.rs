@@ -115,6 +115,7 @@ fn serve(
     let mut errors = [0u64; 4];
     let mut sampled = Instant::now();
     let mut poll_errors = 0;
+    let mut peer_errors = 0;
     if diagnostics {
         eprintln!(
             "native relay: front={:?} backend={:?} upstream={} helper_pid={helper_pid}",
@@ -186,7 +187,7 @@ fn serve(
             sampled = Instant::now();
         }
         if descriptors[0].revents & libc::POLLIN != 0 {
-            match front.recv_from(&mut buffer) {
+            match receive_from(&front, &mut buffer) {
                 Ok((count, address)) => {
                     counts[0] += 1;
                     if diagnostics && counts[0] <= 3 {
@@ -195,21 +196,22 @@ fn serve(
                             &buffer[..count.min(14)]
                         );
                     }
-                    if !peer && let Some(path) = address.as_pathname() {
-                        match front.connect(path) {
+                    if !peer {
+                        match address.connect(&front) {
                             Ok(()) => {
                                 peer = true;
                                 if diagnostics {
+                                    eprintln!("native relay: connected guest peer {address:?}");
+                                }
+                            }
+                            Err(error) => {
+                                peer_errors += 1;
+                                if peer_errors <= 3 {
                                     eprintln!(
-                                        "native relay: connected guest peer {}",
-                                        path.display()
+                                        "native relay: cannot connect guest peer {address:?}: {error}"
                                     );
                                 }
                             }
-                            Err(error) => eprintln!(
-                                "native relay: cannot connect guest peer {}: {error}",
-                                path.display()
-                            ),
                         }
                     }
                     if let Some(socket) = &back {
@@ -305,4 +307,133 @@ fn process_alive(pid: i32) -> bool {
     // SAFETY: signal zero only observes the sidecar process recorded by startup.
     (unsafe { libc::kill(pid, 0) == 0 })
         || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+// Preserve the kernel address and its exact length. Darwin returns a libkrun
+// peer pathname without a NUL terminator; converting through SocketAddr's
+// as_pathname drops its final byte, so that path cannot be used to reconnect.
+struct RawPeer {
+    address: libc::sockaddr_storage,
+    length: libc::socklen_t,
+}
+impl RawPeer {
+    fn connect(&self, socket: &UnixDatagram) -> io::Result<()> {
+        if self.address.ss_family as i32 != libc::AF_UNIX
+            || self.length as usize <= std::mem::offset_of!(libc::sockaddr_un, sun_path)
+            || self.length as usize > std::mem::size_of_val(&self.address)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid Unix datagram peer address",
+            ));
+        }
+        // SAFETY: initialized address storage covers exactly length bytes;
+        // socket owns its descriptor. No pathname decoding changes the address.
+        let result = unsafe {
+            libc::connect(
+                socket.as_raw_fd(),
+                (&self.address as *const libc::sockaddr_storage).cast(),
+                self.length,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+}
+impl std::fmt::Debug for RawPeer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let offset = std::mem::offset_of!(libc::sockaddr_un, sun_path);
+        let length = (self.length as usize).min(std::mem::size_of_val(&self.address));
+        // SAFETY: RawPeer is entirely initialized by zeroing before recvfrom.
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                (&self.address as *const libc::sockaddr_storage).cast::<u8>(),
+                length,
+            )
+        };
+        let path = bytes.get(offset..).unwrap_or_default();
+        let path = path.strip_suffix(&[0]).unwrap_or(path);
+        formatter
+            .debug_struct("RawPeer")
+            .field("path", &String::from_utf8_lossy(path))
+            .field("length", &self.length)
+            .finish()
+    }
+}
+fn receive_from(socket: &UnixDatagram, buffer: &mut [u8]) -> io::Result<(usize, RawPeer)> {
+    // SAFETY: all zero bytes are a valid initialized sockaddr_storage.
+    let mut address: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+    let mut length = std::mem::size_of_val(&address) as libc::socklen_t;
+    // SAFETY: the buffer and address storage are writable for their passed sizes.
+    let count = unsafe {
+        libc::recvfrom(
+            socket.as_raw_fd(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            0,
+            (&mut address as *mut libc::sockaddr_storage).cast(),
+            &mut length,
+        )
+    };
+    if count < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok((count as usize, RawPeer { address, length }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn raw_non_nul_peer_address_routes_a_reply_to_the_complete_socket_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let peer_path = directory.path().join("krun-net-123-0.sock");
+        let peer = UnixDatagram::unbound().unwrap();
+        // Bind with libkrun's exact pathname length, excluding a terminator.
+        // SAFETY: all-zero storage is a valid initialized sockaddr_un.
+        let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+        address.sun_family = libc::AF_UNIX as _;
+        let path = peer_path.as_os_str().as_bytes();
+        assert!(path.len() < address.sun_path.len());
+        for (destination, &byte) in address.sun_path.iter_mut().zip(path) {
+            *destination = byte as _;
+        }
+        let length =
+            (std::mem::offset_of!(libc::sockaddr_un, sun_path) + path.len()) as libc::socklen_t;
+        #[cfg(target_os = "macos")]
+        {
+            address.sun_len = length as u8;
+        }
+        // SAFETY: address storage includes all bytes covered by length; peer owns its descriptor.
+        assert_eq!(
+            unsafe {
+                libc::bind(
+                    peer.as_raw_fd(),
+                    (&address as *const libc::sockaddr_un).cast(),
+                    length,
+                )
+            },
+            0
+        );
+        let front_path = directory.path().join("front.net");
+        let front = UnixDatagram::bind(&front_path).unwrap();
+        peer.connect(&front_path).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        peer.send(b"request").unwrap();
+        let mut buffer = [0u8; 64];
+        let (_, mut sender) = receive_from(&front, &mut buffer).unwrap();
+        // Linux adds a terminator to the reported address; Darwin preserves
+        // the bind length. Exercise the latter contract on either host.
+        sender.length = length;
+        sender.connect(&front).unwrap();
+        front.send(b"reply").unwrap();
+        let count = peer.recv(&mut buffer).unwrap();
+        assert_eq!(&buffer[..count], b"reply");
+    }
 }
