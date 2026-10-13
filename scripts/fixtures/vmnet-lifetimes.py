@@ -82,6 +82,7 @@ def reply(frame, parsed, ack_count, nak=False):
     options.update({51: struct.pack('!I', 24), 58: struct.pack('!I', 8), 59: struct.pack('!I', 16)})
     options[6] = socket.inet_aton('192.0.2.53' if ack_count < 2 else '192.0.2.54')
     options[15] = b'lifetime.test'
+    options[119] = b'\x08lifetime\x04test\x00'
     if nak:
         options = {53: b'\x06', 54: options[54]}
     payload = bytearray(frame[bootp:bootp+240])
