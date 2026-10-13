@@ -64,6 +64,9 @@ impl VmspawnVmm {
                 ))
             })?;
         }
+        if spec.net.is_some() && !self.dev_local {
+            self.place_network_tools(boot)?;
+        }
         if spec.volume_disk.is_some() {
             self.place_volume_tools(boot)?;
         }
@@ -71,6 +74,28 @@ impl VmspawnVmm {
             boot.join(BOOT_WORKLOAD),
             serde_json::to_vec(&spec.workload)?,
         )?;
+        Ok(())
+    }
+
+    fn place_network_tools(&self, boot: &Path) -> Result<()> {
+        let dir = self.guestd.parent().unwrap_or(Path::new("."));
+        for name in ["dhcpcd", "dhcpcd.LICENSE"] {
+            let src = dir.join(name);
+            let dst = boot.join(name);
+            let _ = fs::remove_file(&dst);
+            if fs::hard_link(&src, &dst).is_err() {
+                fs::copy(&src, &dst).map_err(|e| {
+                    Error::unavailable(format!(
+                        "cannot place {name} in the boot directory: {e}; run `make rust` to build the network client"
+                    ))
+                })?;
+            }
+        }
+        let hook = boot.join("clankerd-guestd-network-hook");
+        let _ = fs::remove_file(&hook);
+        if fs::hard_link(&self.guestd, &hook).is_err() {
+            fs::copy(&self.guestd, &hook)?;
+        }
         Ok(())
     }
 
