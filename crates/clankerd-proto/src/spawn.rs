@@ -56,7 +56,7 @@ pub struct SpawnSpec {
     /// Host directories shared into the guest over virtio-fs.
     #[serde(default)]
     pub shares: Vec<Share>,
-    /// virtio-net device backed by a unixgram socket (gvproxy).
+    /// virtio-net device backed by a unixgram socket.
     #[serde(default)]
     pub net: Option<NetDevice>,
     /// Forwarding owned by the helper; absent for population boots.

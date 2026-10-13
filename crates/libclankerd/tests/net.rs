@@ -243,3 +243,28 @@ fn network_identity_is_unique_and_survives_restart() {
     assert_ne!(rig.last_spec().net.unwrap().mac, initial);
     second.stop(Duration::from_secs(10)).unwrap();
 }
+
+#[test]
+fn a_helper_that_creates_a_socket_then_fails_does_not_launch_the_workload() {
+    let rig = rig(r#"#!/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in --socket) sock=$2 ;; esac
+  shift
+done
+: > "$sock"
+echo 'interface setup failed after binding socket' >&2
+exit 3
+"#);
+    let machine = long_running(&rig.engine, "partial-attachment");
+    let error = machine.start().unwrap_err();
+    assert!(error.message().contains("interface setup failed"));
+    assert!(rig.vmm.specs.lock().unwrap().is_empty());
+    assert!(
+        !rig._env
+            .root()
+            .join("state/machines")
+            .join(machine.id())
+            .join("net.pid")
+            .exists()
+    );
+}

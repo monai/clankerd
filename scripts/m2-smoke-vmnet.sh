@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Real macOS 15 shared-network gate. Run after `mise exec -- make rust`.
-# Requires vmnet-helper installed with its supported passwordless sudoers rule.
+# Installs vmnet-helper and its supported sudoers rule if missing.
 set -Eeuo pipefail
 [ "$(uname -s)" = Darwin ] || { echo 'Requires the Mac host' >&2; exit 1; }
 [ "$(sw_vers -productVersion | cut -d. -f1)" = 15 ] || { echo 'This gate requires macOS 15' >&2; exit 1; }
@@ -10,8 +10,27 @@ vmctl=$out/darwin-arm64/vmctl
 export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn
 export CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
 export CLANKERD_VMNET_HELPER=${CLANKERD_VMNET_HELPER:-/opt/vmnet-helper/bin/vmnet-helper}
-sudo --non-interactive -- "$CLANKERD_VMNET_HELPER" --version
 work=$(mktemp -d /tmp/clankerd-vmnet.XXXXXX)
+trap 'rm -rf "$work"' EXIT
+if [ ! -x "$CLANKERD_VMNET_HELPER" ]; then
+  [ "$CLANKERD_VMNET_HELPER" = /opt/vmnet-helper/bin/vmnet-helper ] || {
+    echo "Missing custom helper: $CLANKERD_VMNET_HELPER" >&2; exit 1;
+  }
+  echo 'Installing vmnet-helper v0.13.0 and its supported sudoers rule (sudo may request your password)'
+  curl --fail --location --silent --show-error \
+    https://github.com/nirs/vmnet-helper/releases/download/v0.13.0/install.sh \
+    -o "$work/install.sh"
+  echo "a4cae8b71585757603dbacc893ee47dc938fcc7389b842587a9f0834ec417055  $work/install.sh" | shasum -a 256 -c -
+  sudo --validate
+  VMNET_VERSION=v0.13.0 VMNET_INTERACTIVE=0 VMNET_CONFIGURE_SUDO=1 bash "$work/install.sh"
+fi
+if ! sudo --non-interactive -- "$CLANKERD_VMNET_HELPER" --version; then
+  [ "$CLANKERD_VMNET_HELPER" = /opt/vmnet-helper/bin/vmnet-helper ] || exit 1
+  echo 'Configuring the installed helper sudoers rule (sudo may request your password)'
+  sudo --validate
+  sudo install -m 0640 /opt/vmnet-helper/share/doc/vmnet-helper/sudoers.d/vmnet-helper /etc/sudoers.d/
+  sudo --non-interactive -- "$CLANKERD_VMNET_HELPER" --version
+fi
 export CLANKERD_STATE_DIR=$work/state
 export CLANKERD_RUNTIME_DIR=$work/run
 cleanup() {

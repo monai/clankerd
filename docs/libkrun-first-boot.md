@@ -109,7 +109,7 @@ State lives in `~/Library/Application Support/clankerd/machines/<id>/`:
 when the helper dies), `vmspawn.json`, `boot/`.
 
 Failed boot checks preserve their temporary state directory and print its path,
-along with the helper, console and gvproxy logs. `vmspawn-exit` records the
+along with the helper, console and vmnet-helper logs. `vmspawn-exit` records the
 helper's exit code or terminating signal. Failed population boots separately
 preserve their temporary boot directory and include its path in the error.
 For a silent Mac crash, inspect the newest `clankerd-vmspawn` report under
@@ -296,7 +296,7 @@ shutdown steps (`stopping processes`, `syncing and unmounting`, `powering off`).
    SIGTERM is killed through the helper after the timeout (no in-guest SIGKILL
    escalation), as designed. Check `vmctl logs` for the teardown lines.
    The host waits for the VM helper to exit before reporting the machine
-   exited, returning from `wait`/`stop`, stopping gvproxy or scheduling a
+   exited, returning from `wait`/`stop`, stopping vmnet-helper or scheduling a
    restart. The workload's `Exited` event arrives before guestd's cleanup;
    ending the sidecar at that event can interrupt teardown. The stop timeout
    covers both workload termination and guest cleanup.
@@ -429,30 +429,32 @@ runtime bindings through a separate Unix socket (mode 0600) that is not mapped
 into the guest. Dropping a runtime handle removes its helper-owned binding.
 Rebuild both `vmctl` and `clankerd-vmspawn` for this protocol change.
 
-## 9. Guest networking via gvproxy (M2 hand-off for ticket 08)
+## 9. Native shared networking (macOS 15 hardware gate)
 
-Every image-backed machine gets a virtio-net NIC served by its own gvproxy sidecar (pinned release, sha256-verified, cached under the cache dir; `--gvproxy PATH` / `CLANKERD_GVPROXY` overrides it). The sidecar starts before the VMM and is stopped with the machine.
+Every image-backed machine uses a vmnet-helper sidecar and a unique, stable
+machine MAC/interface identity. Shared mode is persisted as the default; the
+common default vmnet subnet is 192.168.105.0/24. Guest addresses come from DHCP,
+and `vmctl inspect` reads current interface addresses over vsock. Guest TCP and
+UDP services are reachable directly by their guest address. Networking setup
+failure prevents workload startup, and no image-provided nft executable is needed.
 
-### Run it
+Install vmnet-helper using its [supported installer](https://github.com/nirs/vmnet-helper#installation)
+and [sudoers rule](https://github.com/nirs/vmnet-helper/blob/main/sudoers.d/README.md).
+The macOS 15 binary lives at `/opt/vmnet-helper/bin/vmnet-helper`. Startup uses
+`sudo --non-interactive`; missing privilege setup fails promptly with the helper
+log included in the error. The helper creates the interface while privileged,
+then drops to the invoking user's identity before serving the socket. The VMM
+runs as the invoking user. `--vmnet-helper PATH` / `CLANKERD_VMNET_HELPER` selects
+an alternative installed binary (its sudoers rule must authorize that path).
 
 ```sh
-scripts/m2-boot-check.sh net
+mise exec -- make rust && scripts/m2-smoke-vmnet.sh
 ```
 
-### Unverified (look here first if it fails)
-
-1. **Pinned asset.** `GVPROXY_URL`/`GVPROXY_SHA256` in `crates/libclankerd/src/net/fetch.rs` must be the darwin arm64 binary; a checksum mismatch aborts `create`/`start`.
-2. **NIC attach.** The NIC attach passed the Mac networking and Docker smoke checks; if eth0 never appears check `vmctl logs` and gvproxy's log in the machine directory.
-3. **DHCP.** guestd speaks DHCP itself (static lease 192.168.127.2 keyed to the fixed MAC); check `ip addr show eth0` and `/etc/resolv.conf`.
-4. **Control API block.** guestd installs an nft ruleset dropping 192.168.127.1:80 and 192.168.127.254 in `output` and `forward`; the image or kernel must provide nftables support.
-5. **Sidecar lifetime.** `pgrep gvproxy` should be empty after `vmctl rm -f`.
-
-### Ticket 08 checklist for you
-
-- [ ] gvproxy is downloaded once and verified; a second run uses the cache
-- [x] eth0 gets 192.168.127.2 by DHCP; public names resolve through the guest DNS configuration
-- [ ] Host-specific or VPN DNS names resolve the same way inside the guest
-- [x] The guest fetches an HTTPS URL
-- [x] The guest cannot reach 192.168.127.1:80 or 192.168.127.254
-- [x] `net.ipv4.ip_forward` is 1 before the workload starts
-- [x] gvproxy starts and stops with each machine
+The script installs vmnet-helper v0.13.0 using its checksum-verified upstream installer
+and configures the supported sudoers rule if missing (sudo may request your password).
+Existing installed helpers are retained. This gate checks direct IPv4 TCP and UDP, outbound NAT, a guest image without nft,
+network survival after CLI exit, stop/restart and removal of sockets/PID records.
+Inspect `console.log`, `vmspawn.log`, and `vmnet-helper.log` on failures. Packet
+delivery on macOS 15 is unverified until this gate passes. IPv6 readiness, renewal,
+additional modes and isolation remain subsequent slices of the parent spec.

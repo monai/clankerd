@@ -83,9 +83,6 @@ impl NetBackend for VmnetBackend {
 
         let deadline = Instant::now() + READY_TIMEOUT;
         loop {
-            if spec.socket.exists() {
-                break;
-            }
             let failure = match child.try_wait() {
                 Ok(Some(status)) => Some(format!(
                     "vmnet-helper exited ({status}) before it was ready"
@@ -103,6 +100,9 @@ impl NetBackend for VmnetBackend {
                     "{failure}: {}",
                     log_tail(&log_path)
                 )));
+            }
+            if spec.socket.exists() {
+                break;
             }
             std::thread::sleep(Duration::from_millis(20));
         }
