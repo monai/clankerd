@@ -45,6 +45,17 @@ if __name__ == '__main__':
                 time.sleep(0.2)
         threading.Thread(target=output, daemon=True).start()
         server()  # Ethernet listeners from vmnet-ipv6-services.py prepended by the gate.
+    elif action == 'ready':
+        pid = Path('/tmp/recovery-workload.pid').read_text().strip()
+        assert pid.isdigit() and Path('/proc', pid).exists(), 'workload is not running'
+        # Readiness of fixture listeners is independent of Ethernet addresses.
+        for kind, port in ((socket.SOCK_STREAM, 18081), (socket.SOCK_DGRAM, 18082)):
+            with socket.socket(socket.AF_INET, kind) as connection:
+                connection.settimeout(0.2)
+                connection.connect(('127.0.0.1', port))
+                connection.sendall(b'recovery-ready')
+                assert connection.recv(4096) == b'recovery-ready'
+        print(pid)
     elif action == 'unix-server':
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(sys.argv[2])
