@@ -1,8 +1,7 @@
 # Docker inside the machine (M2 hand-off for ticket 10)
 
 The derived DinD image passed the full Mac smoke test; see the validation record
-below. Linux tests check image startup, smoke-script behavior and host-gateway
-configuration (`crates/vmctl/tests/{image_changes,smoke_script,host_gateway}.rs`).
+below. Linux tests check image startup, smoke-script behavior and retired TCP flag rejection (`crates/vmctl/tests/{image_changes,smoke_script,host_gateway}.rs`).
 
 ## 1. Change the `slim` image (you apply these)
 
@@ -56,7 +55,7 @@ make rust
 scripts/m2-smoke-test.sh
 ```
 
-It boots the image with a 20G volume, publishes guest port 8080 on `127.0.0.1:8080` and exposes a host loopback port (18081) to the guest, then walks: interactive exec, dockerd in nftables mode, `docker run -p 8080:80 nginx` fetched from the Mac, internet from a container, a compose project with a user-defined network, the host loopback port from the guest, stop/start with the volume and Docker's images intact, a changed image (`ALT_IMAGE`, default `debian:bookworm-slim`) on the same volume, and a second machine from the cached image. It cleans up after itself. Variables are listed at the top of the script. A fully interactive `vmctl run -it` / `exec -it` session is the one thing it cannot do without a terminal: try that by hand.
+It boots the image with a 20G volume, then walks: interactive exec, dockerd in nftables mode, `docker run -p 8080:80 nginx` fetched from the Mac, internet from a container, a compose project with a user-defined network, stop/start with the volume and Docker's images intact, a changed image (`ALT_IMAGE`, default `debian:bookworm-slim`) on the same volume, and a second machine from the cached image. It cleans up after itself. Variables are listed at the top of the script. A fully interactive `vmctl run -it` / `exec -it` session is the one thing it cannot do without a terminal: try that by hand.
 
 ## Validated on the Mac (2026-10-09)
 
@@ -69,8 +68,7 @@ Docker storage on the named volume. Preparation, build and publishing are in
 registry.
 
 Verified: interactive stdin, nftables mode, nginx fetched from the Mac,
-container internet access, Compose on a user-defined network, a host loopback
-service reached from the guest, Docker data and volume persistence across
+container internet access, Compose on a user-defined network, Docker data and volume persistence across
 restart, image changes preserving the volume, forced removal, and cached
 creation in 0 seconds. This verifies the runtime with the derived DinD image;
 `ghcr.io/monai/clankers:slim` still lacks the Compose plugin observed in testing.
@@ -81,7 +79,6 @@ creation in 0 seconds. This verifies the runtime with the derived DinD image;
 2. **Storage driver.** Docker picks overlayfs on the ext4 volume if the kernel has `overlay`; otherwise it falls back to `vfs` (slow, large). `docker info | grep -i storage` shows which.
 3. **cgroup v2 delegation.** guestd delegates controllers; dockerd needs `cpu`, `memory`, `pids` at least.
 4. **Published port chain.** Mac 127.0.0.1:8080 -> vsock tunnel -> guest :8080 -> docker-proxy/nftables DNAT -> container :80. The vmctl `-p` publication is fixed for the machine's life and is re-bound on `start`.
-5. **Host-gateway port.** The guest reaches the host's loopback port on its own `127.0.0.1:PORT` (a tunnel, not the gvproxy alias, which stays blocked).
 6. **Name resolution inside containers.** Docker's embedded DNS forwards to the guest's `/etc/resolv.conf` from gvproxy.
 
 ## 4. If nftables mode fails
@@ -93,7 +90,7 @@ Record the result (dockerd log, `docker info`, `zcat /proc/config.gz | grep -E '
 - [ ] Image changes applied and `ghcr.io/monai/clankers:slim` rebuilt
 - [x] dockerd starts in nftables mode on the stock kernel
 - [x] `docker run -p` and a compose project with a user-defined network work; containers reach the internet
-- [x] nginx is reachable from the Mac through the published port
+- [x] nginx is reachable from the Mac at the guest IP
 - [x] `scripts/m2-smoke-dind.sh` passes end to end with the derived DinD image
 - [ ] The default `ghcr.io/monai/clankers:slim` image passes the Compose smoke after its image changes
 - Not needed for this validation: nftables worked on the stock kernel; the Kata fallback was not evaluated.

@@ -1,14 +1,14 @@
 //! Seam A: `Machine::update` changes a stopped machine's resources, mounts
-//! and ports, and refuses the rest with the list of immutable fields.
+//! and socket bindings, and refuses the rest with the list of immutable fields.
 
 mod common;
 
 use common::*;
-use libclankerd::{ErrorKind, EventAction, HostConfig, Mount, PortBinding};
+use libclankerd::{ErrorKind, EventAction, HostConfig, Mount};
 use std::time::Duration;
 
 #[test]
-fn update_applies_resources_mounts_and_ports_to_a_stopped_machine() {
+fn update_applies_resources_and_mounts_to_a_stopped_machine() {
     let env = Env::new();
     let engine = env.engine();
     let m = create(&engine, "upd", "exit 0");
@@ -19,8 +19,6 @@ fn update_applies_resources_mounts_and_ports_to_a_stopped_machine() {
         cpus: Some(4),
         memory: Some(2 << 30),
         mounts: vec![Mount::volume("data", "/storage")],
-        port_bindings: vec![PortBinding::loopback(0, 80)],
-        host_gateway_ports: vec![9222],
         ..info.host_config.clone()
     };
     m.update(&info.config, host.clone()).unwrap();
@@ -83,10 +81,9 @@ fn update_validates_the_new_host_config() {
     let m = create(&engine, "bad", "exit 0");
     let info = m.inspect().unwrap();
     let host = HostConfig {
-        port_bindings: vec![PortBinding {
-            host_ip: Some("192.168.1.5".parse().unwrap()),
-            host_port: 8080,
-            guest_port: 80,
+        socket_bindings: vec![libclankerd::SocketBinding {
+            guest_path: "relative.sock".into(),
+            host_path: "/host.sock".into(),
         }],
         ..Default::default()
     };

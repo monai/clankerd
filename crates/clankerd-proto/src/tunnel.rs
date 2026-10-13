@@ -8,14 +8,14 @@
 //!
 //! Directions:
 //! * host -> guest: [`METHOD_CONNECT`] on the guest's varlink endpoint
-//!   (published ports);
+//!   (Unix socket connections);
 //! * guest -> host: [`METHOD_HOST_CONNECT`] on the host's endpoint
-//!   (host-gateway ports, socket bindings).
+//!   (Unix socket bindings).
 //!
 //! Guest listeners are managed with [`METHOD_LISTEN`] / [`METHOD_UNLISTEN`].
 
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Shutdown, TcpStream};
+use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
@@ -31,11 +31,10 @@ pub const ERROR_NOT_ALLOWED: &str = "io.clankerd.NotAllowed";
 pub const ERROR_LISTEN_FAILED: &str = "io.clankerd.ListenFailed";
 pub const ERROR_NO_SUCH_LISTENER: &str = "io.clankerd.NoSuchListener";
 
-/// Where a tunnel ends. `Tcp` is always on the loopback of the side that dials.
+/// The Unix socket where a relay ends.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Target {
-    Tcp { port: u16 },
     Unix { path: PathBuf },
 }
 
@@ -45,8 +44,7 @@ pub struct Connect {
     pub target: Target,
 }
 
-/// Parameters of [`METHOD_LISTEN`]: the guest listens on `listen` (TCP on the
-/// guest's loopback, or a unix path) and tunnels every connection to `target`
+/// Parameters of [`METHOD_LISTEN`]: the guest listens on the Unix socket `listen` and tunnels every connection to `target`
 /// on the host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Listen {
@@ -120,15 +118,6 @@ pub fn read_frame<R: Read>(r: &mut R) -> io::Result<Option<Frame>> {
 pub trait Duplex: Read + Write + Send + Sized + 'static {
     fn try_clone(&self) -> io::Result<Self>;
     fn shutdown(&self, how: Shutdown) -> io::Result<()>;
-}
-
-impl Duplex for TcpStream {
-    fn try_clone(&self) -> io::Result<Self> {
-        TcpStream::try_clone(self)
-    }
-    fn shutdown(&self, how: Shutdown) -> io::Result<()> {
-        TcpStream::shutdown(self, how)
-    }
 }
 
 impl Duplex for UnixStream {
@@ -233,32 +222,12 @@ mod tests {
     #[test]
     fn targets_use_the_documented_shape() {
         assert_eq!(
-            serde_json::to_string(&Target::Tcp { port: 80 }).unwrap(),
-            r#"{"kind":"tcp","port":80}"#
+            serde_json::to_string(&Target::Unix {
+                path: "/socket".into()
+            })
+            .unwrap(),
+            r#"{"kind":"unix","path":"/socket"}"#
         );
-    }
-}
-
-/// A guest TCP port published on the host. The host side is loopback only:
-/// `host_ip` may name a loopback address but never anything else.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PortBinding {
-    /// Loopback address to listen on; `None` means 127.0.0.1.
-    #[serde(default)]
-    pub host_ip: Option<IpAddr>,
-    /// `0` picks a free port (see `PublishedPort::host_port`).
-    pub host_port: u16,
-    pub guest_port: u16,
-}
-
-impl PortBinding {
-    /// `127.0.0.1:host_port` -> guest `guest_port`.
-    pub fn loopback(host_port: u16, guest_port: u16) -> Self {
-        PortBinding {
-            host_ip: None,
-            host_port,
-            guest_port,
-        }
     }
 }
 
