@@ -61,6 +61,11 @@ def host(status_path, expected):
     details = [d for d in network['address_details'] if not d['tentative'] and not d['dad_failed']]
     v4 = [d['address'] for d in details if ipaddress.ip_address(d['address']).version == 4]
     v6 = [d['address'] for d in details if ipaddress.ip_address(d['address']).version == 6]
+    if expected == 'ipv4-services':
+        assert v4 and network['ipv4']['local_available'], network
+        probe(v4[0])
+        print('PASS IPv4 TCP/UDP services with current network configuration')
+        return
     if expected == 'ipv6':
         assert not v4, f'IPv4 present before IPv6-only workload startup: {v4}'
     if expected == 'ipv4':
