@@ -8,12 +8,24 @@ import threading
 import time
 
 
+def echo_ipv6_datagram(sock):
+    data, control, flags, peer = sock.recvmsg(2048, socket.CMSG_SPACE(20))
+    assert not flags & socket.MSG_CTRUNC, 'IPv6 destination information truncated'
+    packet_info = [(level, kind, value) for level, kind, value in control
+                   if level == socket.IPPROTO_IPV6 and kind == socket.IPV6_PKTINFO]
+    assert len(packet_info) == 1, 'IPv6 destination information missing'
+    # RFC3542: received address/interface becomes the reply's source/interface.
+    sock.sendmsg([data], packet_info, 0, peer)
+
+
 def server():
     def serve(family, kind, port):
         sock = socket.socket(family, kind)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if family == socket.AF_INET6:
             sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            if kind == socket.SOCK_DGRAM:
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_RECVPKTINFO, 1)
         sock.bind(('::' if family == socket.AF_INET6 else '0.0.0.0', port))
         if kind == socket.SOCK_STREAM:
             sock.listen()
@@ -23,8 +35,11 @@ def server():
                     conn.sendall(conn.recv(2048))
         else:
             while True:
-                data, peer = sock.recvfrom(2048)
-                sock.sendto(data, peer)
+                if family == socket.AF_INET6:
+                    echo_ipv6_datagram(sock)
+                else:
+                    data, peer = sock.recvfrom(2048)
+                    sock.sendto(data, peer)
     for family in (socket.AF_INET, socket.AF_INET6):
         for kind, port in ((socket.SOCK_STREAM, 18081), (socket.SOCK_DGRAM, 18082)):
             threading.Thread(target=serve, args=(family, kind, port), daemon=True).start()
@@ -50,6 +65,7 @@ def probe(address, scope=0):
             sock.connect(endpoint)
             sock.send(b'vmnet-family-smoke')
             assert sock.recv(2048) == b'vmnet-family-smoke'
+            print(f'PASS local {"TCP" if kind == socket.SOCK_STREAM else "UDP"} {endpoint}', flush=True)
     print(f'PASS local TCP/UDP {address}' + (f'%{socket.if_indextoname(scope)}' if scope else ''))
 
 
