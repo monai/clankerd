@@ -28,7 +28,17 @@ trap cleanup EXIT
 failure_diagnostics() {
   failed=1
   if [ -n "$native_pid" ]; then fd_sample failure || true; sleep 6; fd_sample failure-idle || true; fi
-  echo "Full machine logs retained in $work/state"
+  python3 - "$work" <<'PY'
+from pathlib import Path
+import shutil, sys
+work = Path(sys.argv[1])
+state = work / 'state'
+for source in state.rglob('*.log'):
+    target = work / 'logs' / source.relative_to(state)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+PY
+  "$root/scripts/m2-report-recovery.sh" "$work" || true
 }
 fd_sample() {
   local tag=$1
@@ -153,14 +163,17 @@ fd_sample burst-busy
 fd_idle burst-idle
 "$vmctl" exec "$name" python3 -c 'import os;print("guestd descriptors",len(os.listdir("/proc/1/fd")))'
 # Real link/address loss is held throughout management and Unix binding probes.
+echo carrier-down > "$work/phase"
 "$vmctl" exec "$name" ip link set eth0 down
 "$vmctl" exec "$name" ip -4 addr flush dev eth0
 wait_for down 20
 management
+echo carrier-up > "$work/phase"
 "$vmctl" exec "$name" ip link set eth0 up
 wait_for up 150
 packets
 # dhcpcd is independently supervised; its death must not restart the workload.
+echo client-restart > "$work/phase"
 "$vmctl" exec "$name" python3 -c "$recovery" kill-client
 wait_for down 10
 wait_for up 150
@@ -168,6 +181,7 @@ management
 packets
 # Detached native supervision reconnects the same VMM endpoint after helper death.
 for cycle in 1 2; do
+  echo "helper-restart-$cycle" > "$work/phase"
   old_helper=$(cat "$dir/net.pid")
   kill -KILL "$old_helper"
   wait_for down 10

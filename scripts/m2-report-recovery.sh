@@ -15,6 +15,9 @@ else:
 if not directory.is_dir():
     raise SystemExit(f'Diagnostics directory not found: {directory}')
 print(f'Recovery report: {directory}')
+phase = directory / 'phase'
+if phase.exists():
+    print('Recovery phase: ' + phase.read_text().strip())
 baseline_path = directory / 'native-count-baseline-idle'
 baseline = int(baseline_path.read_text()) if baseline_path.exists() else None
 print(f'Idle baseline: {baseline if baseline is not None else "not captured"}')
@@ -55,7 +58,10 @@ else:
     print('  Not captured')
 print('Last guest network messages:')
 messages = []
-for path in (directory / 'state').rglob('*.log'):
+logs = directory / 'logs'
+if not logs.exists():
+    logs = directory / 'state'
+for path in logs.rglob('*.log'):
     for line in path.read_text(errors='replace').splitlines():
         if line.startswith(('eth0:', 'dhcp_openbpf:', 'clankerd-guestd: automatic', 'dhcpcd exited')):
             messages.append(line)
