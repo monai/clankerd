@@ -95,11 +95,24 @@ while IFS= read -r interface; do
     if [ "$family" = dual ]; then
       for destination in 1.1.1.1 2606:4700:4700::1111; do
         if python3 -c "$external_probe" "$destination" "$interface"; then
-          "$vmctl" exec bridge-smoke python3 -c "$external_probe" "$destination"
+          # Local link-local readiness can precede DHCP and router discovery.
+          external_passed=0
+          external_deadline=$((SECONDS + 60))
+          while [ "$SECONDS" -lt "$external_deadline" ]; do
+            if "$vmctl" exec bridge-smoke python3 -c "$external_probe" "$destination" > "$work/$interface-external-$destination.log" 2>&1; then
+              external_passed=1
+              break
+            fi
+            sleep 1
+          done
+          cat "$work/$interface-external-$destination.log"
+          [ "$external_passed" = 1 ]
         else
           echo "HOST/LAN LIMITATION: external TCP $destination:443 unavailable from Mac; corresponding LAN gateway acceptance outstanding"
         fi
       done
+      "$vmctl" inspect bridge-smoke > "$work/$interface-$family.json"
+      python3 "$root/scripts/fixtures/vmnet-bridge-probe.py" "$work/$interface-$family.json" "$interface" "$family"
       has_ipv4=$(python3 - "$work/$interface-$family.json" <<'PY'
 import ipaddress,json,sys
 m=json.load(open(sys.argv[1]))[0]
