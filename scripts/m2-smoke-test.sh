@@ -144,6 +144,20 @@ until registry_dns_up >/dev/null 2>&1; do
 done
 echo "guest registry DNS resolved through libc"
 
+step "the Docker daemon can pull nginx through its normal registry transport"
+# DNS can become available before any external route. Retry the required pull,
+# preserving daemon address selection and completed layers; create no container yet.
+registry_deadline=$((SECONDS + timeout_s))
+until guest 'docker pull nginx' > "$state/registry-pull.log" 2>&1; do
+  if [ "$SECONDS" -ge "$registry_deadline" ]; then
+    tail -n 20 "$state/registry-pull.log" >&2
+    diagnose
+    fail "Docker registry pull did not succeed within the retry window"
+  fi
+  sleep 5
+done
+cat "$state/registry-pull.log"
+
 step "docker run -p 8080:80 nginx is reachable from the Mac at the guest IP"
 guest 'docker run -d --name web -p 8080:80 nginx'
 retry "nginx on the guest IP" nginx_up
