@@ -31,6 +31,8 @@ def observe(address, hops):
                         reply+=data
                         if kind==socket.SOCK_DGRAM:break
                     row['reached'] = reply == b'isolation-evidence'
+                    if not row['reached']:row['error'] = 'EOF before complete echo' if not data else 'echo payload mismatch'
+                    else:row.pop('error',None)
                 except OSError as error:
                     row['error'] = str(error)
             if row['reached']:break
