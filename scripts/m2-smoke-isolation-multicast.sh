@@ -104,6 +104,7 @@ rows=[json.loads(line) for line in open(sys.argv[1])]
 assert len(rows)==4 and all(row['reached'] for row in rows), rows
 PYLISTEN
   then echo "$name LOCAL LISTENER HEALTH FAILED"; continue; fi
+  "$vmctl" exec "$name" sh -c 'test -f /tmp/multicast-received.jsonl || touch /tmp/multicast-received.jsonl'
   healthy+=("$name")
   echo "$name HOST IPv4 TCP/UDP PASS addresses: $(cat "$work/$name-addresses.txt")"
 done
@@ -148,6 +149,8 @@ for line in open(sys.argv[2]):
     name=data[13:13+data[12]].decode()
     observed.setdefault('IPv4' if row['family']==socket.AF_INET else 'IPv6',set()).add(name)
 print(sys.argv[1]+' received: '+str({family:sorted(names) for family,names in observed.items()}))
+for family in ('IPv4','IPv6'):
+    if family not in observed: print('MISSING '+sys.argv[1]+' '+family+' positive multicast delivery')
 PYMULTICAST
 done
 python3 - <<'PYEXTERNAL'

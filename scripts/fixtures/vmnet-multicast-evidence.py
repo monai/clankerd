@@ -12,12 +12,13 @@ def multicast_listen():
         if family == socket.AF_INET:
             sock.bind(('0.0.0.0', 5353))
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
-                            socket.inet_aton('224.0.0.251') + socket.inet_aton('0.0.0.0'))
+                            socket.inet_aton('224.0.0.251') + socket.inet_aton('0.0.0.0') + struct.pack('@I', socket.if_nametoindex('eth0')))
         else:
             sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
             sock.bind(('::', 5353))
             sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP,
                             socket.inet_pton(socket.AF_INET6, 'ff02::fb') + struct.pack('@I', socket.if_nametoindex('eth0')))
+        print('multicast listener ready family='+str(family), flush=True)
         while True:
             data, sender = sock.recvfrom(4096)
             if b'clankerd-evidence-' in data:
@@ -34,6 +35,8 @@ def multicast_send(label):
     for family, group in ((socket.AF_INET, '224.0.0.251'), (socket.AF_INET6, 'ff02::fb')):
         with socket.socket(family, socket.SOCK_DGRAM) as sock:
             if family == socket.AF_INET:
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
+                                socket.inet_aton('0.0.0.0') + socket.inet_aton('0.0.0.0') + struct.pack('@I', socket.if_nametoindex('eth0')))
                 sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
                 endpoint = (group, 5353)
             else:
