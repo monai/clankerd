@@ -14,7 +14,16 @@ host_pid=''
 names='evidence-a evidence-b evidence-c evidence-d evidence-e'
 cleanup() {
   if [ -n "$host_pid" ]; then kill "$host_pid" 2>/dev/null || true; wait "$host_pid" 2>/dev/null || true; fi
-  cp -R "$work/state" "$work/retained-state" 2>/dev/null || true
+  python3 - "$work/state" "$work/retained-state" <<'PYLOGS' || true
+from pathlib import Path
+import shutil,sys
+source,destination=map(Path,sys.argv[1:])
+for path in source.rglob('*'):
+    if path.is_file() and path.suffix in ('.log','.json'):
+        target=destination/path.relative_to(source)
+        target.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copy2(path,target)
+PYLOGS
   for name in $names; do "$vmctl" rm -f "$name" >/dev/null 2>&1 || true; done
   echo "Retained evidence: $work"
 }
