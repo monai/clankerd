@@ -108,6 +108,7 @@ PYLISTEN
   healthy+=("$name")
   echo "$name HOST IPv4 TCP/UDP PASS addresses: $(cat "$work/$name-addresses.txt")"
 done
+[ "${#healthy[@]}" = 5 ] || { echo "FAIL incomplete multicast coverage: ${#healthy[@]}/5 healthy VMs"; exit 1; }
 # Warm and measure each source's actual Mac path before peer observations.
 sysctl net.inet.ip.forwarding net.inet6.ip6.forwarding > "$work/mac-forwarding-live.txt"
 netstat -rn > "$work/mac-routes-live.txt"
@@ -149,8 +150,9 @@ for line in open(sys.argv[2]):
     name=data[13:13+data[12]].decode()
     observed.setdefault('IPv4' if row['family']==socket.AF_INET else 'IPv6',set()).add(name)
 print(sys.argv[1]+' received: '+str({family:sorted(names) for family,names in observed.items()}))
+expected={'clankerd-evidence-'+name for name in (('evidence-a','evidence-b') if sys.argv[1] in ('evidence-a','evidence-b') else (sys.argv[1],))}
 for family in ('IPv4','IPv6'):
-    if family not in observed: print('MISSING '+sys.argv[1]+' '+family+' positive multicast delivery')
+    assert observed.get(family,set())==expected,(sys.argv[1],family,observed,expected)
 PYMULTICAST
 done
 python3 - <<'PYEXTERNAL'
