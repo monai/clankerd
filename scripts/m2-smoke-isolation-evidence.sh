@@ -79,7 +79,7 @@ for name in $names; do
   passed=0
   for attempt in $(seq 1 30); do
     "$vmctl" inspect "$name" > "$work/$name.json"
-    if python3 "$root/scripts/fixtures/vmnet-ipv6-services.py" host "$work/$name.json" dual > "$work/$name-host.log" 2>&1; then passed=1; break; fi
+    if python3 "$root/scripts/fixtures/vmnet-ipv6-services.py" host "$work/$name.json" ipv4-services > "$work/$name-host.log" 2>&1; then passed=1; break; fi
     sleep 1
   done
   if [ "$passed" != 1 ]; then echo "$name HOST HEALTH FAILED (details retained)"; continue; fi
@@ -93,8 +93,15 @@ local6=next(a for a in addresses if ipaddress.ip_address(a).version==6 and ipadd
 print(v4,global6,local6+'%eth0')
 PYTARGET
   then echo "$name GLOBAL IPv6 COVERAGE MISSING"; continue; fi
+  "$vmctl" exec "$name" python3 -c "$peer" 64 127.0.0.1 ::1 > "$work/$name-local-listeners.jsonl"
+  if ! python3 - "$work/$name-local-listeners.jsonl" <<'PYLISTEN'
+import json,sys
+rows=[json.loads(line) for line in open(sys.argv[1])]
+assert len(rows)==4 and all(row['reached'] for row in rows), rows
+PYLISTEN
+  then echo "$name LOCAL LISTENER HEALTH FAILED"; continue; fi
   healthy+=("$name")
-  echo "$name HOST TCP/UDP PASS addresses: $(cat "$work/$name-addresses.txt")"
+  echo "$name HOST IPv4 TCP/UDP PASS addresses: $(cat "$work/$name-addresses.txt")"
 done
 # Warm and measure each source's actual Mac path before peer observations.
 sysctl net.inet.ip.forwarding net.inet6.ip6.forwarding > "$work/mac-forwarding-live.txt"
