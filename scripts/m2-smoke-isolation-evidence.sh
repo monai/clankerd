@@ -9,6 +9,7 @@ vmctl=$out/darwin-arm64/vmctl
 export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
 export DYLD_FALLBACK_LIBRARY_PATH=${DYLD_FALLBACK_LIBRARY_PATH:-/opt/homebrew/lib:/usr/local/lib:/usr/lib}
 work=$(mktemp -d /tmp/clankerd-isolation-evidence.XXXXXX)
+echo "Evidence directory: $work"
 export CLANKERD_STATE_DIR=$work/state CLANKERD_RUNTIME_DIR=$work/run
 host_pid=''
 names='evidence-a evidence-b evidence-c evidence-d evidence-e'
@@ -135,7 +136,9 @@ for source in "${healthy[@]}"; do
     hop_modes=64
     if [ "${EVIDENCE_HOP1:-0}" = 1 ]; then hop_modes="64 1"; fi
     for hops in $hop_modes; do
+      echo "Testing $source -> $target hop$hops (up to about 31 seconds for failed probes)" >&2
       "$vmctl" exec "$source" python3 -c "$peer" "$hops" "$v4" "$v6" "$v6ll" > "$work/$source-$target-$hops.jsonl"
+      python3 "$root/scripts/fixtures/vmnet-isolation-peers.py" summary "$work/$source-$target-$hops.jsonl" >&2
       python3 - "$source" "$target" "$work/$source-$target-$hops.jsonl" <<'PY'
 import json,sys
 for line in open(sys.argv[3]):
@@ -144,7 +147,6 @@ PY
     done
   done
 done > "$work/matrix.jsonl"
-python3 "$root/scripts/fixtures/vmnet-isolation-peers.py" summary "$work/matrix.jsonl"
 python3 - "$work/matrix.jsonl" <<'PYREPORT'
 import json,sys
 violations=[]
