@@ -22,6 +22,9 @@ def observe(address, hops):
                                       socket.IPV6_UNICAST_HOPS if family == socket.AF_INET6 else socket.IP_TTL, hops)
                 endpoint = (bare, port, 0, scope) if family == socket.AF_INET6 else (bare, port)
                 try:
+                    source = os.environ.get("EVIDENCE_SOURCE")
+                    if source:
+                        connection.bind((source, 0))
                     connection.connect(endpoint)
                     connection.sendall(b'isolation-evidence')
                     reply=bytearray()

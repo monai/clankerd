@@ -83,6 +83,18 @@ sudo -n /sbin/pfctl -k "$a" -k "$c" > "$work/pf-clear-test-state.log" 2>&1
 sudo -n /sbin/pfctl -k "$c" -k "$a" >> "$work/pf-clear-test-state.log" 2>&1
 probe_peers enforced
 controls enforced
+# Exercise guest-controlled source addresses before relying on exact-IP rules.
+"$vmctl" exec path-a ip addr add 192.168.105.250/24 dev eth0
+"$vmctl" exec path-a env EVIDENCE_SOURCE=192.168.105.250 python3 -c "$peer" 64 "$c" | tee "$work/alias-exact-rules.jsonl"
+printf 'block drop quick inet from 192.168.105.0/24 to 192.168.106.0/24\nblock drop quick inet from 192.168.106.0/24 to 192.168.105.0/24\n' > "$work/pf-subnet.rules"
+sudo -n /sbin/pfctl -n -a "$pf_anchor" -f "$work/pf-subnet.rules" > "$work/pf-subnet-validation.log" 2>&1
+sudo -n /sbin/pfctl -a "$pf_anchor" -f "$work/pf-subnet.rules" > "$work/pf-subnet-load.log" 2>&1
+sudo -n /sbin/pfctl -k 192.168.105.250 -k "$c" > "$work/pf-clear-alias-state.log" 2>&1
+sudo -n /sbin/pfctl -k "$c" -k 192.168.105.250 >> "$work/pf-clear-alias-state.log" 2>&1
+echo 'Alias-source probes with subnet rules:'
+"$vmctl" exec path-a env EVIDENCE_SOURCE=192.168.105.250 python3 -c "$peer" 64 "$c" | tee "$work/alias-subnet-rules.jsonl"
+controls subnet-enforced
+"$vmctl" exec path-a ip addr del 192.168.105.250/24 dev eth0
 sudo -n /sbin/pfctl -a "$pf_anchor" -vvsr > "$work/pf-counters.txt" 2>&1
 cat "$work/pf-counters.txt"
 sudo -n /sbin/pfctl -a "$pf_anchor" -F rules > "$work/pf-remove.log" 2>&1
