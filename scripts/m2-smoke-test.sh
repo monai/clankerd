@@ -82,10 +82,15 @@ host_get() {
 }
 nginx_up() { host_get | grep -q 'Welcome to nginx'; }
 dockerd_up() { guest 'docker info'; }
+registry_dns_up() { guest 'timeout 5 getent ahosts registry-1.docker.io'; }
 exec_up() { "$vmctl" exec "$1" true; }
 
 diagnose() {
   {
+    echo "--- guest resolver and routes"
+    guest 'cat /etc/resolv.conf; ip address show dev eth0; ip route; ip -6 route' 2>&1
+    echo "--- current network configuration"
+    "$vmctl" inspect smoke 2>&1
     echo "--- dockerd log"
     "$vmctl" exec smoke cat /var/log/dockerd.log 2>&1 | tail -n 40
     echo "--- machine console"
@@ -127,6 +132,17 @@ if ! "$vmctl" exec -u root smoke sh -c 'nft list tables | grep -q docker'; then
   fail "Docker nftables tables were not found by the root check (see docs/docker-in-machine.md). Record the dockerd log above, then evaluate the Kata kernel fallback (krun_set_kernel) if kernel support is missing."
 fi
 guest 'docker version --format "docker {{.Server.Version}}"'
+
+step "the guest resolver can resolve Docker's registry"
+dns_deadline=$((SECONDS + timeout_s))
+until registry_dns_up >/dev/null 2>&1; do
+  if [ "$SECONDS" -ge "$dns_deadline" ]; then
+    diagnose
+    fail "timed out waiting for guest registry DNS"
+  fi
+  sleep 1
+done
+echo "guest registry DNS resolved through libc"
 
 step "docker run -p 8080:80 nginx is reachable from the Mac at the guest IP"
 guest 'docker run -d --name web -p 8080:80 nginx'
