@@ -175,6 +175,28 @@ step "containers reach the internet (DNS and TCP)"
 guest 'docker run --rm busybox wget -qO- http://example.com | grep -qi "example domain"' \
   || fail "a container cannot reach the internet"
 
+step "Compose CLI prerequisite inside the disposable guest"
+if ! guest 'docker compose version' > "$state/compose-version.log" 2>&1; then
+  [ "$(guest 'uname -m')" = aarch64 ] || fail "pinned Compose fixture requires a Linux aarch64 guest"
+  compose_version=v2.40.3
+  compose_sha=d26373b19e89160546d15407516cc59f453030d9bc5b43ba7faf16f7b4980137
+  compose_binary=$state/docker-compose-linux-aarch64
+  curl -fL --retry 3 "https://github.com/docker/compose/releases/download/$compose_version/docker-compose-linux-aarch64" -o "$compose_binary"
+  python3 - "$compose_binary" "$compose_sha" <<'PYCOMPOSE'
+import hashlib,sys
+with open(sys.argv[1], 'rb') as binary:
+    digest=hashlib.sha256()
+    for chunk in iter(lambda: binary.read(1024*1024), b''):
+        digest.update(chunk)
+    actual=digest.hexdigest()
+assert actual == sys.argv[2], f'Compose checksum mismatch: {actual}'
+PYCOMPOSE
+  "$vmctl" exec -i -u root smoke sh -c 'set -eu; destination=/usr/local/lib/docker/cli-plugins/docker-compose; test ! -e "$destination"; mkdir -p /usr/local/lib/docker/cli-plugins; cat > "$destination.tmp"; chmod 755 "$destination.tmp"; mv "$destination.tmp" "$destination"' < "$compose_binary"
+  guest 'docker compose version'
+else
+  cat "$state/compose-version.log"
+fi
+
 step "compose project with a user-defined network"
 guest 'mkdir -p /tmp/proj && cat > /tmp/proj/compose.yaml <<EOF2
 services:
