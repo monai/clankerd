@@ -31,7 +31,7 @@ failure_diagnostics() {
   echo "Full machine logs retained in $work/state"
 }
 fd_sample() {
-  tag=$1
+  local tag=$1
   kill -0 "$native_pid" || { echo "VMM exited before descriptor sample $tag"; return 1; }
   lsof -nP -p "$native_pid" > "$work/native-fds-$tag.txt"
   descriptors=$(awk 'NR>1 && $4 ~ /^[0-9]/ {n++} END {print n+0}' "$work/native-fds-$tag.txt")
@@ -43,7 +43,7 @@ fd_sample() {
   lsof -nP -a -p "$native_pid" -U -FfnT > "$work/native-unix-fields-$tag.txt"
 }
 management_sample() {
-  tag="management-$management_round-$1"
+  local tag="management-$management_round-$1"
   fd_sample "$tag-busy"
   sleep 6
   fd_sample "$tag-idle"

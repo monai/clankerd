@@ -27,7 +27,9 @@ for path in counts:
     delta = f' ({count - baseline:+d})' if baseline is not None else ''
     print(f'{tag}: {count}{delta}')
     if tag.startswith('management-'):
-        guest = directory / f'guest-{tag.removesuffix("-idle")}.txt'
+        guest = directory / f'guest-{tag}.txt'
+        if not guest.exists():
+            guest = directory / f'guest-{tag.removesuffix("-idle")}.txt'
         if guest.exists():
             print('  ' + guest.read_text().strip()[:200])
 for filename in ('check.log', 'startup.log'):
@@ -43,9 +45,21 @@ if path.exists():
     try:
         machine = json.loads(path.read_text())[0]
         print(json.dumps(machine.get('state'), separators=(',', ':')))
+        network = machine.get('network')
+        if network is not None:
+            print('Latest connectivity: ' + json.dumps({key: network.get(key) for key in
+                ('addresses', 'ipv4', 'ipv6', 'ready', 'diagnostic')}, separators=(',', ':')))
     except (ValueError, IndexError, KeyError):
         print('  Latest inspection could not be decoded')
 else:
     print('  Not captured')
+print('Last guest network messages:')
+messages = []
+for path in (directory / 'state').rglob('*.log'):
+    for line in path.read_text(errors='replace').splitlines():
+        if line.startswith(('eth0:', 'dhcp_openbpf:', 'clankerd-guestd: automatic', 'dhcpcd exited')):
+            messages.append(line)
+for line in messages[-12:]:
+    print('  ' + line[:240])
 print('Full socket details remain in the retained directory.')
 PY
