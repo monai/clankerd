@@ -18,6 +18,7 @@ failed=0
 native_pid=''
 fd_baseline=''
 host_pid=''
+management_round=0
 cleanup() {
   "$vmctl" rm -f "$name" >/dev/null 2>&1 || true
   if [ -n "$host_pid" ]; then kill "$host_pid" 2>/dev/null || true; wait "$host_pid" 2>/dev/null || true; fi
@@ -37,6 +38,19 @@ fd_sample() {
   echo "$descriptors" > "$work/native-count-$tag"
   echo "FD sample $tag: native pid=$native_pid descriptors=$descriptors"
   awk 'NR>1 && $4 ~ /^[0-9]/ {count[$5]++} END {for(kind in count) printf "%s=%d ",kind,count[kind]; print ""}' "$work/native-fds-$tag.txt"
+  # Retain exact Unix node identities and endpoints, not only aggregate counts.
+  awk 'NR==1 || ($4 ~ /^[0-9]/ && $5=="unix")' "$work/native-fds-$tag.txt" > "$work/native-unix-$tag.txt"
+  cat "$work/native-unix-$tag.txt"
+  lsof -nP -a -p "$native_pid" -U -FfnT > "$work/native-unix-fields-$tag.txt"
+  cat "$work/native-unix-fields-$tag.txt"
+}
+management_sample() {
+  tag="management-$management_round-$1"
+  fd_sample "$tag-busy"
+  sleep 6
+  fd_sample "$tag-idle"
+  "$vmctl" exec "$name" python3 -c 'import os;print("guestd descriptors/threads",len(os.listdir("/proc/1/fd")),len(os.listdir("/proc/1/task")))' > "$work/guest-$tag.txt"
+  cat "$work/guest-$tag.txt"
 }
 fd_idle() {
   sleep 6 # libkrun normally defers proxy reclamation for five seconds.
@@ -101,9 +115,13 @@ wait_for() {
   cat "$work/check.log" >&2; return 1
 }
 management() {
+  management_round=$((management_round + 1))
+  management_sample before
   [ "$("$vmctl" exec "$name" cat /tmp/recovery-workload.pid)" = "$workload_pid" ]
   "$vmctl" exec "$name" python3 -c "$recovery" guest-unix
+  management_sample unix
   printf 'recovery-exec\n' | "$vmctl" exec -i "$name" python3 -c 'import sys;assert sys.stdin.read()=="recovery-exec\n";print("PASS exec stdin/output")'
+  management_sample exec-stdin
   previous_signal=$("$vmctl" exec "$name" python3 -c 'from pathlib import Path;p=Path("/tmp/recovery-signal");print(p.read_text() if p.exists() else "none")')
   "$vmctl" kill --signal USR1 "$name"
   delivered=0
@@ -113,7 +131,9 @@ management() {
     sleep 0.1
   done
   [ "$delivered" = 1 ]
+  management_sample signal
   python3 "$fixture" attach "$work/run/$short.sock"
+  management_sample attach
 }
 packets() {
   "$vmctl" inspect "$name" > "$work/packet.json"
