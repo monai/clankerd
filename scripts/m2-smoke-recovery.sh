@@ -28,7 +28,7 @@ trap cleanup EXIT
 failure_diagnostics() {
   failed=1
   if [ -n "$native_pid" ]; then fd_sample failure || true; sleep 6; fd_sample failure-idle || true; fi
-  find "$work/state" -name "*.log" -exec tail -100 {} \;
+  echo "Full machine logs retained in $work/state"
 }
 fd_sample() {
   tag=$1
@@ -40,9 +40,7 @@ fd_sample() {
   awk 'NR>1 && $4 ~ /^[0-9]/ {count[$5]++} END {for(kind in count) printf "%s=%d ",kind,count[kind]; print ""}' "$work/native-fds-$tag.txt"
   # Retain exact Unix node identities and endpoints, not only aggregate counts.
   awk 'NR==1 || ($4 ~ /^[0-9]/ && $5=="unix")' "$work/native-fds-$tag.txt" > "$work/native-unix-$tag.txt"
-  cat "$work/native-unix-$tag.txt"
   lsof -nP -a -p "$native_pid" -U -FfnT > "$work/native-unix-fields-$tag.txt"
-  cat "$work/native-unix-fields-$tag.txt"
 }
 management_sample() {
   tag="management-$management_round-$1"
