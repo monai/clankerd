@@ -103,6 +103,12 @@ while IFS= read -r address; do mac_v6+=("$address"); done < "$work/isolated-mac-
 for name in evidence-c evidence-e; do
   "$vmctl" exec "$name" env EVIDENCE_PORT_BASE=19081 python3 -c "$peer" 64 192.168.106.1 "${mac_v6[@]}" | tee "$work/$name-to-mac.jsonl"
 done
+python3 - <<'PYEXTERNAL'
+import socket
+with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as connection:
+    connection.settimeout(15);connection.connect(('1.1.1.1',443))
+print('PASS Mac IPv4 external TCP 1.1.1.1:443')
+PYEXTERNAL
 for name in evidence-c evidence-e; do
   "$vmctl" exec "$name" python3 -c 'import socket;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.settimeout(15);s.connect(("1.1.1.1",443));print("PASS isolated IPv4 outbound TCP");s.close()'
 done
