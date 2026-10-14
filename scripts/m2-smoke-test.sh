@@ -69,16 +69,16 @@ retry() { # description, command...
   shift
   until "$@" >/dev/null 2>&1; do
     i=$((i + 1))
-    [ "$i" -le "$timeout_s" ] || fail "timed out waiting for $what"
+    [ "$i" -le "$timeout_s" ] || { diagnose; fail "timed out waiting for $what"; }
     sleep 1
   done
 }
 
 host_get() {
   local guest_ip
-  guest_ip=$(guest "ip -4 -o addr show dev eth0 | awk '{split(\$4,a,"/"); print a[1]}'")
+  guest_ip=$(guest "ip -4 -o addr show dev eth0 | awk '{split(\$4,a,\"/\"); print a[1]}'")
   [ -n "$guest_ip" ] || return 1
-  curl -fsS --max-time 5 "http://$guest_ip:8080/"
+  curl --noproxy '*' -fsS --max-time 5 "http://$guest_ip:8080/"
 }
 nginx_up() { host_get | grep -q 'Welcome to nginx'; }
 dockerd_up() { guest 'docker info'; }
@@ -91,6 +91,14 @@ diagnose() {
     guest 'cat /etc/resolv.conf; ip address show dev eth0; ip route; ip -6 route' 2>&1
     echo "--- current network configuration"
     "$vmctl" inspect smoke 2>&1
+    echo "--- published container and forwarding"
+    guest 'docker ps -a; docker port web; docker inspect --format "running={{.State.Running}} error={{.State.Error}} networks={{json .NetworkSettings.Networks}}" web; docker logs --tail 15 web; cat /proc/sys/net/ipv4/ip_forward' 2>&1
+    echo "--- guest HTTP paths (if curl is installed)"
+    guest 'if command -v curl >/dev/null; then curl --noproxy "*" -sS --max-time 3 -I http://127.0.0.1:8080/; for address in $(ip -4 -o addr show dev eth0 | tr -s " " | cut -d " " -f 4 | cut -d / -f 1); do curl --noproxy "*" -sS --max-time 3 -I "http://$address:8080/"; done; else echo "guest curl unavailable"; fi' 2>&1
+    echo "--- root nftables forwarding rules"
+    "$vmctl" exec -u root smoke sh -c 'nft list ruleset' 2>&1 | tail -n 100
+    echo "--- direct host HTTP path"
+    host_get 2>&1 | head -c 512
     echo "--- dockerd log"
     "$vmctl" exec smoke cat /var/log/dockerd.log 2>&1 | tail -n 40
     echo "--- machine console"
