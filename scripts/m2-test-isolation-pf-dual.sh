@@ -28,6 +28,16 @@ cleanup() {
     interface=${entry%%,*}; address=${entry#*,}
     sudo -n /sbin/ifconfig "$interface" inet6 "$address" -alias >> "$work/ipv6-cleanup.log" 2>&1 || true
   done
+  python3 - "$work/state" "$work/retained-state" <<'PYRETAIN' || true
+from pathlib import Path
+import shutil,sys
+source,destination=map(Path,sys.argv[1:])
+for path in source.rglob('*'):
+    if path.is_file() and path.suffix in ('.log','.json'):
+        target=destination/path.relative_to(source)
+        target.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copy2(path,target)
+PYRETAIN
   for name in path-a path-c path-d; do "$vmctl" rm -f "$name" >/dev/null 2>&1 || true; done
   echo "Retained evidence: $work"
 }
@@ -169,5 +179,7 @@ from pathlib import Path
 root=Path(sys.argv[1])
 for phase,expected in [('before',True),('enforced',False),('removed',True)]:
     rows=[json.loads(line) for name in ('path-a','path-c','path-d','c-to-d') for line in (root/(phase+'-'+name+'.jsonl')).read_text().splitlines()]
-    print(phase+': '+('PASS' if len(rows)==16 and all(row['reached']==expected for row in rows) else 'FAIL')+' required peer behavior')
+    passed=len(rows)==16 and all(row['reached']==expected for row in rows)
+    print(phase+': '+('PASS' if passed else 'FAIL')+' required peer behavior')
+    assert passed,rows
 PYRESULT
