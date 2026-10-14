@@ -144,6 +144,10 @@ sudo -n /sbin/pfctl -k "$a" -k "$c" > "$work/pf-clear-test-state.log" 2>&1
 sudo -n /sbin/pfctl -k "$c" -k "$a" >> "$work/pf-clear-test-state.log" 2>&1
 sudo -n /sbin/pfctl -k "$d" -k "$c" >> "$work/pf-clear-test-state.log" 2>&1
 sudo -n /sbin/pfctl -k "$c" -k "$d" >> "$work/pf-clear-test-state.log" 2>&1
+for source6 in "$a6" "$d6"; do
+  sudo -n /sbin/pfctl -k "$source6" -k "$c6" >> "$work/pf-clear-test-state.log" 2>&1
+  sudo -n /sbin/pfctl -k "$c6" -k "$source6" >> "$work/pf-clear-test-state.log" 2>&1
+done
 probe_peers enforced
 controls enforced
 # Exercise guest-controlled source addresses before relying on exact-IP rules.
