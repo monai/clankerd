@@ -50,11 +50,26 @@ threading.Thread(target=udp,daemon=True).start()
 http.server.HTTPServer(("0.0.0.0",18081),http.server.SimpleHTTPRequestHandler).serve_forever()'
 "$vmctl" run -d --name vmnet-smoke "${IMAGE:-python:3.13-alpine}" python3 -c "$server"
 address() {
-  "$vmctl" inspect vmnet-smoke | python3 -c 'import json,sys,ipaddress; m=json.load(sys.stdin)[0]; assert m["host_config"]["network_mode"]=="shared"; print(next(a for a in m["network"]["addresses"] if ipaddress.ip_address(a).version==4))'
+  local address_file=$work/ipv4-ready.txt
+  for attempt in $(seq 1 30); do
+    "$vmctl" inspect vmnet-smoke > "$work/ipv4-inspection.json"
+    if python3 - "$work/ipv4-inspection.json" > "$address_file" <<'PYADDRESS'
+import json,sys,ipaddress
+machine=json.load(open(sys.argv[1]))[0]
+assert machine['host_config']['network_mode']=='shared'
+addresses=[entry['address'] for entry in machine['network']['address_details'] if not entry['tentative'] and not entry['dad_failed'] and not entry['deprecated'] and ipaddress.ip_address(entry['address']).version==4]
+if not addresses:sys.exit(1)
+print(addresses[0])
+PYADDRESS
+    then cat "$address_file"; return; fi
+    sleep 1
+  done
+  echo 'FAIL no usable IPv4 address after 30 seconds; inspection retained' >&2
+  return 1
 }
 services() {
   local ip=$1
-  curl --fail --silent --max-time 10 "http://$ip:18081/" >/dev/null
+  curl --noproxy '*' --fail --silent --max-time 10 "http://$ip:18081/" >/dev/null
   python3 - "$ip" <<'PY'
 import socket,sys
 s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(10)
