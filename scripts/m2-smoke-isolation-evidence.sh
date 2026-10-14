@@ -75,7 +75,9 @@ for source in $names; do
   for target in $names; do
     [ "$source" != "$target" ] || continue
     read -r v4 v6 v6ll < "$work/$target-addresses.txt"
-    for hops in 64 1; do
+    hop_modes=64
+    if [ "${EVIDENCE_HOP1:-0}" = 1 ]; then hop_modes="64 1"; fi
+    for hops in $hop_modes; do
       "$vmctl" exec "$source" python3 -c "$peer" "$hops" "$v4" "$v6" "$v6ll" > "$work/$source-$target-$hops.jsonl"
       python3 - "$source" "$target" "$work/$source-$target-$hops.jsonl" <<'PY'
 import json,sys
