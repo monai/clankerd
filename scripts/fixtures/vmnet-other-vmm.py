@@ -162,6 +162,12 @@ ethernets:
                      'write_files':[{'path':'/opt/echo.py','encoding':'b64','content':base64.b64encode(server.encode()).decode()},
                                     {'path':'/etc/avahi/avahi-daemon.conf','content':'[server]\nhost-name=interop-qemu\nallow-interfaces=eth0\nuse-ipv4=yes\nuse-ipv6=yes\n[reflector]\nenable-reflector=no\n'}],
                      'runcmd':[['touch','/var/lib/interop-seed-ready']]}
+    configuration['write_files'].extend([
+        {'path':'/etc/systemd/network/05-interop-management.network','content':'[Match]\nMACAddress=52:54:00:71:00:01\n[Link]\nRequiredForOnline=no\n[Network]\nAddress=10.0.2.15/24\nDNS=10.0.2.3\n[Route]\nGateway=10.0.2.2\nMetric=900\n'},
+        {'path':'/etc/systemd/network/05-interop-test.network','content':'[Match]\nMACAddress='+mac+'\n[Link]\nRequiredForOnline=no\n[Network]\nDHCP=yes\nIPv6AcceptRA=yes\n[DHCPv4]\nRouteMetric=50\n'},
+        {'path':'/opt/interop-network.sh','permissions':'0755','content':'#!/bin/sh\nset -eux\nsystemctl restart systemd-networkd\nip link set mgmt0 up\nip address replace 10.0.2.15/24 dev mgmt0\nip route replace default via 10.0.2.2 dev mgmt0 metric 900\nip link set eth0 up\nresolvectl dns mgmt0 10.0.2.3\nresolvectl domain mgmt0 "~."\nip -brief address\nip route\nnetworkctl status --no-pager mgmt0 eth0\n'}
+    ])
+    configuration['runcmd'].insert(0,['/opt/interop-network.sh'])
     (directory/'user-data').write_text('#cloud-config\n'+json.dumps(configuration))
     run(['hdiutil','makehybrid','-iso','-joliet','-default-volume-name','CIDATA','-o',WORK/'seed.iso',directory])
 
@@ -275,8 +281,15 @@ def main():
     def ready():
         assert process.poll() is None,'QEMU exited; see console log'
         return ssh('echo management-ready',timeout=8).strip()=='management-ready'
-    until(ready,240,'QEMU management SSH')
+    try:
+        until(ready,240,'QEMU management SSH')
+    except RuntimeError:
+        console=(WORK/'qemu-console.log').read_text(errors='replace')
+        relevant=[line for line in console.replace('\r','\n').splitlines() if any(word in line.lower() for word in ('ci-info','mgmt0','eth0','error','failed','interop-network','10.0.2.')) and 'start running' not in line]
+        progress('QEMU boot failure evidence:\n'+'\n'.join(relevant[-65:]))
+        raise
     progress('PASS management SSH; recording guest networking before provisioning')
+    (WORK/'guest-cloud-init.log').write_text(ssh('sudo tail -150 /var/log/cloud-init.log; sudo journalctl -u systemd-networkd --no-pager -n 80',check=False))
     (WORK/'guest-network-before-provision.txt').write_text(ssh('ip -j address; ip route; ip -6 route; cat /etc/resolv.conf; resolvectl status; sudo cloud-init status --long',check=False))
     progress('Install fixture packages through management networking (bounded 5 minutes)')
     ssh('sudo env DEBIAN_FRONTEND=noninteractive sh -ec "apt-get update -qq; apt-get install -y -qq python3 avahi-daemon avahi-utils; systemctl restart avahi-daemon; nohup python3 /opt/echo.py server >/var/log/interop-echo.log 2>&1 &"',timeout=300)
