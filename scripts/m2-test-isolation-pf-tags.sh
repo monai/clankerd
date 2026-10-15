@@ -187,7 +187,7 @@ print('PASS Mac -> all three native bridges distinct-prefix IPv6 TCP/UDP')
 PYMAC6
   echo 'PASS Mac -> all three native bridges distinct-prefix IPv6 TCP/UDP'
   for name in path-a path-d; do
-    if [ "$name" = path-a ]; then target=$d; target6=$d6; common_else target=$a; target6=$a6; common_fi
+    if [ "$name" = path-a ]; then target=$d; target6=$d6; else target=$a; target6=$a6; fi
     "$vmctl" exec "$name" python3 -c "$peer" 64 "$target" "$target6" > "$work/$phase-ordinary-$name.jsonl"
     python3 - "$work/$phase-ordinary-$name.jsonl" <<'PYORDINARY'
 import json,sys
