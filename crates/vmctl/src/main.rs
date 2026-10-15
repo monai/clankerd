@@ -174,7 +174,7 @@ struct CreateArgs {
     /// Physical LAN interface for bridged mode (for example en0).
     #[arg(long)]
     bridge_interface: Option<String>,
-    /// Common shared vmnet network (RFC1918 IPv4 CIDR; IPv6 remains automatic).
+    /// vmnet subnet (RFC1918 IPv4 CIDR; default shared 192.168.105.0/24, host-only 192.168.128.0/24).
     #[arg(long)]
     shared_network: Option<SharedNetwork>,
     /// Block VM peers in both directions while retaining Mac and shared NAT access.
@@ -320,11 +320,21 @@ fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error>
             .ok_or_else(|| Error::invalid_parameter("--volume-size needs a named volume (-v)"))?;
         *volume = volume.clone().with_size(bytes);
     }
+    let host_only = a.network_mode == libclankerd::NetworkMode::HostOnly;
+    let shared_network = a.shared_network.unwrap_or_else(|| {
+        if host_only {
+            "192.168.128.0/24"
+                .parse()
+                .expect("valid host-only default network")
+        } else {
+            SharedNetwork::default()
+        }
+    });
     let host_config = HostConfig {
         network_mode: a.network_mode,
         bridge_interface: a.bridge_interface,
-        shared_network: a.shared_network.unwrap_or_default(),
-        shared_peer_participation: !a.isolate_peers,
+        shared_network,
+        shared_peer_participation: !host_only && !a.isolate_peers,
         mounts,
         cpus: a.cpus,
         memory,

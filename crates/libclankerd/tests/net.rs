@@ -594,3 +594,50 @@ while :; do sleep 0.1; done
             .exists()
     );
 }
+
+#[test]
+fn host_only_native_attachment_persists_and_always_enables_isolation() {
+    let rig = rig(FAKE_VMNET);
+    let host: HostConfig = serde_json::from_value(serde_json::json!({
+        "network_mode":"host-only",
+        "shared_network":{"address":"192.168.128.0","prefix_len":24},
+        "shared_peer_participation":false
+    }))
+    .unwrap();
+    let machine = rig
+        .engine
+        .create(
+            Some("host-only"),
+            sh("while true; do sleep 0.05; done"),
+            host.clone(),
+        )
+        .unwrap();
+    for _ in 0..2 {
+        machine.start().unwrap();
+        let args = rig.args();
+        assert!(args.contains("--operation-mode host"), "{args}");
+        assert!(!args.contains("--operation-mode shared"), "{args}");
+        assert!(args.contains("--enable-isolation"), "{args}");
+        assert!(args.contains("--start-address 192.168.128.1"), "{args}");
+        assert_eq!(machine.inspect().unwrap().host_config, host);
+        machine.stop(Duration::from_secs(10)).unwrap();
+    }
+}
+
+#[test]
+fn host_only_rejects_peer_participation_before_creating_a_machine() {
+    let rig = rig(FAKE_VMNET);
+    let host: HostConfig = serde_json::from_value(
+        serde_json::json!({"network_mode":"host-only","shared_peer_participation":true}),
+    )
+    .unwrap();
+    let error = rig
+        .engine
+        .create(Some("host-invalid"), sh("exit 0"), host)
+        .err()
+        .expect("peer participation must be rejected");
+    assert_eq!(error.kind(), ErrorKind::InvalidParameter);
+    assert!(error.message().contains("host-only"), "{error}");
+    assert!(rig.vmm.specs.lock().unwrap().is_empty());
+    assert!(!rig.helper.with_extension("args").exists());
+}

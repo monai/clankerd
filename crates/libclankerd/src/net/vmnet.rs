@@ -61,11 +61,15 @@ impl NetBackend for VmnetBackend {
             .arg(&spec.socket)
             .args(["--interface-id", &identity]);
         match spec.host_config.network_mode {
-            NetworkMode::Shared => {
+            NetworkMode::Shared | NetworkMode::HostOnly => {
                 let (start, end, mask) = spec.host_config.shared_network.addresses()?;
                 command.args([
                     "--operation-mode",
-                    "shared",
+                    if spec.host_config.network_mode == NetworkMode::HostOnly {
+                        "host"
+                    } else {
+                        "shared"
+                    },
                     "--start-address",
                     &start.to_string(),
                     "--end-address",
@@ -73,7 +77,9 @@ impl NetBackend for VmnetBackend {
                     "--subnet-mask",
                     &mask.to_string(),
                 ]);
-                if !spec.host_config.shared_peer_participation {
+                if spec.host_config.network_mode == NetworkMode::HostOnly
+                    || !spec.host_config.shared_peer_participation
+                {
                     command.arg("--enable-isolation");
                 }
             }

@@ -216,3 +216,35 @@ fn shared_network_cli_options_are_persisted_and_invalid_subnets_are_rejected() {
     assert!(!invalid.status.success());
     assert!(String::from_utf8_lossy(&invalid.stderr).contains("aligned RFC1918"));
 }
+
+#[test]
+fn host_only_cli_persists_mandatory_isolation_and_a_distinct_default_subnet() {
+    let dir = tempfile::tempdir().unwrap();
+    let guestd = guestd();
+    let created = vmctl(
+        dir.path(),
+        &guestd,
+        &[
+            "create",
+            "--name",
+            "host-only",
+            "--network-mode",
+            "host-only",
+            "img",
+            "true",
+        ],
+    );
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    let inspected = vmctl(dir.path(), &guestd, &["inspect", "host-only"]);
+    let info: serde_json::Value = serde_json::from_slice(&inspected.stdout).unwrap();
+    assert_eq!(info[0]["host_config"]["network_mode"], "host-only");
+    assert_eq!(info[0]["host_config"]["shared_peer_participation"], false);
+    assert_eq!(
+        info[0]["host_config"]["shared_network"],
+        serde_json::json!({"address":"192.168.128.0","prefix_len":24})
+    );
+}
