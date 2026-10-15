@@ -134,8 +134,11 @@ ethernets:
   mgmt0:
     match: {macaddress: "52:54:00:71:00:01"}
     set-name: mgmt0
-    dhcp4: true
-    dhcp4-overrides: {route-metric: 900}
+    dhcp4: false
+    addresses: [10.0.2.15/24]
+    nameservers: {addresses: [10.0.2.3]}
+    routes:
+      - {to: default, via: 10.0.2.2, metric: 900}
   eth0:
     match: {macaddress: "'''+mac+'''"}
     set-name: eth0
@@ -146,12 +149,9 @@ ethernets:
 ''')
     configuration = {'users':[{'name':'gate','sudo':'ALL=(ALL) NOPASSWD:ALL','shell':'/bin/bash',
                               'ssh_authorized_keys':[ssh_public.strip()]}],
-                     'packages':['python3','avahi-daemon','avahi-utils'],
                      'write_files':[{'path':'/opt/echo.py','encoding':'b64','content':base64.b64encode(server.encode()).decode()},
                                     {'path':'/etc/avahi/avahi-daemon.conf','content':'[server]\nhost-name=interop-qemu\nallow-interfaces=eth0\nuse-ipv4=yes\nuse-ipv6=yes\n[reflector]\nenable-reflector=no\n'}],
-                     'runcmd':[['systemctl','restart','avahi-daemon'],
-                               ['sh','-c','nohup python3 /opt/echo.py server >/var/log/interop-echo.log 2>&1 &'],
-                               ['touch','/var/lib/interop-ready']]}
+                     'runcmd':[['touch','/var/lib/interop-seed-ready']]}
     (directory/'user-data').write_text('#cloud-config\n'+json.dumps(configuration))
     run(['hdiutil','makehybrid','-iso','-joliet','-default-volume-name','CIDATA','-o',WORK/'seed.iso',directory])
 
@@ -257,16 +257,20 @@ def main():
         '-bios',uefi,'-display','none','-serial','stdio','-monitor','none',
         '-drive',f'file={WORK}/overlay.qcow2,format=qcow2,if=virtio',
         '-drive',f'file={WORK}/seed.iso,format=raw,if=virtio,readonly=on',
-        '-netdev',f'user,id=management,hostfwd=tcp:127.0.0.1:{SSH_PORT}-:22',
+        '-netdev',f'user,id=management,net=10.0.2.0/24,host=10.0.2.2,dns=10.0.2.3,hostfwd=tcp:127.0.0.1:{SSH_PORT}-10.0.2.15:22',
         '-device','virtio-net-pci,netdev=management,mac=52:54:00:71:00:01',
         '-netdev',f'dgram,id=test,local.type=unix,local.path={WORK}/qemu.sock,remote.type=unix,remote.path={WORK}/helper.sock',
         '-device','virtio-net-pci,netdev=test,mac='+info['vmnet_mac_address']], 'qemu-console.log')
-    progress('Boot QEMU and provision Python/Avahi (bounded 10 minutes)')
+    progress('Boot QEMU: waiting for management SSH (bounded 4 minutes)')
     def ready():
         assert process.poll() is None,'QEMU exited; see console log'
-        return ssh('test -f /var/lib/interop-ready && systemctl is-active avahi-daemon',timeout=8).strip()=='active'
-    until(ready,600,'QEMU SSH/cloud-init/Avahi readiness')
-    ssh('sudo cloud-init status --long',check=False)
+        return ssh('echo management-ready',timeout=8).strip()=='management-ready'
+    until(ready,240,'QEMU management SSH')
+    progress('PASS management SSH; recording guest networking before provisioning')
+    (WORK/'guest-network-before-provision.txt').write_text(ssh('ip -j address; ip route; ip -6 route; cat /etc/resolv.conf; resolvectl status; sudo cloud-init status --long',check=False))
+    progress('Install fixture packages through management networking (bounded 5 minutes)')
+    ssh('sudo env DEBIAN_FRONTEND=noninteractive sh -ec "apt-get update -qq; apt-get install -y -qq python3 avahi-daemon avahi-utils; systemctl restart avahi-daemon; nohup python3 /opt/echo.py server >/var/log/interop-echo.log 2>&1 &"',timeout=300)
+    until(lambda:ssh('systemctl is-active avahi-daemon',timeout=8).strip()=='active',30,'QEMU Avahi readiness')
     # Local listener control before any negative policy observation.
     def listeners(name):
         rows=[json.loads(line) for line in guest(name,python_command(peer,'64','127.0.0.1','::1')).splitlines()]
