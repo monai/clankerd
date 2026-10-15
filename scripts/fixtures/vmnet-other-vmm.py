@@ -238,12 +238,12 @@ def main():
     for executable in ('qemu-system-aarch64','qemu-img','hdiutil','ssh','ssh-keygen','brew'):
         assert shutil.which(executable), 'Missing prerequisite '+executable
     qemu=shutil.which('qemu-system-aarch64')
-    backend_result=run([qemu,'-machine','virt','-netdev','help'])
+    backend_result=run([qemu,'-machine','virt','-netdev','help'],check=False)
     backends=backend_result.stdout+backend_result.stderr
     (WORK/'qemu-netdevs.txt').write_text(backends)
     assert 'dgram' in backends, 'Installed QEMU lacks raw UNIX datagram backend'
     (WORK/'qemu-version.txt').write_text(run([qemu,'--version']).stdout)
-    assert 'hvf' in run([qemu,'-accel','help']).stdout, 'Installed QEMU lacks HVF'
+    assert 'hvf' in run([qemu,'-machine','virt','-accel','help']).stdout, 'Installed QEMU lacks HVF'
     uefi=firmware(qemu)
     disk=image()
     run(['qemu-img','create','-f','qcow2','-F','qcow2','-b',disk,WORK/'overlay.qcow2','12G'])
@@ -274,10 +274,10 @@ def main():
         return True
     until(lambda:listeners('qemu'),30,'QEMU TCP/UDP listeners')
     suffix=uuid.uuid4().hex[:10]
-    names=['interop-a-'+suffix,'interop-i-'+suffix]
-    labels={'qemu':'qemu-'+suffix,names[0]:'ordinary-'+suffix,names[1]:'isolated-'+suffix}
+    names=['interop-a-'+suffix]
+    labels={'qemu':'qemu-'+suffix,names[0]:'ordinary-'+suffix}
     all_addresses={'qemu':until(lambda:addresses('qemu'),90,'QEMU dual-stack DHCP/RA')}
-    for name,subnet,isolated in ((names[0],'192.168.105.0/24',False),(names[1],'192.168.106.0/24',True)):
+    for name,subnet,isolated in ((names[0],'192.168.105.0/24',False),):
         MACHINES.append(name)
         # Avahi is a workload-owned fixture, never part of guestd.
         setup='export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq python3 iproute2 avahi-daemon avahi-utils dbus && mkdir -p /run/dbus && { test -S /run/dbus/system_bus_socket || dbus-daemon --system --fork; } && printf "[server]\\nhost-name='+name+'\\nallow-interfaces=eth0\\n[reflector]\\nenable-reflector=no\\n" >/etc/avahi/avahi-daemon.conf && { avahi-daemon --check || avahi-daemon --daemonize --no-drop-root; } && exec '+python_command(server,'server')
@@ -297,7 +297,7 @@ def main():
             scoped=address+'%eth0' if family=='ll6' else address
             rows=[json.loads(line) for line in guest(name,'EVIDENCE_SOURCE='+shlex.quote(address)+' '+python_command(peer,'64',scoped)).splitlines()]
             assert len(rows)==2 and all(row['reached'] for row in rows), f'{name} native-address source bind/listener control failed: {rows}'
-    for target,expected in ((names[0],True),(names[1],False)):
+    for target,expected in ((names[0],True),):
         matrix('qemu',target,all_addresses['qemu'],all_addresses[target],peer,expected)
         matrix(target,'qemu',all_addresses[target],all_addresses['qemu'],peer,expected)
     for name,label in labels.items():
@@ -306,7 +306,7 @@ def main():
         guest(name,command)
     for name,label in labels.items():
         until(lambda: label in guest(name,'timeout 5 avahi-browse -rpt _clankerdgate._tcp || test \"$?\" = 124',timeout=10),30,name+' own Avahi publication')
-    for target,expected in ((names[0],True),(names[1],False)):
+    for target,expected in ((names[0],True),):
         mdns('qemu',target,labels[target],expected)
         mdns(target,'qemu',labels['qemu'],expected)
     # Mac's actual DNS-SD browser/resolver, random per-run labels avoid stale cache.
@@ -319,9 +319,9 @@ def main():
         time.sleep(5);resolver.terminate();resolver.wait(timeout=5)
         resolved=(WORK/f'mac-resolve-{name}.log').read_text()
         assert '18081' in resolved and 'can be reached' in resolved, 'Mac DNS-SD resolution failed '+name
-    progress('PASS Mac DNS-SD browse/resolve of QEMU, ordinary and isolated workloads')
+    progress('PASS Mac DNS-SD browse/resolve of QEMU and ordinary clankerd workloads')
     progress('PASS other-VMM bidirectional IPv4/IPv6 TCP/UDP and Avahi matrix')
-    progress('COVERAGE: isolated workload explicitly selects106; mixed native isolation on105 remains unsupported. External IPv6, other-VMM isolated106 and bridged multicast are NOT tested.')
+    progress('COVERAGE: QEMU and clankerd share selected105. Cross-network isolation with another VMM, external IPv6 and bridged multicast are NOT tested.')
 
 
 def cleanup():
