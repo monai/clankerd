@@ -70,14 +70,17 @@ PYHOST
 host_pid=$!
 for attempt in $(seq 1 50); do [ ! -e "$work/host-ready" ] || break; kill -0 "$host_pid"; sleep 0.1; done
 [ -e "$work/host-ready" ]
+"$vmctl" network create shared --mode shared --subnet 192.168.105.0/24 > "$work/networks.log"
+"$vmctl" network create other --mode shared --subnet 192.168.107.0/24 >> "$work/networks.log"
+"$vmctl" network create local --mode host-only --subnet 192.168.128.0/24 >> "$work/networks.log"
 healthy=()
 for name in $names; do
   case "$name" in
-    evidence-a|evidence-b) subnet=192.168.105.0/24; isolation=();;
-    evidence-c|evidence-e) subnet=192.168.128.0/24; isolation=(--network-mode host-only);;
-    evidence-d) subnet=192.168.107.0/24; isolation=();;
+    evidence-a|evidence-b) subnet=192.168.105.0/24; isolation=(--network shared);;
+    evidence-c|evidence-e) subnet=192.168.128.0/24; isolation=(--network local);;
+    evidence-d) subnet=192.168.107.0/24; isolation=(--network other);;
   esac
-  if ! "$vmctl" run -d --name "$name" --shared-network "$subnet" "${isolation[@]}" "$image" env EVIDENCE_NAME="$name" python3 -c "$server" server > "$work/$name-start.log" 2>&1; then
+  if ! "$vmctl" run -d --name "$name" "${isolation[@]}" "$image" env EVIDENCE_NAME="$name" python3 -c "$server" server > "$work/$name-start.log" 2>&1; then
     echo "$name START FAILED (details retained)"; continue
   fi
   passed=0
@@ -150,7 +153,8 @@ for line in open(sys.argv[2]):
     name=data[13:13+data[12]].decode()
     observed.setdefault('IPv4' if row['family']==socket.AF_INET else 'IPv6',set()).add(name)
 print(sys.argv[1]+' received: '+str({family:sorted(names) for family,names in observed.items()}))
-expected={'clankerd-evidence-'+name for name in (('evidence-a','evidence-b') if sys.argv[1] in ('evidence-a','evidence-b') else (sys.argv[1],))}
+group=('evidence-a','evidence-b') if sys.argv[1] in ('evidence-a','evidence-b') else (('evidence-c','evidence-e') if sys.argv[1] in ('evidence-c','evidence-e') else (sys.argv[1],))
+expected={'clankerd-evidence-'+name for name in group}
 for family in ('IPv4','IPv6'):
     assert observed.get(family,set())==expected,(sys.argv[1],family,observed,expected)
 PYMULTICAST
@@ -168,7 +172,7 @@ for source in "${healthy[@]}"; do
   for target in "${healthy[@]}"; do
     read -r v4 _ < "$work/$target-addresses.txt"
     expected=False
-    if [ "$source" = "$target" ] || { [[ "$source" = evidence-[ab] ]] && [[ "$target" = evidence-[ab] ]]; }; then expected=True; fi
+    if [ "$source" = "$target" ] || { [[ "$source" = evidence-[ab] ]] && [[ "$target" = evidence-[ab] ]]; } || { [[ "$source" = evidence-[ce] ]] && [[ "$target" = evidence-[ce] ]]; }; then expected=True; fi
     "$vmctl" exec "$source" python3 -c "$multicast
 discover('$target','$v4',$expected)" > "$work/$source-$target-discovery.log"
   done
@@ -186,10 +190,10 @@ for name in evidence-c evidence-e; do
 import json,sys
 machine=json.load(open(sys.argv[1]))[0]
 assert machine['host_config']['network_mode']=='host-only',machine['host_config']
-assert not machine['host_config']['shared_peer_participation'],machine['host_config']
+assert machine['host_config']['virtual_network']=='local',machine['host_config']
 network=machine['network']
 assert not network['ipv4']['default_route'] and not network['ipv6']['default_route'],network
-print('PASS persisted host-only mode, mandatory isolation and absent IPv4/IPv6 default routes')
+print('PASS persisted host-only network membership and absent IPv4/IPv6 default routes')
 PYPOLICY
   "$vmctl" exec "$name" python3 -c 'import socket;s=socket.socket();s.settimeout(5)
 try:
@@ -201,6 +205,19 @@ else:
 finally:
  s.close()'
 done
+for source in evidence-c evidence-e; do
+  if [ "$source" = evidence-c ]; then target=evidence-e; else target=evidence-c; fi
+  read -r v4 _ ll6 < "$work/$target-addresses.txt"
+  "$vmctl" exec "$source" python3 -c "$peer" 64 "$v4" "$ll6" > "$work/$source-$target-peers.jsonl"
+  python3 - "$work/$source-$target-peers.jsonl" <<'PYMEMBERS'
+import json,sys
+rows=[json.loads(line) for line in open(sys.argv[1])]
+assert len(rows)==4 and all(row['reached'] for row in rows),rows
+print('PASS host-only members IPv4/scoped IPv6 TCP/UDP')
+PYMEMBERS
+done
+if "$vmctl" network rm local > "$work/in-use-removal.log" 2>&1; then echo 'FAIL removed network with live members'; exit 1; fi
+echo 'PASS network removal rejects live membership'
 "$vmctl" stop evidence-c > "$work/restart-stop.log"
 "$vmctl" start evidence-c > "$work/restart-start.log"
 "$vmctl" exec evidence-c python3 -c 'print("PASS host-only vsock after restart")'
@@ -209,11 +226,11 @@ python3 - "$work/restarted.json" <<'PYRESTART'
 import json,sys
 machine=json.load(open(sys.argv[1]))[0]
 assert machine['host_config']['network_mode']=='host-only'
-assert not machine['host_config']['shared_peer_participation']
+assert machine['host_config']['virtual_network']=='local'
 print('PASS host-only configuration survives restart')
 PYRESTART
 qemu-system-aarch64 --version > "$work/qemu-version.txt"
 qemu-system-aarch64 -machine virt -netdev help > "$work/qemu-netdevs.txt" 2>&1 || true
 limactl list --json > "$work/lima-instances.json" 2> "$work/lima-list.log" || true
 cat "$work/qemu-version.txt" "$work/qemu-netdevs.txt" "$work/lima-instances.json"
-echo 'PASS native host-only Mac services, multicast query policy, mDNS A resolution, absent default routes, outbound TCP rejection and restart configuration; routed-peer security and other-VMM acceptance remain open.'
+echo 'PASS host-only virtual-network members communicate, Mac services/mDNS, absent default routes, outbound rejection and restart; production cross-network enforcement remains open.'
