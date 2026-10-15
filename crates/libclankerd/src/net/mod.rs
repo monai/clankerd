@@ -7,6 +7,7 @@
 //! machine directory and [`NetBackend::stop`] works from that record alone.
 
 mod bridge;
+mod egress;
 pub mod recovery;
 mod vmnet;
 

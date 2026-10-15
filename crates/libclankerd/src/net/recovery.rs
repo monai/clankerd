@@ -214,6 +214,14 @@ fn serve(
                             }
                         }
                     }
+                    if !super::egress::permits(&buffer[..count], &config.spec.host_config) {
+                        if diagnostics {
+                            eprintln!(
+                                "native relay: rejected IPv4 source outside selected guest subnet"
+                            );
+                        }
+                        continue;
+                    }
                     if let Some(socket) = &back {
                         match socket.send(&buffer[..count]) {
                             Ok(_) => counts[1] += 1,

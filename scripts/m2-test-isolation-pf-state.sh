@@ -4,6 +4,7 @@ set -Eeuo pipefail
 state_policy=${PF_TEST_STATE_POLICY:-floating}
 case "$state_policy" in floating|if-bound) ;; *) echo 'PF_TEST_STATE_POLICY must be floating or if-bound' >&2; exit 1;; esac
 export PF_TEST_STATE_POLICY=$state_policy
+export CLANKERD_NET_DIAGNOSTICS=1
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${OUT:-$root/build/rust}
 vmctl=$out/darwin-arm64/vmctl
@@ -286,15 +287,24 @@ print(json.dumps(result))
 PYSTATECOUNTERS
 }
 state_counters raw-before
-# Same raw spoof tuple with no allowed floating state must hit C-boundary blocks.
+relay_rejections() {
+  python3 - "$work/state" <<'PYREJECTS'
+from pathlib import Path
+import sys
+print(sum(path.read_text(errors='replace').count('native relay: rejected IPv4 source outside selected guest subnet') for path in Path(sys.argv[1]).rglob('vmspawn.log')))
+PYREJECTS
+}
+relay_rejections > "$work/relay-rejections-before.txt"
+# Foreign-source frames must be rejected before reaching host PF state lookup.
 "$vmctl" exec path-c python3 -c "$state_fixture" inject "$state_nonce" "$a" "$d" 40192 forged-without-state-a-to-d > "$work/raw-without-state-a-to-d.json"
 "$vmctl" exec path-c python3 -c "$state_fixture" inject "$state_nonce" "$d" "$a" 40292 forged-without-state-d-to-a > "$work/raw-without-state-d-to-a.json"
 state_counters raw-no-state
-python3 - "$work/raw-before-counters.json" "$work/raw-no-state-counters.json" <<'PYRAWCONTROL'
-import json,sys
-before,after=[json.load(open(p)) for p in sys.argv[1:]]
-assert all(after[key]>before[key] for key in before),(before,after)
-print('PASS raw foreign-source frames reached native PF; both C-boundary counters increased without state')
+relay_rejections > "$work/relay-rejections-no-state.txt"
+python3 - "$work/relay-rejections-before.txt" "$work/relay-rejections-no-state.txt" <<'PYRAWCONTROL'
+import sys
+before,after=[int(open(p).read()) for p in sys.argv[1:]]
+assert after-before >= 6,('Expected six relay-rejected foreign-source frames before state',before,after)
+print('PASS foreign-source frames rejected by native relay before PF state lookup')
 PYRAWCONTROL
 "$vmctl" exec path-a python3 -c "$state_fixture" launch "$state_fixture" hold "$state_nonce" "$d" "$a" 40191 40192 > "$work/a-state-client-pid.txt"
 "$vmctl" exec path-d python3 -c "$state_fixture" launch "$state_fixture" hold "$state_nonce" "$a" "$d" 40291 40292 > "$work/d-state-client-pid.txt"
@@ -320,11 +330,13 @@ PYSTATES
 "$vmctl" exec path-a python3 -c "$state_fixture" inject "$state_nonce" "$a" "$d" 40192 raw-positive-a-to-d > "$work/raw-positive-a-to-d.json"
 "$vmctl" exec path-d python3 -c "$state_fixture" inject "$state_nonce" "$d" "$a" 40292 raw-positive-d-to-a > "$work/raw-positive-d-to-a.json"
 state_counters raw-with-state-before
+relay_rejections > "$work/relay-rejections-with-state-before.txt"
 # Same IP/port tuples, actual C Ethernet MAC and C's own Mac gateway next-hop.
 "$vmctl" exec path-c python3 -c "$state_fixture" inject "$state_nonce" "$a" "$d" 40192 forged-with-state-a-to-d > "$work/raw-with-state-a-to-d.json"
 "$vmctl" exec path-c python3 -c "$state_fixture" inject "$state_nonce" "$d" "$a" 40292 forged-with-state-d-to-a > "$work/raw-with-state-d-to-a.json"
 sleep 3
 state_counters raw-with-state-after
+relay_rejections > "$work/relay-rejections-with-state-after.txt"
 for name in path-a path-d; do
   "$vmctl" exec "$name" python3 -c "$state_fixture" read "$state_nonce" client > "$work/$name-held-after.jsonl"
   "$vmctl" exec "$name" python3 -c "$state_fixture" read "$state_nonce" server > "$work/$name-state-received.jsonl"
@@ -334,6 +346,9 @@ python3 - "$work" "$state_nonce" <<'PYSTATEVERDICT'
 import json,sys
 from pathlib import Path
 root=Path(sys.argv[1]);nonce=sys.argv[2];results=[]
+rejected_before=int((root/'relay-rejections-with-state-before.txt').read_text())
+rejected_after=int((root/'relay-rejections-with-state-after.txt').read_text())
+assert rejected_after-rejected_before >= 6,('Expected six relay-rejected frames with held states',rejected_before,rejected_after)
 for name in ('path-a','path-d'):
     before=[json.loads(line) for line in (root/(name+'-held-before.jsonl')).read_text().splitlines()]
     after=[json.loads(line) for line in (root/(name+'-held-after.jsonl')).read_text().splitlines()]
