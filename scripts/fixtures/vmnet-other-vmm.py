@@ -79,7 +79,17 @@ def image():
     (WORK/'image-source.json').write_text(json.dumps({'url':base+filename,'manifest':base+'SHA256SUMS'}))
     expected = next(line.split()[0] for line in manifest.decode().splitlines()
                     if line.split()[-1].lstrip('*') == filename)
-    destination = WORK/filename
+    cache = Path(tempfile.gettempdir())/('clankerd-qemu-image-cache-'+str(os.getuid()))
+    cache.mkdir(mode=0o700,exist_ok=True)
+    destination = cache/(expected+'-'+filename)
+    if destination.is_file():
+        digest=hashlib.sha256()
+        with destination.open('rb') as source:
+            for block in iter(lambda:source.read(1024*1024),b''):digest.update(block)
+        if digest.hexdigest()==expected:
+            progress('Reuse checksum-verified Ubuntu image from test-owned cache')
+            return destination
+        destination.unlink()
     with urllib.request.urlopen(base+filename, timeout=90) as response, destination.open('wb') as output:
         downloaded=0;deadline=time.monotonic()+600;report=0
         while block:=response.read(1024*1024):
