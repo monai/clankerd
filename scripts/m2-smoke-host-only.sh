@@ -213,7 +213,7 @@ assert not machine['host_config']['shared_peer_participation']
 print('PASS host-only configuration survives restart')
 PYRESTART
 qemu-system-aarch64 --version > "$work/qemu-version.txt"
-qemu-system-aarch64 -netdev help > "$work/qemu-netdevs.txt" 2>&1 || true
+qemu-system-aarch64 -machine virt -netdev help > "$work/qemu-netdevs.txt" 2>&1 || true
 limactl list --json > "$work/lima-instances.json" 2> "$work/lima-list.log" || true
 cat "$work/qemu-version.txt" "$work/qemu-netdevs.txt" "$work/lima-instances.json"
 echo 'PASS native host-only Mac services, multicast query policy, mDNS A resolution, absent default routes, outbound TCP rejection and restart configuration; routed-peer security and other-VMM acceptance remain open.'
