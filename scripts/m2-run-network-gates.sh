@@ -28,7 +28,7 @@ stages=(m2-smoke-other-vmm m2-smoke-host-only m2-test-isolation-pf-tags m2-test-
 if [ "$#" -gt 0 ]; then
   for requested in "$@"; do
     found=0
-    for stage in "${stages[@]}" m2-test-isolation-pf-state; do [ "$stage" != "$requested" ] || found=1; done
+    for stage in "${stages[@]}" m2-test-isolation-pf-state m2-probe-native-prefixes; do [ "$stage" != "$requested" ] || found=1; done
     [ "$found" = 1 ] || { echo "Unknown gate: $requested" >&2; exit 1; }
   done
   stages=("$@")
