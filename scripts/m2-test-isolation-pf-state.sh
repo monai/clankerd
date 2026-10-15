@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 [ "$(uname -s)" = Darwin ] || { echo 'Requires the Mac host' >&2; exit 1; }
+state_policy=${PF_TEST_STATE_POLICY:-floating}
+case "$state_policy" in floating|if-bound) ;; *) echo 'PF_TEST_STATE_POLICY must be floating or if-bound' >&2; exit 1;; esac
+export PF_TEST_STATE_POLICY=$state_policy
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${OUT:-$root/build/rust}
 vmctl=$out/darwin-arm64/vmctl
@@ -52,6 +55,8 @@ PYRETAIN
 }
 trap cleanup EXIT
 echo "Evidence directory: $work"
+echo "Owned diagnostic flow state policy: $state_policy"
+printf '%s\n' "$state_policy" > "$work/state-policy.txt"
 sudo -n true
 printf 'anchor "syntax-only" in on lo0 all tag "clankerd_syntax_probe"\nblock drop out quick on lo0 all tagged "clankerd_syntax_probe"\n' > "$work/pf-syntax.rules"
 if ! sudo -n /sbin/pfctl -n -a "$pf_anchor" -f "$work/pf-syntax.rules" > "$work/pf-syntax.log" 2>&1; then
@@ -228,9 +233,9 @@ block drop out quick on $bridge_c all tagged "clankerd_tag_a_$$" label "tag-c-fr
 block drop out quick on $bridge_c all tagged "clankerd_tag_d_$$" label "tag-c-from-d"
 block drop out quick on $bridge_a all tagged "clankerd_tag_c_$$" label "tag-a-from-c"
 block drop out quick on $bridge_d all tagged "clankerd_tag_c_$$" label "tag-d-from-c"
-# Diagnostic-only owned flow tuples: explicit floating state despite host default.
-pass in on $bridge_a inet proto { tcp, udp } from $a port { 40191, 40192 } to $d port { 19091, 19092 } keep state (floating) label "state-a-to-d"
-pass in on $bridge_d inet proto { tcp, udp } from $d port { 40291, 40292 } to $a port { 19091, 19092 } keep state (floating) label "state-d-to-a"
+# Diagnostic-only owned flow tuples: explicit per-rule state policy; host defaults remain unchanged.
+pass in on $bridge_a inet proto { tcp, udp } from $a port { 40191, 40192 } to $d port { 19091, 19092 } keep state ($state_policy) label "state-a-to-d"
+pass in on $bridge_d inet proto { tcp, udp } from $d port { 40291, 40292 } to $a port { 19091, 19092 } keep state ($state_policy) label "state-d-to-a"
 PFRULES
 # Retain the installed primary grammar documentation for any syntax failure.
 MANPAGER=cat man 5 pf.conf > "$work/mac-pf.conf-man.txt" 2>&1 || true
@@ -255,7 +260,7 @@ done
 probe_peers enforced
 check_peers enforced false
 controls enforced
-echo 'State test: start owned nonce-aware listeners and hold floating A/D flows'
+echo "State test: start owned nonce-aware listeners and hold $state_policy A/D flows"
 state_fixture=$(cat "$root/scripts/fixtures/vmnet-pf-state.py")
 state_nonce=$(python3 -c 'import secrets;print(secrets.token_hex(8))')
 for name in path-a path-d; do
@@ -297,7 +302,7 @@ sleep 3
 for name in path-a path-d; do
   "$vmctl" exec "$name" python3 -c "$state_fixture" read "$state_nonce" client > "$work/$name-held-before.jsonl"
 done
-sudo -n /sbin/pfctl -ss -vv > "$work/floating-states-before.txt" 2>&1
+sudo -n /sbin/pfctl -ss -vv > "$work/owned-states-before.txt" 2>&1
 python3 - "$work" "$a" "$d" <<'PYSTATES'
 import json,sys,time
 from pathlib import Path
@@ -305,7 +310,7 @@ root=Path(sys.argv[1]);a,d=sys.argv[2:]
 for name in ('path-a','path-d'):
     rows=[json.loads(line) for line in (root/(name+'-held-before.jsonl')).read_text().splitlines()]
     assert rows and all(row.get('healthy') for row in rows),rows
-states=(root/'floating-states-before.txt').read_text()
+states=(root/'owned-states-before.txt').read_text()
 for source,target,tcp,udp in ((a,d,40191,40192),(d,a,40291,40292)):
     for protocol,source_port,target_port in (('tcp',tcp,19091),('udp',udp,19092)):
         assert any(protocol in line and source+':'+str(source_port) in line and target+':'+str(target_port) in line for line in states.splitlines()),(protocol,source,source_port,target,states)
@@ -324,7 +329,7 @@ for name in path-a path-d; do
   "$vmctl" exec "$name" python3 -c "$state_fixture" read "$state_nonce" client > "$work/$name-held-after.jsonl"
   "$vmctl" exec "$name" python3 -c "$state_fixture" read "$state_nonce" server > "$work/$name-state-received.jsonl"
 done
-sudo -n /sbin/pfctl -ss -vv > "$work/floating-states-after.txt" 2>&1
+sudo -n /sbin/pfctl -ss -vv > "$work/owned-states-after.txt" 2>&1
 python3 - "$work" "$state_nonce" <<'PYSTATEVERDICT'
 import json,sys
 from pathlib import Path
@@ -368,6 +373,6 @@ echo 'NOT PROVEN: overlapping-prefix IPv6 alias routing (failed baseline), produ
 python3 - "$work/state-verdict.json" <<'PYSECURITY'
 import json,sys
 rows=json.load(open(sys.argv[1]))
-assert len(rows)==2 and not any(row['forged_delivered'] for row in rows), 'SECURITY FAILURE: allowed floating state admitted forged UDP from isolated C; see state-verdict.json'
-print('PASS held-floating-state raw UDP spoof regression in both directions')
+assert len(rows)==2 and not any(row['forged_delivered'] for row in rows), 'SECURITY FAILURE: allowed diagnostic state admitted forged UDP from isolated C; see state-verdict.json'
+print('PASS held-state raw UDP spoof regression in both directions; policy='+__import__('os').environ['PF_TEST_STATE_POLICY'])
 PYSECURITY
