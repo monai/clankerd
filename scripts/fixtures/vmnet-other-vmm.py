@@ -227,7 +227,8 @@ def mdns(source,target,label,expected):
     output=guest(source,command+' || test "$?" = 124',timeout=15)
     (WORK/f'{source}-browse-{target}.log').write_text(output)
     protocols={line.split(';')[2] for line in output.splitlines() if line.startswith('=;eth0;') and label in line}
-    assert (protocols=={'IPv4','IPv6'} if expected else not protocols), f'Avahi {source}->{target}: resolved protocols={protocols}, expected={expected}'
+    discovered=any(line.startswith(('+;eth0;','=;eth0;')) and label in line for line in output.splitlines())
+    assert (protocols=={'IPv4','IPv6'} if expected else not discovered), f'Avahi {source}->{target}: resolved protocols={protocols}, expected={expected}'
     progress(f'PASS Avahi {source}->{target}: '+('resolved' if expected else 'not discovered'))
 
 
@@ -335,12 +336,14 @@ def cleanup():
             if len(fields)==3 and fields[1]==str(os.getuid()) and str(WORK/'helper.sock') in fields[2] and 'vmnet-helper' in fields[2]:
                 os.kill(int(fields[0]),signal.SIGTERM)
     except OSError:pass
+    cleanup_failed=[]
     for process in reversed(PROCESSES):
         if process.poll() is None:
             try:process.terminate();process.wait(timeout=8)
             except (OSError,subprocess.TimeoutExpired):
                 try:process.kill();process.wait(timeout=3)
-                except (OSError,subprocess.TimeoutExpired):pass
+                except (OSError,subprocess.TimeoutExpired):
+                    cleanup_failed.append(process.pid)
     for output in LOGS:output.close()
     for name in ('overlay.qcow2','noble-server-cloudimg-arm64.img','seed.iso','key','key.pub'):
         (WORK/name).unlink(missing_ok=True)
@@ -348,6 +351,7 @@ def cleanup():
     for path in (WORK/'state').rglob('*'):
         if path.is_file() and path.suffix in ('.img','.qcow2','.ext4'):path.unlink()
     progress('Retained evidence: '+str(WORK))
+    if cleanup_failed:raise RuntimeError(f'Unable to reap owned process IDs {cleanup_failed}; see retained helper/QEMU logs')
 
 
 if __name__=='__main__':
