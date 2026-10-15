@@ -1,4 +1,4 @@
-# dhcpcd patches
+# Native dependency patches
 
 `dhcpcd-eloop-retire-closed-fd.patch` backports the event-deletion cleanup in
 [upstream eloop.c](https://github.com/NetworkConfiguration/dhcpcd/blob/master/src/eloop.c)
@@ -15,3 +15,16 @@ scripts/test-dhcpcd-eloop.sh build/dhcpcd/src-10.3.0-aarch64-linux-musl
 The unpatched source fails with `No such file or directory`; the patched source
 passes. This reproduces the stale-event failure class. The Mac recovery gate is
 still required to verify carrier recovery through the actual VM attachment.
+
+## Experimental vmnet prefix helper
+
+`vmnet-helper-nat66-prefix.patch` adds a validated shared-mode `--nat66-prefix`
+argument to upstream vmnet-helper 0.13.0 at commit
+`222c121ba31e49856c9ec6c3a14426b49d77c8fe`. The test build downloads a
+checksum-pinned source archive, retains its Apache-2.0 license, and builds in the
+gate-owned directory. It does not replace the installed helper or its sudoers
+configuration.
+
+`scripts/m2-smoke-native-prefixes.sh` exercises real guests using this build and
+a test-only prefix-selection wrapper. This is capability evidence for future
+production integration; the installed helper does not yet expose this option.
