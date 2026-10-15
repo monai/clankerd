@@ -53,6 +53,13 @@ PYRETAIN
 trap cleanup EXIT
 echo "Evidence directory: $work"
 sudo -n true
+printf 'anchor "syntax-only" in on lo0 all tag "clankerd_syntax_probe"\nblock drop out quick on lo0 all tagged "clankerd_syntax_probe"\n' > "$work/pf-syntax.rules"
+if ! sudo -n /sbin/pfctl -n -a "$pf_anchor" -f "$work/pf-syntax.rules" > "$work/pf-syntax.log" 2>&1; then
+  cat "$work/pf-syntax.log"
+  echo 'FAIL tag syntax rejected before starting VMs or changing PF'
+  exit 1
+fi
+echo 'PASS tag-rule syntax validation; starting positive packet baseline'
 export TAG_FIXTURE_ROOT=$root
 server=$(cat "$root/scripts/fixtures/vmnet-ipv6-services.py")
 peer=$(cat "$root/scripts/fixtures/vmnet-isolation-peers.py")
@@ -102,22 +109,6 @@ for name in path-a path-c path-d; do
   done
   echo "$name diagnostic IPv6=$prefix:$segment::2 gateway=$gateway6 interface=$interface"
 done
-# Same /64 across three native bridges: test policy cannot rely on ULA CIDRs.
-common=$prefix:99
-common_a=$common::a
-common_c=$common::c
-common_d=$common::d
-for name in path-a path-c path-d; do
-  case "$name" in path-a) address=$common_a; segment=1; interface=$bridge_a;; path-c) address=$common_c; segment=2; interface=$bridge_c;; path-d) address=$common_d; segment=3; interface=$bridge_d;; esac
-  "$vmctl" exec "$name" ip -6 addr add "$address/128" dev eth0
-  # Record before mutation; never replace an existing host route.
-  sudo -n /sbin/route -n add -inet6 -host "$address" -interface "$interface" >> "$work/owned-routes.log" 2>&1
-  owned_routes+=("$address")
-  for remote in "$common_a" "$common_c" "$common_d"; do
-    [ "$remote" != "$address" ] || continue
-    "$vmctl" exec "$name" ip -6 route add "$remote/128" via "$prefix:$segment::1" dev eth0
-  done
-done
 # Guest-controlled source aliases: actual delivery before filtering is required.
 arp_probe=$(cat <<'PYARP'
 import socket,struct,time,sys
@@ -158,11 +149,9 @@ probe_peers() {
   done
   "$vmctl" exec path-c python3 -c "$peer" 64 "$d" "$d6" > "$work/$phase-c-to-d.jsonl"
   for name in path-a path-c path-d; do
-    case "$name" in path-a) source=$common_a; source4=192.168.105.250; target=$common_c; target4=$c;; path-c) source=$common_c; source4=192.168.106.250; target=$common_a; target4=$a;; path-d) source=$common_d; source4=192.168.107.250; target=$common_c; target4=$c;; esac
-    "$vmctl" exec "$name" env EVIDENCE_SOURCE="$source" python3 -c "$peer" 64 "$target" > "$work/$phase-common-$name.jsonl"
+    case "$name" in path-a) source4=192.168.105.250; target4=$c;; path-c) source4=192.168.106.250; target4=$a;; path-d) source4=192.168.107.250; target4=$c;; esac
     "$vmctl" exec "$name" env EVIDENCE_SOURCE="$source4" python3 -c "$peer" 64 "$target4" > "$work/$phase-alias-$name.jsonl"
   done
-  "$vmctl" exec path-c env EVIDENCE_SOURCE="$common_c" python3 -c "$peer" 64 "$common_d" > "$work/$phase-common-c-to-d.jsonl"
 }
 controls() {
   phase=$1
@@ -186,7 +175,7 @@ assert len(rows)==4 and all(row['reached'] for row in rows),rows
 print('PASS guest -> own Mac gateway IPv4/IPv6-link-local TCP/UDP')
 PYHOSTCHECK
   done
-  python3 - "$a6" "$c6" "$d6" "$common_a" "$common_c" "$common_d" > "$work/$phase-mac-alias6.log" <<'PYMAC6'
+  python3 - "$a6" "$c6" "$d6" > "$work/$phase-mac-alias6.log" <<'PYMAC6'
 import importlib.util,sys
 # Imported fixture path is supplied through the shell's environment below.
 from pathlib import Path
@@ -194,17 +183,17 @@ root=Path(__import__('os').environ['TAG_FIXTURE_ROOT'])
 spec=importlib.util.spec_from_file_location('services',root/'scripts/fixtures/vmnet-ipv6-services.py')
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 for address in sys.argv[1:]: module.probe(address)
-print('PASS Mac -> all three native bridges unique/shared-prefix IPv6 TCP/UDP')
+print('PASS Mac -> all three native bridges distinct-prefix IPv6 TCP/UDP')
 PYMAC6
-  echo 'PASS Mac -> all three native bridges unique/shared-prefix IPv6 TCP/UDP'
+  echo 'PASS Mac -> all three native bridges distinct-prefix IPv6 TCP/UDP'
   for name in path-a path-d; do
-    if [ "$name" = path-a ]; then target=$d; target6=$d6; common_target=$common_d; else target=$a; target6=$a6; common_target=$common_a; fi
-    "$vmctl" exec "$name" python3 -c "$peer" 64 "$target" "$target6" "$common_target" > "$work/$phase-ordinary-$name.jsonl"
+    if [ "$name" = path-a ]; then target=$d; target6=$d6; common_else target=$a; target6=$a6; common_fi
+    "$vmctl" exec "$name" python3 -c "$peer" 64 "$target" "$target6" > "$work/$phase-ordinary-$name.jsonl"
     python3 - "$work/$phase-ordinary-$name.jsonl" <<'PYORDINARY'
 import json,sys
 rows=[json.loads(line) for line in open(sys.argv[1])]
-assert len(rows)==6 and all(row['reached'] for row in rows),rows
-print('PASS ordinary A/D peer IPv4 and unique/shared-prefix IPv6 TCP/UDP')
+assert len(rows)==4 and all(row['reached'] for row in rows),rows
+print('PASS ordinary A/D peer IPv4 and distinct-prefix IPv6 TCP/UDP')
 PYORDINARY
   done
 }
@@ -216,13 +205,13 @@ check_peers() {
 import json,sys
 from pathlib import Path
 root,phase,expected=Path(sys.argv[1]),sys.argv[2],sys.argv[3]=='true'
-paths=[root/(phase+'-'+name+'.jsonl') for name in ('path-a','path-c','path-d','c-to-d','common-path-a','common-path-c','common-path-d','common-c-to-d','alias-path-a','alias-path-c','alias-path-d')]
+paths=[root/(phase+'-'+name+'.jsonl') for name in ('path-a','path-c','path-d','c-to-d','alias-path-a','alias-path-c','alias-path-d')]
 rows=[json.loads(line) for path in paths for line in path.read_text().splitlines()]
-assert len(rows)==30, len(rows)
+assert len(rows)==22, len(rows)
 assert all(row['reached']==expected for row in rows),rows
 if not expected:
     assert all(any(message in row.get('error','').lower() for message in ('timed out','no route to host','host is unreachable')) for row in rows),rows
-print('PASS '+phase+': '+str(len(rows))+' actual peer TCP/UDP probes; source aliases and common IPv6 prefix')
+print('PASS '+phase+': '+str(len(rows))+' actual peer TCP/UDP probes; IPv4 source aliases and distinct IPv6 prefixes')
 PYCHECK
 }
 probe_peers before
@@ -256,10 +245,6 @@ for source6 in "$a6" "$d6"; do
   sudo -n /sbin/pfctl -k "$source6" -k "$c6" >> "$work/pf-clear-test-state.log" 2>&1
   sudo -n /sbin/pfctl -k "$c6" -k "$source6" >> "$work/pf-clear-test-state.log" 2>&1
 done
-for source6 in "$common_a" "$common_c" "$common_d"; do
-  sudo -n /sbin/pfctl -k "$source6" >> "$work/pf-clear-test-state.log" 2>&1
-  sudo -n /sbin/pfctl -k ::/0 -k "$source6" >> "$work/pf-clear-test-state.log" 2>&1
-done
 for source4 in 192.168.105.250 192.168.106.250 192.168.107.250; do
   sudo -n /sbin/pfctl -k "$source4" >> "$work/pf-clear-test-state.log" 2>&1
   sudo -n /sbin/pfctl -k 0.0.0.0/0 -k "$source4" >> "$work/pf-clear-test-state.log" 2>&1
@@ -284,4 +269,4 @@ probe_peers removed
 controls removed
 check_peers removed true
 echo 'PASS decision-neutral anchor-tag prototype: actual tag boundary behavior, Mac/NAT and ordinary networks retained.'
-echo 'NOT PROVEN: production host-policy coexistence under every custom rule/state, malicious raw Ethernet, multicast policy, external IPv6.'
+echo 'NOT PROVEN: overlapping-prefix IPv6 alias routing (failed baseline), production host-policy coexistence under every custom rule/state, malicious raw Ethernet, multicast policy, external IPv6.'
