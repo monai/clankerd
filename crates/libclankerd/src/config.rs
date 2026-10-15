@@ -244,6 +244,8 @@ pub struct HostConfig {
     /// Explicit physical interface for bridged networking; never follows the host default route.
     pub bridge_interface: Option<String>,
     pub shared_network: SharedNetwork,
+    /// Authoritative native shared ULA /64, copied from virtual-network membership.
+    pub shared_ipv6_prefix: Option<std::net::Ipv6Addr>,
     pub shared_peer_participation: bool,
     pub cpus: Option<u32>,
     /// Bytes.
@@ -296,6 +298,7 @@ impl Default for HostConfig {
             network_mode: NetworkMode::default(),
             bridge_interface: None,
             shared_network: SharedNetwork::default(),
+            shared_ipv6_prefix: None,
             shared_peer_participation: true,
             cpus: None,
             memory: None,

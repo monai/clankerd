@@ -82,7 +82,7 @@ for name in path-a path-c path-d; do
   ready=0
   for attempt in $(seq 1 30); do
     "$vmctl" inspect "$name" > "$work/$name.json"
-    if python3 "$root/scripts/fixtures/vmnet-ipv6-services.py" host "$work/$name.json" ipv4-services > "$work/$name-health.log" 2>&1; then ready=1; break; fi
+    if python3 "$root/scripts/fixtures/vmnet-ipv6-services.py" host "$work/$name.json" dual > "$work/$name-health.log" 2>&1; then ready=1; break; fi
     sleep 1
   done
   [ "$ready" = 1 ] || { tail -12 "$work/$name-health.log"; exit 1; }
@@ -99,21 +99,31 @@ bridge_c=$(route -n get "$c" | awk '/interface:/ {print $2}')
 bridge_d=$(route -n get "$d" | awk '/interface:/ {print $2}')
 sysctl net.inet.ip.forwarding net.inet6.ip6.forwarding | tee "$work/forwarding.txt"
 netstat -rn > "$work/mac-routes.txt"
-prefix=$(printf 'fd42:%x' "$(( $$ % 65535 ))")
-a6=$prefix:1::2
-c6=$prefix:2::2
-d6=$prefix:3::2
+# Use the actual resource-selected/native-advertised prefixes, not aliases.
 for name in path-a path-c path-d; do
-  case "$name" in path-a) segment=1; interface=$bridge_a;; path-c) segment=2; interface=$bridge_c;; path-d) segment=3; interface=$bridge_d;; esac
-  gateway6=$prefix:$segment::1
-  ipv6_aliases+=("$interface,$gateway6")
-  sudo -n /sbin/ifconfig "$interface" inet6 "$gateway6/64" alias
-  "$vmctl" exec "$name" ip -6 addr add "$prefix:$segment::2/64" dev eth0
-  for remote in 1 2 3; do
-    [ "$remote" != "$segment" ] || continue
-    "$vmctl" exec "$name" ip -6 route add "$prefix:$remote::/64" via "$gateway6" dev eth0
+  python3 - "$work/$name.json" > "$work/$name-native6.txt" <<'PYNATIVE6'
+import ipaddress,json,sys
+m=json.load(open(sys.argv[1]))[0];prefix=m['host_config']['shared_ipv6_prefix']
+assert prefix,('Expected explicit resource prefix',m['host_config'])
+network=ipaddress.ip_network(prefix+'/64')
+print(next(a for a in m['network']['addresses'] if ':' in a and ipaddress.ip_address(a) in network))
+print(str(network))
+print(next(a.split('%')[0] for a in m['network']['nameservers'] if a.startswith('fe80:')))
+PYNATIVE6
+  case "$name" in
+    path-a) a6=$(sed -n '1p' "$work/$name-native6.txt");;
+    path-c) c6=$(sed -n '1p' "$work/$name-native6.txt");;
+    path-d) d6=$(sed -n '1p' "$work/$name-native6.txt");;
+  esac
+done
+for name in path-a path-c path-d; do
+  gateway6=$(sed -n '3p' "$work/$name-native6.txt")
+  for remote in path-a path-c path-d; do
+    [ "$remote" != "$name" ] || continue
+    remote_prefix=$(sed -n '2p' "$work/$remote-native6.txt")
+    "$vmctl" exec "$name" ip -6 route replace "$remote_prefix" via "$gateway6" dev eth0
   done
-  echo "$name diagnostic IPv6=$prefix:$segment::2 gateway=$gateway6 interface=$interface"
+  echo "$name native IPv6=$(sed -n '1p' "$work/$name-native6.txt") gateway=$gateway6"
 done
 # Guest-controlled source aliases: actual delivery before filtering is required.
 arp_probe=$(cat <<'PYARP'
@@ -237,6 +247,8 @@ block drop out quick on $bridge_d all tagged "clankerd_tag_c_$$" label "tag-d-fr
 # Diagnostic-only owned flow tuples: explicit per-rule state policy; host defaults remain unchanged.
 pass in on $bridge_a inet proto { tcp, udp } from $a port { 40191, 40192 } to $d port { 19091, 19092 } keep state ($state_policy) label "state-a-to-d"
 pass in on $bridge_d inet proto { tcp, udp } from $d port { 40291, 40292 } to $a port { 19091, 19092 } keep state ($state_policy) label "state-d-to-a"
+pass in on $bridge_a inet6 proto { tcp, udp } from $a6 port { 40191, 40192 } to $d6 port { 19091, 19092 } keep state ($state_policy) label "state6-a-to-d"
+pass in on $bridge_d inet6 proto { tcp, udp } from $d6 port { 40291, 40292 } to $a6 port { 19091, 19092 } keep state ($state_policy) label "state6-d-to-a"
 PFRULES
 # Retain the installed primary grammar documentation for any syntax failure.
 MANPAGER=cat man 5 pf.conf > "$work/mac-pf.conf-man.txt" 2>&1 || true
@@ -272,7 +284,8 @@ for name in path-a path-d; do
   "$vmctl" exec "$name" python3 -c "$state_fixture" read "$state_nonce" server > "$work/$name-state-server-ready.jsonl"
   python3 - "$work/$name-state-server-ready.jsonl" <<'PYREADY'
 import json,sys
-assert {json.loads(line).get('ready') for line in open(sys.argv[1])}=={'TCP','UDP'}
+rows=[json.loads(line) for line in open(sys.argv[1])]
+assert {(r.get('ready'),r.get('family')) for r in rows}=={('TCP',4),('UDP',4),('TCP',6),('UDP',6)},rows
 PYREADY
 done
 state_counters() {
@@ -291,49 +304,58 @@ relay_rejections() {
   python3 - "$work/state" <<'PYREJECTS'
 from pathlib import Path
 import sys
-print(sum(path.read_text(errors='replace').count('native relay: rejected IPv4 source outside selected guest subnet') for path in Path(sys.argv[1]).rglob('vmspawn.log')))
+print(sum(path.read_text(errors='replace').count('native relay: rejected source outside selected guest network') for path in Path(sys.argv[1]).rglob('vmspawn.log')))
 PYREJECTS
 }
 relay_rejections > "$work/relay-rejections-before.txt"
 # Foreign-source frames must be rejected before reaching host PF state lookup.
 "$vmctl" exec path-c python3 -c "$state_fixture" inject "$state_nonce" "$a" "$d" 40192 forged-without-state-a-to-d > "$work/raw-without-state-a-to-d.json"
 "$vmctl" exec path-c python3 -c "$state_fixture" inject "$state_nonce" "$d" "$a" 40292 forged-without-state-d-to-a > "$work/raw-without-state-d-to-a.json"
+"$vmctl" exec path-c python3 -c "$state_fixture" inject "$state_nonce" "$a6" "$d6" 40192 forged-without-state6-a-to-d > "$work/raw-without-state6-a-to-d.json"
+"$vmctl" exec path-c python3 -c "$state_fixture" inject "$state_nonce" "$d6" "$a6" 40292 forged-without-state6-d-to-a > "$work/raw-without-state6-d-to-a.json"
 state_counters raw-no-state
 relay_rejections > "$work/relay-rejections-no-state.txt"
 python3 - "$work/relay-rejections-before.txt" "$work/relay-rejections-no-state.txt" <<'PYRAWCONTROL'
 import sys
 before,after=[int(open(p).read()) for p in sys.argv[1:]]
-assert after-before >= 6,('Expected six relay-rejected foreign-source frames before state',before,after)
+assert after-before >= 12,('Expected twelve dual-family relay-rejected foreign-source frames before state',before,after)
 print('PASS foreign-source frames rejected by native relay before PF state lookup')
 PYRAWCONTROL
 "$vmctl" exec path-a python3 -c "$state_fixture" launch "$state_fixture" hold "$state_nonce" "$d" "$a" 40191 40192 > "$work/a-state-client-pid.txt"
 "$vmctl" exec path-d python3 -c "$state_fixture" launch "$state_fixture" hold "$state_nonce" "$a" "$d" 40291 40292 > "$work/d-state-client-pid.txt"
+"$vmctl" exec path-a python3 -c "$state_fixture" launch "$state_fixture" hold "$state_nonce" "$d6" "$a6" 40191 40192 > "$work/a-state6-client-pid.txt"
+"$vmctl" exec path-d python3 -c "$state_fixture" launch "$state_fixture" hold "$state_nonce" "$a6" "$d6" 40291 40292 > "$work/d-state6-client-pid.txt"
 sleep 3
 for name in path-a path-d; do
   "$vmctl" exec "$name" python3 -c "$state_fixture" read "$state_nonce" client > "$work/$name-held-before.jsonl"
 done
 sudo -n /sbin/pfctl -ss -vv > "$work/owned-states-before.txt" 2>&1
-python3 - "$work" "$a" "$d" <<'PYSTATES'
-import json,sys,time
+python3 - "$work" "$a" "$d" "$a6" "$d6" <<'PYSTATES'
+import json,re,sys,time
 from pathlib import Path
-root=Path(sys.argv[1]);a,d=sys.argv[2:]
+root=Path(sys.argv[1]);a,d,a6,d6=sys.argv[2:]
 for name in ('path-a','path-d'):
     rows=[json.loads(line) for line in (root/(name+'-held-before.jsonl')).read_text().splitlines()]
     assert rows and all(row.get('healthy') for row in rows),rows
 states=(root/'owned-states-before.txt').read_text()
-for source,target,tcp,udp in ((a,d,40191,40192),(d,a,40291,40292)):
+for source,target,tcp,udp in ((a,d,40191,40192),(d,a,40291,40292),(a6,d6,40191,40192),(d6,a6,40291,40292)):
     for protocol,source_port,target_port in (('tcp',tcp,19091),('udp',udp,19092)):
-        assert any(protocol in line and source+':'+str(source_port) in line and target+':'+str(target_port) in line for line in states.splitlines()),(protocol,source,source_port,target,states)
-print('PASS actual PF state table contains all four owned TCP/UDP flow tuples')
+        matches=lambda address,port,line: re.search(re.escape(address)+r'(?:\['+str(port)+r'\]|:'+str(port)+r')(?![0-9])',line)
+        assert any(protocol in line and matches(source,source_port,line) and matches(target,target_port,line) for line in states.splitlines()),(protocol,source,source_port,target,states)
+print('PASS actual PF state table contains all eight owned IPv4/IPv6 TCP/UDP flow tuples')
 PYSTATES
 # Positive raw-frame construction controls: matching legitimate source bridge.
 "$vmctl" exec path-a python3 -c "$state_fixture" inject "$state_nonce" "$a" "$d" 40192 raw-positive-a-to-d > "$work/raw-positive-a-to-d.json"
 "$vmctl" exec path-d python3 -c "$state_fixture" inject "$state_nonce" "$d" "$a" 40292 raw-positive-d-to-a > "$work/raw-positive-d-to-a.json"
+"$vmctl" exec path-a python3 -c "$state_fixture" inject "$state_nonce" "$a6" "$d6" 40192 raw-positive6-a-to-d > "$work/raw-positive6-a-to-d.json"
+"$vmctl" exec path-d python3 -c "$state_fixture" inject "$state_nonce" "$d6" "$a6" 40292 raw-positive6-d-to-a > "$work/raw-positive6-d-to-a.json"
 state_counters raw-with-state-before
 relay_rejections > "$work/relay-rejections-with-state-before.txt"
 # Same IP/port tuples, actual C Ethernet MAC and C's own Mac gateway next-hop.
 "$vmctl" exec path-c python3 -c "$state_fixture" inject "$state_nonce" "$a" "$d" 40192 forged-with-state-a-to-d > "$work/raw-with-state-a-to-d.json"
 "$vmctl" exec path-c python3 -c "$state_fixture" inject "$state_nonce" "$d" "$a" 40292 forged-with-state-d-to-a > "$work/raw-with-state-d-to-a.json"
+"$vmctl" exec path-c python3 -c "$state_fixture" inject "$state_nonce" "$a6" "$d6" 40192 forged-with-state6-a-to-d > "$work/raw-with-state6-a-to-d.json"
+"$vmctl" exec path-c python3 -c "$state_fixture" inject "$state_nonce" "$d6" "$a6" 40292 forged-with-state6-d-to-a > "$work/raw-with-state6-d-to-a.json"
 sleep 3
 state_counters raw-with-state-after
 relay_rejections > "$work/relay-rejections-with-state-after.txt"
@@ -348,21 +370,25 @@ from pathlib import Path
 root=Path(sys.argv[1]);nonce=sys.argv[2];results=[]
 rejected_before=int((root/'relay-rejections-with-state-before.txt').read_text())
 rejected_after=int((root/'relay-rejections-with-state-after.txt').read_text())
-assert rejected_after-rejected_before >= 6,('Expected six relay-rejected frames with held states',rejected_before,rejected_after)
+assert rejected_after-rejected_before >= 12,('Expected twelve dual-family relay-rejected frames with held states',rejected_before,rejected_after)
 for name in ('path-a','path-d'):
     before=[json.loads(line) for line in (root/(name+'-held-before.jsonl')).read_text().splitlines()]
     after=[json.loads(line) for line in (root/(name+'-held-after.jsonl')).read_text().splitlines()]
     healthy=[row for row in after if 'healthy' in row]
     assert healthy and all(row['healthy'] for row in healthy),after
-    assert healthy[-1]['sequence']>before[-1]['sequence'],(before,after)
+    for family in (4,6):
+        previous=[r for r in before if r.get('family')==family and r.get('healthy')]
+        current=[r for r in healthy if r.get('family')==family]
+        assert previous and current and current[-1]['sequence']>previous[-1]['sequence'],(family,before,after)
 for name,direction in (('path-d','a-to-d'),('path-a','d-to-a')):
     rows=[json.loads(line) for line in (root/(name+'-state-received.jsonl')).read_text().splitlines()]
     payloads={row.get('payload') for row in rows}
-    assert 'pf-state:'+nonce+':raw-positive-'+direction in payloads,('Raw positive construction control failed',name,rows)
-    assert 'pf-state:'+nonce+':forged-without-state-'+direction not in payloads,('No-state spoof crossed boundary',name,rows)
-    leaked='pf-state:'+nonce+':forged-with-state-'+direction in payloads
-    results.append(dict(direction=direction,forged_delivered=leaked,legitimate_tcp_udp_continued=True))
-    print(('FAIL SECURITY: ' if leaked else 'PASS ')+direction+': forged-state UDP '+('DELIVERED' if leaked else 'not delivered')+'; legitimate TCP/UDP continued')
+    for family,suffix in ((4,''),(6,'6')):
+        assert 'pf-state:'+nonce+':raw-positive'+suffix+'-'+direction in payloads,('Raw positive construction control failed',family,name,rows)
+        assert 'pf-state:'+nonce+':forged-without-state'+suffix+'-'+direction not in payloads,('No-state spoof crossed boundary',family,name,rows)
+        leaked='pf-state:'+nonce+':forged-with-state'+suffix+'-'+direction in payloads
+        results.append(dict(family=family,direction=direction,forged_delivered=leaked,legitimate_tcp_udp_continued=True))
+        print(('FAIL SECURITY: ' if leaked else 'PASS ')+f'IPv{family} '+direction+': forged-state UDP '+('DELIVERED' if leaked else 'not delivered')+'; legitimate TCP/UDP continued')
 (root/'state-verdict.json').write_text(json.dumps(results,indent=2))
 PYSTATEVERDICT
 controls state-after
@@ -388,6 +414,6 @@ echo 'NOT PROVEN: overlapping-prefix IPv6 alias routing (failed baseline), produ
 python3 - "$work/state-verdict.json" <<'PYSECURITY'
 import json,sys
 rows=json.load(open(sys.argv[1]))
-assert len(rows)==2 and not any(row['forged_delivered'] for row in rows), 'SECURITY FAILURE: allowed diagnostic state admitted forged UDP from isolated C; see state-verdict.json'
-print('PASS held-state raw UDP spoof regression in both directions; policy='+__import__('os').environ['PF_TEST_STATE_POLICY'])
+assert len(rows)==4 and not any(row['forged_delivered'] for row in rows), 'SECURITY FAILURE: allowed diagnostic state admitted forged UDP from isolated C; see state-verdict.json'
+print('PASS held-state IPv4/IPv6 raw UDP spoof regression in both directions; policy='+__import__('os').environ['PF_TEST_STATE_POLICY'])
 PYSECURITY

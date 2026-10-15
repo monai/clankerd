@@ -16,15 +16,15 @@ The unpatched source fails with `No such file or directory`; the patched source
 passes. This reproduces the stale-event failure class. The Mac recovery gate is
 still required to verify carrier recovery through the actual VM attachment.
 
-## Experimental vmnet prefix helper
+## Prefix-capable vmnet helper
 
 `vmnet-helper-nat66-prefix.patch` adds a validated shared-mode `--nat66-prefix`
 argument to upstream vmnet-helper 0.13.0 at commit
-`222c121ba31e49856c9ec6c3a14426b49d77c8fe`. The test build downloads a
+`222c121ba31e49856c9ec6c3a14426b49d77c8fe`. The build downloads a
 checksum-pinned source archive, retains its Apache-2.0 license, and builds in the
 gate-owned directory. It does not replace the installed helper or its sudoers
 configuration.
 
 `scripts/m2-smoke-native-prefixes.sh` exercises real guests using this build and
-a test-only prefix-selection wrapper. This is capability evidence for future
-production integration; the installed helper does not yet expose this option.
+persistent resource prefix selection. The separate installer places the extended
+helper under `/opt/clankerd/libexec`; it does not replace `/opt/vmnet-helper`.

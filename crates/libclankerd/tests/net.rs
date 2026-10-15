@@ -17,13 +17,18 @@ use libclankerd::{Engine, ErrorKind, HostConfig, Status, Vmm};
 const FAKE_VMNET: &str = r#"#!/bin/sh
 echo "$@" > "$0.args"
 sock=""
+prefix=""
 while [ $# -gt 0 ]; do
-  case "$1" in --socket) sock=$2 ;; esac
+  case "$1" in --socket) sock=$2 ;; --nat66-prefix) prefix=$2 ;; esac
   shift
 done
 echo $$ > "$0.pid"
 echo 'INFO starting interface' >&2
+if [ -n "$prefix" ]; then
+  printf '{"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514,"vmnet_nat66_prefix":"%s"}\n' "$prefix"
+else
 echo '{"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514}'
+fi
 : > "$sock"
 trap 'rm -f "$sock"; exit 0' TERM
 while :; do sleep 0.1; done
@@ -657,4 +662,58 @@ fn host_only_members_share_the_same_virtual_network() {
     let b = b.inspect().unwrap().host_config;
     assert_eq!(a.virtual_network, b.virtual_network);
     assert!(a.shared_peer_participation && b.shared_peer_participation);
+}
+
+#[test]
+fn named_shared_prefix_must_be_acknowledged_before_workload_start() {
+    let rig = rig(FAKE_VMNET);
+    let network = rig
+        .engine
+        .create_network("prefixed", libclankerd::NetworkKind::Shared, None)
+        .unwrap();
+    let machine = rig
+        .engine
+        .create(
+            Some("prefixed-member"),
+            sh("sleep 60"),
+            HostConfig {
+                virtual_network: Some(network.name),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    machine.start().unwrap();
+    let prefix = network.ipv6_prefix.unwrap();
+    assert!(rig.args().contains(&format!("--nat66-prefix {prefix}")));
+    assert_eq!(
+        machine.inspect().unwrap().host_config.shared_ipv6_prefix,
+        Some(prefix)
+    );
+    machine.remove(true).unwrap();
+}
+
+#[test]
+fn wrong_native_prefix_prevents_workload_start() {
+    let helper = FAKE_VMNET.replace("prefix=$2", "prefix=fd42:bad::");
+    let rig = rig(&helper);
+    rig.engine
+        .create_network("prefixed", libclankerd::NetworkKind::Shared, None)
+        .unwrap();
+    let machine = rig
+        .engine
+        .create(
+            Some("wrong-prefix"),
+            sh("sleep 60"),
+            HostConfig {
+                virtual_network: Some("prefixed".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(machine.start().is_err());
+    assert!(
+        rig.vmm.specs.lock().unwrap().is_empty(),
+        "VMM must not boot after an ignored prefix request"
+    );
+    machine.remove(true).unwrap();
 }

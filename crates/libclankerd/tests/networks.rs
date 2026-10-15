@@ -227,3 +227,62 @@ fn missing_network_update_does_not_create_a_volume() {
         ErrorKind::NotFound
     );
 }
+
+#[test]
+fn shared_prefixes_persist_follow_membership_and_are_distinct() {
+    let env = Env::new();
+    let engine = Engine::new(env.config(std::sync::Arc::new(
+        libclankerd::vmm::LocalProcessVmm::new(guestd_path()),
+    )))
+    .unwrap();
+    let one = engine
+        .create_network("one", NetworkKind::Shared, None)
+        .unwrap();
+    let two = engine
+        .create_network("two", NetworkKind::Shared, None)
+        .unwrap();
+    assert!(one.ipv6_prefix.is_some());
+    assert_ne!(one.ipv6_prefix, two.ipv6_prefix);
+    for prefix in [one.ipv6_prefix.unwrap(), two.ipv6_prefix.unwrap()] {
+        assert_eq!(prefix.octets()[0], 0xfd);
+        assert_eq!(u128::from(prefix) & u128::from(u64::MAX), 0);
+    }
+    let machine = engine
+        .create(
+            Some("member"),
+            sh("true"),
+            libclankerd::HostConfig {
+                virtual_network: Some("one".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        machine.inspect().unwrap().host_config.shared_ipv6_prefix,
+        one.ipv6_prefix
+    );
+    machine
+        .update(
+            &machine.inspect().unwrap().config,
+            libclankerd::HostConfig {
+                virtual_network: Some("two".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        machine.inspect().unwrap().host_config.shared_ipv6_prefix,
+        two.ipv6_prefix
+    );
+    assert_eq!(
+        engine.inspect_network("one").unwrap().ipv6_prefix,
+        one.ipv6_prefix
+    );
+    assert!(
+        engine
+            .create_network("host", NetworkKind::HostOnly, None)
+            .unwrap()
+            .ipv6_prefix
+            .is_none()
+    );
+}

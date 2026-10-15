@@ -36,6 +36,8 @@ pub struct VirtualNetwork {
     pub name: String,
     pub mode: NetworkKind,
     pub subnet: SharedNetwork,
+    #[serde(default)]
+    pub ipv6_prefix: Option<std::net::Ipv6Addr>,
     pub created: SystemTime,
 }
 
@@ -105,6 +107,7 @@ impl<'a> Networks<'a> {
         name: &str,
         mode: NetworkKind,
         subnet: Option<SharedNetwork>,
+        allocate_ipv6: bool,
     ) -> Result<VirtualNetwork> {
         let path = self.path(name)?;
         if path.exists() {
@@ -132,11 +135,30 @@ impl<'a> Networks<'a> {
                 .find(|candidate| !occupied.iter().any(|other| overlaps(candidate, other)))
                 .ok_or_else(|| Error::unavailable("no free automatic virtual network subnet"))?,
         };
+        let id = crate::engine::random_id()?;
+        let ipv6_prefix = if mode == NetworkKind::Shared && allocate_ipv6 {
+            let entropy = u64::from_str_radix(&id[..14], 16)
+                .map_err(|_| Error::unavailable("invalid network identity entropy"))?;
+            let prefix = std::net::Ipv6Addr::from(u128::from((0xfd_u64 << 56) | entropy) << 64);
+            if self
+                .list()?
+                .iter()
+                .any(|network| network.ipv6_prefix == Some(prefix))
+            {
+                return Err(Error::conflict(
+                    "generated IPv6 prefix is already allocated; retry network creation",
+                ));
+            }
+            Some(prefix)
+        } else {
+            None
+        };
         let network = VirtualNetwork {
-            id: crate::engine::random_id()?,
+            id,
             name: name.into(),
             mode,
             subnet,
+            ipv6_prefix,
             created: SystemTime::now(),
         };
         crate::store::write_atomic(&path, &serde_json::to_vec_pretty(&network)?)?;
@@ -173,7 +195,7 @@ impl<'a> Networks<'a> {
                     network
                 }
                 Err(error) if error.kind() == crate::ErrorKind::NotFound => {
-                    self.create(&name, kind, None)?
+                    self.create(&name, kind, None, true)?
                 }
                 Err(error) => return Err(error),
             }
@@ -203,7 +225,7 @@ impl<'a> Networks<'a> {
                     network
                 }
                 Err(error) if error.kind() == crate::ErrorKind::NotFound => {
-                    self.create(&name, kind, Some(host.shared_network.clone()))?
+                    self.create(&name, kind, Some(host.shared_network.clone()), false)?
                 }
                 Err(error) => return Err(error),
             }
@@ -211,6 +233,7 @@ impl<'a> Networks<'a> {
         host.virtual_network = Some(network.name);
         host.network_mode = network.mode.mode();
         host.shared_network = network.subnet;
+        host.shared_ipv6_prefix = network.ipv6_prefix;
         // Compatibility field now describes native network participation, never a per-member veto.
         host.shared_peer_participation = true;
         Ok(())
@@ -228,7 +251,7 @@ impl Engine {
         mode: NetworkKind,
         subnet: Option<SharedNetwork>,
     ) -> Result<VirtualNetwork> {
-        Networks::lock(&self.inner.store)?.create(name, mode, subnet)
+        Networks::lock(&self.inner.store)?.create(name, mode, subnet, true)
     }
     pub fn networks(&self) -> Result<Vec<VirtualNetwork>> {
         Networks::lock(&self.inner.store)?.list()

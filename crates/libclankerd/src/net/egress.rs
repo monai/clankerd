@@ -1,4 +1,4 @@
-//! Validate IPv4 source bounds before a guest frame reaches host PF states.
+//! Validate selected IPv4/IPv6 source bounds before a frame reaches host PF states.
 use crate::{HostConfig, NetworkMode};
 
 pub(super) fn permits(frame: &[u8], host: &HostConfig) -> bool {
@@ -16,6 +16,11 @@ pub(super) fn permits(frame: &[u8], host: &HostConfig) -> bool {
         };
         kind = u16::from_be_bytes([tag[2], tag[3]]);
         offset += 4;
+    }
+    if kind == 0x86dd {
+        return host
+            .shared_ipv6_prefix
+            .is_none_or(|prefix| permits_ipv6(&frame[offset..], prefix));
     }
     if kind != 0x0800 {
         return true;
@@ -49,6 +54,44 @@ pub(super) fn permits(frame: &[u8], host: &HostConfig) -> bool {
         && u16::from_be_bytes([ip[6], ip[7]]) & 0x3fff == 0
         && length >= header + 8
         && ip[header..header + 4] == [0, 68, 0, 67]
+}
+
+fn permits_ipv6(ip: &[u8], prefix: std::net::Ipv6Addr) -> bool {
+    if ip.len() < 40 || ip[0] >> 4 != 6 {
+        return false;
+    }
+    let length = 40 + usize::from(u16::from_be_bytes([ip[4], ip[5]]));
+    if ip.len() < length {
+        return false;
+    }
+    let source = &ip[8..24];
+    let link_local = |address: &[u8]| address[0] == 0xfe && address[1] & 0xc0 == 0x80;
+    if source[..8] == prefix.octets()[..8] || link_local(source) {
+        return true;
+    }
+    if source != [0; 16] || ip[24..26] != [0xff, 2] {
+        return false;
+    }
+    let mut next = ip[6];
+    let mut offset = 40;
+    // Linux MLD reports carry a hop-by-hop Router Alert header.
+    if next == 0 && length >= 48 {
+        next = ip[40];
+        offset += (usize::from(ip[41]) + 1) * 8;
+    }
+    if next != 58 || length < offset + 8 {
+        return false;
+    }
+    match ip[offset] {
+        131 | 132 | 143 => true, // MLD bootstrap listener reports.
+        133 => ip[7] == 255 && ip[26..39] == [0; 13] && ip[39] == 2,
+        135 if ip[7] == 255 && length >= offset + 24 => {
+            let target = &ip[offset + 8..offset + 24];
+            let solicited = [0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xff];
+            ip[24..37] == solicited && (target[..8] == prefix.octets()[..8] || link_local(target))
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -125,5 +168,72 @@ mod tests {
             ..host
         };
         assert!(permits(&packet([203, 0, 113, 2]), &bridged));
+    }
+    fn ipv6_packet(source: &str, destination: &str, next: u8, payload: &[u8]) -> Vec<u8> {
+        let mut frame = vec![0; 54];
+        frame[12..14].copy_from_slice(&[0x86, 0xdd]);
+        frame[14] = 0x60;
+        frame[18..20].copy_from_slice(&(payload.len() as u16).to_be_bytes());
+        frame[20] = next;
+        frame[21] = 255;
+        frame[22..38].copy_from_slice(&source.parse::<std::net::Ipv6Addr>().unwrap().octets());
+        frame[38..54].copy_from_slice(&destination.parse::<std::net::Ipv6Addr>().unwrap().octets());
+        frame.extend_from_slice(payload);
+        frame
+    }
+
+    #[test]
+    fn explicit_ipv6_prefix_rejects_foreign_sources_with_extensions_and_fragments() {
+        let host = HostConfig {
+            shared_ipv6_prefix: Some("fd42:1::".parse().unwrap()),
+            ..Default::default()
+        };
+        for next in [0, 17, 44, 58] {
+            assert!(permits(
+                &ipv6_packet("fd42:1::2", "fd42:2::2", next, &[0; 32]),
+                &host
+            ));
+            assert!(!permits(
+                &ipv6_packet("fd42:2::2", "fd42:3::2", next, &[0; 32]),
+                &host
+            ));
+        }
+        assert!(permits(
+            &ipv6_packet("fe80::2", "ff02::fb", 17, &[0; 8]),
+            &host
+        ));
+        assert!(!permits(
+            &ipv6_packet("::", "fd42:2::2", 17, &[0; 8]),
+            &host
+        ));
+    }
+
+    #[test]
+    fn ipv6_dad_router_solicitation_and_mld_bootstrap_survive_source_validation() {
+        let host = HostConfig {
+            shared_ipv6_prefix: Some("fd42:1::".parse().unwrap()),
+            ..Default::default()
+        };
+        let mut ns = vec![0; 24];
+        ns[0] = 135;
+        ns[8..24].copy_from_slice(&"fd42:1::2".parse::<std::net::Ipv6Addr>().unwrap().octets());
+        assert!(permits(
+            &ipv6_packet("::", "ff02::1:ff00:2", 58, &ns),
+            &host
+        ));
+        ns[8..24].copy_from_slice(&"fd42:2::2".parse::<std::net::Ipv6Addr>().unwrap().octets());
+        assert!(!permits(
+            &ipv6_packet("::", "ff02::1:ff00:2", 58, &ns),
+            &host
+        ));
+        assert!(permits(
+            &ipv6_packet("::", "ff02::2", 58, &[133, 0, 0, 0, 0, 0, 0, 0]),
+            &host
+        ));
+        let mut mld = vec![0; 16];
+        mld[0] = 58;
+        mld[8] = 143;
+        assert!(permits(&ipv6_packet("::", "ff02::16", 0, &mld), &host));
+        assert!(!permits(&ipv6_packet("::", "ff02::fb", 17, &[0; 8]), &host));
     }
 }

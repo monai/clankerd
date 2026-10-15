@@ -217,7 +217,7 @@ fn serve(
                     if !super::egress::permits(&buffer[..count], &config.spec.host_config) {
                         if diagnostics {
                             eprintln!(
-                                "native relay: rejected IPv4 source outside selected guest subnet"
+                                "native relay: rejected source outside selected guest network"
                             );
                         }
                         continue;

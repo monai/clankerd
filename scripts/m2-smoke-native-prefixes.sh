@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Actual guest RA/addressing and packets using an isolated prefix-capable helper.
+# Actual guest RA/addressing and packets using persisted resource prefixes.
 set -Eeuo pipefail
 [ "$(uname -s)" = Darwin ] || { echo 'Requires the Mac host' >&2; exit 1; }
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -26,9 +26,12 @@ PYRETAIN
 trap cleanup EXIT
 echo "Evidence directory: $work"
 sudo -n true
-"$root/scripts/build-prefix-test-helper.sh" "$work/helper-build" > "$work/helper-build.log" 2>&1 || { tail -40 "$work/helper-build.log"; exit 1; }
+if [ -z "${CLANKERD_VMNET_HELPER:-}" ]; then
+  "$root/scripts/build-vmnet-helper.sh" "$work/helper-build" > "$work/helper-build.log" 2>&1 || { tail -40 "$work/helper-build.log"; exit 1; }
+  export CLANKERD_VMNET_HELPER=$work/helper-build/vmnet-helper
+fi
 # Verify invalid prefix/mode combinations fail during parsing, without root.
-python3 - "$work/helper-build/vmnet-helper" <<'PYVALIDATE'
+python3 - "$CLANKERD_VMNET_HELPER" <<'PYVALIDATE'
 import subprocess,sys
 helper=sys.argv[1]
 for args in (['--nat66-prefix','2001:db8::'],['--nat66-prefix','fd42::1'],['--nat66-prefix','fd42::','--operation-mode','host']):
@@ -39,23 +42,26 @@ PYVALIDATE
 ifconfig -a > "$work/interfaces-before.txt"
 python3 - "$work" <<'PYCONFIG'
 from pathlib import Path
-import ipaddress,json,re,secrets,shutil,sys
+import ipaddress,json,re,sys
 work=Path(sys.argv[1]);occupied=[]
 for address,mask in re.findall(r'\binet ([0-9.]+) netmask (0x[0-9a-fA-F]+)',(work/'interfaces-before.txt').read_text()):
     occupied.append(ipaddress.IPv4Network((address,int(mask,16).bit_count()),strict=False))
 free=[i for i in range(200,255) if not any(ipaddress.ip_network(f'192.168.{i}.0/24').overlaps(n) for n in occupied)]
 assert len(free)>=2,'Need two unused /24 ranges'
-stem='fd'+secrets.token_hex(1)+':'+secrets.token_hex(2)+':'+secrets.token_hex(2)
-prefixes={f'192.168.{third}.1':f'{stem}:{i+1}::' for i,third in enumerate(free[:2])}
-(work/'prefix-helper.json').write_text(json.dumps(dict(helper=str(work/'helper-build/vmnet-helper'),prefixes=prefixes)))
-(work/'networks.tsv').write_text(''.join(f'{name}\t192.168.{third}.0/24\t{prefixes[f"192.168.{third}.1"]}\n' for name,third in zip(('prefix-one','prefix-two'),free[:2])))
+
+(work/'networks.tsv').write_text(''.join(f'{name}\t192.168.{third}.0/24\n' for name,third in zip(('prefix-one','prefix-two'),free[:2])))
 PYCONFIG
-cp "$root/scripts/fixtures/vmnet-prefix-helper-wrapper.py" "$work/prefix-helper.py"
-chmod +x "$work/prefix-helper.py"
-export CLANKERD_VMNET_HELPER=$work/prefix-helper.py
 while IFS=$'\t' read -r network subnet prefix; do
   "$vmctl" network create "$network" --mode shared --subnet "$subnet" > "$work/$network-create.txt"
 done < "$work/networks.tsv"
+"$vmctl" network inspect prefix-one prefix-two > "$work/networks.json"
+python3 - "$work/networks.json" > "$work/networks.tsv" <<'PYRESOURCES'
+import json,sys
+rows=json.load(open(sys.argv[1]));assert len({r['ipv6_prefix'] for r in rows})==2,rows
+for row in rows:
+    assert row['ipv6_prefix'],row
+    print(row['name']+'\t'+row['subnet']['address']+'/'+str(row['subnet']['prefix_len'])+'\t'+row['ipv6_prefix'])
+PYRESOURCES
 server=$(cat "$root/scripts/fixtures/vmnet-ipv6-services.py")
 peer=$(cat "$root/scripts/fixtures/vmnet-isolation-peers.py")
 for name in prefix-a prefix-b prefix-c prefix-d; do
@@ -118,4 +124,4 @@ else
   echo 'OUTSTANDING external IPv6/NAT66: numeric destination unavailable from Mac'
 fi
 echo 'PASS two native shared prefixes: actual RA/addressing, four-guest within-network packet matrix, Mac access, IPv4 NAT and restart'
-echo 'COVERAGE: disposable patched helper only; production helper packaging, cross-network policy and IPv6 source enforcement remain open.'
+echo 'COVERAGE: persistent native prefix selection and packets; production cross-network PF lifecycle and complete raw-frame enforcement remain open.'

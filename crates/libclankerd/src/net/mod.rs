@@ -57,5 +57,14 @@ pub trait NetBackend: Send + Sync {
 
 pub(crate) fn validate_host_config(host: &crate::HostConfig) -> Result<()> {
     host.shared_network.addresses()?;
+    if let Some(prefix) = host.shared_ipv6_prefix
+        && (host.network_mode != crate::NetworkMode::Shared
+            || prefix.octets()[0] != 0xfd
+            || u128::from(prefix) & u128::from(u64::MAX) != 0)
+    {
+        return Err(crate::Error::invalid_parameter(
+            "native IPv6 prefix requires shared mode and an aligned fd00::/8 ULA /64",
+        ));
+    }
     Ok(())
 }

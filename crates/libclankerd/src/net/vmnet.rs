@@ -26,13 +26,19 @@ impl VmnetBackend {
 }
 impl Default for VmnetBackend {
     fn default() -> Self {
-        Self::new("/opt/vmnet-helper/bin/vmnet-helper")
+        let bundled = Path::new("/opt/clankerd/libexec/vmnet-helper");
+        Self::new(if bundled.is_file() {
+            bundled
+        } else {
+            Path::new("/opt/vmnet-helper/bin/vmnet-helper")
+        })
     }
 }
 
 impl NetBackend for VmnetBackend {
     fn start(&self, spec: &NetSpec) -> Result<NetAttachment> {
         crate::config::validate_bridge_config(&spec.host_config)?;
+        super::validate_host_config(&spec.host_config)?;
         let binary = &self.binary;
         // A leftover sidecar of an earlier run would hold the socket.
         self.stop_helper(spec);
@@ -77,6 +83,9 @@ impl NetBackend for VmnetBackend {
                     "--subnet-mask",
                     &mask.to_string(),
                 ]);
+                if let Some(prefix) = spec.host_config.shared_ipv6_prefix {
+                    command.args(["--nat66-prefix", &prefix.to_string()]);
+                }
                 if !spec.host_config.shared_peer_participation {
                     command.arg("--enable-isolation");
                 }
@@ -129,7 +138,9 @@ impl NetBackend for VmnetBackend {
                     log_tail(&log_path)
                 )));
             }
-            if spec.socket.exists() && interface_ready(&log_path) {
+            if spec.socket.exists()
+                && interface_ready(&log_path, spec.host_config.shared_ipv6_prefix)
+            {
                 // Recheck after reading the completion record: a helper that
                 // exited during publication cannot launch the workload.
                 match child.try_wait() {
@@ -334,12 +345,13 @@ fn helper_pid(socket: &Path) -> Option<i32> {
 
 /// Native vmnet publishes a flushed, single-line JSON record after creating
 /// the interface. Log text, partial JSON and socket existence are not a handshake.
-fn interface_ready(path: &Path) -> bool {
+fn interface_ready(path: &Path, expected_prefix: Option<std::net::Ipv6Addr>) -> bool {
     #[derive(serde::Deserialize)]
     struct InterfaceReady {
         vmnet_mac_address: String,
         vmnet_mtu: u64,
         vmnet_max_packet_size: u64,
+        vmnet_nat66_prefix: Option<String>,
     }
     let bytes = fs::read(path).unwrap_or_default();
     String::from_utf8_lossy(&bytes)
@@ -363,7 +375,12 @@ fn interface_ready(path: &Path) -> bool {
             let Some(mac) = mac else {
                 return false;
             };
-            mac.len() == 6
+            expected_prefix.is_none_or(|prefix| {
+                info.vmnet_nat66_prefix
+                    .as_deref()
+                    .and_then(|value| value.parse::<std::net::Ipv6Addr>().ok())
+                    == Some(prefix)
+            }) && mac.len() == 6
                 && mac[0] & 1 == 0
                 && mac.iter().any(|byte| *byte != 0)
                 && (576..=65535).contains(&info.vmnet_mtu)

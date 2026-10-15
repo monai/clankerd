@@ -44,3 +44,28 @@ virtual networks requires the host policy integration; subnet selection alone
 does not enforce isolation. Canonical host-only members use native host mode without per-interface isolation,
 so peer permission follows virtual-network membership. Inter-network exclusion
 is not complete until the host policy integration is installed and verified.
+
+New explicitly created shared networks also persist a randomly allocated ULA /64
+in `ipv6_prefix`; canonical member configuration copies it to
+`shared_ipv6_prefix`. The backend requests this prefix and requires the native
+metadata to acknowledge it before booting the workload. Prefix selection remains
+stable across machine restarts. Host-only resources have no global IPv6 prefix;
+implicit legacy mode/subnet resources retain native automatic prefix selection
+for existing common-network interoperability. Existing records with a null or
+absent prefix are not silently readdressed.
+
+The prefix-capable helper is built from checksum-pinned upstream 0.13.0 plus the
+reviewable patch in `scripts/patches/vmnet-helper-nat66-prefix.patch`.
+`scripts/m2-install-and-run-network-gates.sh` installs it root-owned at
+`/opt/clankerd/libexec/vmnet-helper`, with a dedicated sudoers entry, then runs the
+consolidated gates. The upstream `/opt/vmnet-helper` installation is unchanged.
+The backend prefers the clankerd helper when installed; an explicit
+`CLANKERD_VMNET_HELPER` selection remains authoritative.
+
+The VMM-owned relay rejects IPv4 sources outside the selected guest subnet and,
+for an explicitly prefixed resource, IPv6 sources outside its ULA /64 or
+link-local scope. Bootstrap DAD, router solicitation and MLD reports remain
+permitted. This removes the demonstrated foreign-prefix state-spoof path before
+host PF lookup. It does not constitute completed cross-network isolation: the
+production PF controller, legacy/host-only IPv6 policy, host-address impersonation
+and the remaining raw Ethernet cases still require enforcement and acceptance.

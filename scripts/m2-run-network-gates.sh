@@ -24,11 +24,11 @@ trap 'kill "$refresh_pid" 2>/dev/null || true' EXIT
   /usr/bin/otool -L /opt/homebrew/lib/libkrun.1.dylib
   sysctl net.inet.ip.forwarding net.inet6.ip6.forwarding
 } > "$work/host-preflight.log" 2>&1 || true
-stages=(m2-smoke-other-vmm m2-smoke-host-only m2-test-isolation-pf-tags m2-test-isolation-pf-state-matrix m2-smoke-vmnet m2-smoke-ipv6 m2-smoke-lifetimes m2-smoke-recovery m2-smoke-bridged m2-smoke-test)
+stages=(m2-smoke-other-vmm m2-smoke-host-only m2-smoke-native-prefixes m2-test-isolation-pf-state-matrix m2-smoke-vmnet m2-smoke-ipv6 m2-smoke-lifetimes m2-smoke-recovery m2-smoke-bridged m2-smoke-test)
 if [ "$#" -gt 0 ]; then
   for requested in "$@"; do
     found=0
-    for stage in "${stages[@]}" m2-test-isolation-pf-state m2-probe-native-prefixes m2-smoke-native-prefixes; do [ "$stage" != "$requested" ] || found=1; done
+    for stage in "${stages[@]}" m2-test-isolation-pf-state m2-test-isolation-pf-tags m2-probe-native-prefixes; do [ "$stage" != "$requested" ] || found=1; done
     [ "$found" = 1 ] || { echo "Unknown gate: $requested" >&2; exit 1; }
   done
   stages=("$@")
@@ -38,6 +38,7 @@ fi
 fingerprint() {
   {
     printf '%s\n' "$1" "${PF_TEST_STATE_POLICY:-if-bound}" "${IMAGE:-}" "${OUT:-}"
+    if [ -n "${CLANKERD_VMNET_HELPER:-}" ]; then shasum -a 256 "$CLANKERD_VMNET_HELPER"; fi
     git -C "$root" rev-parse HEAD
     git -C "$root" diff HEAD -- crates scripts Makefile Cargo.lock
     find "$root/scripts/fixtures" -type f ! -path '*/__pycache__/*' -exec shasum -a 256 {} + | sort
