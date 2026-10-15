@@ -163,19 +163,16 @@ ethernets:
     dhcp4: true
     dhcp6: true
     accept-ra: true
+    optional: true
     dhcp4-overrides: {route-metric: 50}
+    dhcp6-overrides: {route-metric: 50}
 ''')
     configuration = {'users':[{'name':'gate','sudo':'ALL=(ALL) NOPASSWD:ALL','shell':'/bin/bash',
                               'ssh_authorized_keys':[ssh_public.strip()]}],
                      'write_files':[{'path':'/opt/echo.py','encoding':'b64','content':base64.b64encode(server.encode()).decode()},
                                     {'path':'/etc/avahi/avahi-daemon.conf','content':'[server]\nhost-name=interop-qemu\nallow-interfaces=eth0\nuse-ipv4=yes\nuse-ipv6=yes\n[reflector]\nenable-reflector=no\n'}],
                      'runcmd':[['touch','/var/lib/interop-seed-ready']]}
-    configuration['write_files'].extend([
-        {'path':'/etc/systemd/network/05-interop-management.network','content':'[Match]\nMACAddress=52:54:00:71:00:01\n[Link]\nRequiredForOnline=no\n[Network]\nAddress=10.0.2.15/24\nDNS=10.0.2.3\n[Route]\nGateway=10.0.2.2\nMetric=900\n'},
-        {'path':'/etc/systemd/network/05-interop-test.network','content':'[Match]\nMACAddress='+mac+'\n[Link]\nRequiredForOnline=no\n[Network]\nDHCP=yes\nIPv6AcceptRA=yes\n[DHCPv4]\nRouteMetric=50\n'},
-        {'path':'/opt/interop-network.sh','permissions':'0755','content':'#!/bin/sh\nset -eux\nsystemctl restart systemd-networkd\nip link set mgmt0 up\nip address replace 10.0.2.15/24 dev mgmt0\nip route replace default via 10.0.2.2 dev mgmt0 metric 900\nip link set eth0 up\nresolvectl dns mgmt0 10.0.2.3\nresolvectl domain mgmt0 "~."\nip -brief address\nip route\nnetworkctl status --no-pager mgmt0 eth0\n'}
-    ])
-    configuration['runcmd'].insert(0,['/opt/interop-network.sh'])
+    configuration['write_files'].append({'path':'/etc/systemd/system/clankerd-interop-echo.service','content':'[Unit]\nDescription=Disposable interoperability echo fixture\nAfter=network.target\n[Service]\nExecStart=/usr/bin/python3 /opt/echo.py server\nRestart=on-failure\n[Install]\nWantedBy=multi-user.target\n'})
     (directory/'user-data').write_text('#cloud-config\n'+json.dumps(configuration))
     run(['hdiutil','makehybrid','-iso','-joliet','-default-volume-name','CIDATA','-o',WORK/'seed.iso',directory])
 
@@ -299,8 +296,10 @@ def main():
     progress('PASS management SSH; recording guest networking before provisioning')
     (WORK/'guest-cloud-init.log').write_text(ssh('sudo tail -150 /var/log/cloud-init.log; sudo journalctl -u systemd-networkd --no-pager -n 80',check=False))
     (WORK/'guest-network-before-provision.txt').write_text(ssh('ip -j address; ip route; ip -6 route; cat /etc/resolv.conf; resolvectl status; sudo cloud-init status --long',check=False))
-    progress('Install fixture packages through management networking (bounded 5 minutes)')
-    ssh('sudo env DEBIAN_FRONTEND=noninteractive sh -ec "apt-get update -qq; apt-get install -y -qq python3 avahi-daemon avahi-utils; systemctl restart avahi-daemon; nohup python3 /opt/echo.py server >/var/log/interop-echo.log 2>&1 &"',timeout=300)
+    ssh('sudo netplan generate',timeout=20)
+    progress('Install fixture packages (bounded per-request timeouts and 5-minute command limit)')
+    provision='apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -qq; apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y -qq python3 avahi-daemon avahi-utils; systemctl daemon-reload; systemctl restart avahi-daemon; systemctl start clankerd-interop-echo'
+    ssh('sudo env DEBIAN_FRONTEND=noninteractive sh -ec '+shlex.quote(provision),timeout=300)
     until(lambda:ssh('systemctl is-active avahi-daemon',timeout=8).strip()=='active',30,'QEMU Avahi readiness')
     # Local listener control before any negative policy observation.
     def listeners(name):
