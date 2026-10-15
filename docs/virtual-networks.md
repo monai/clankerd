@@ -41,5 +41,6 @@ serve as an enforced security identity.
 
 This change stores policy identity and addressing. Packet enforcement between
 virtual networks requires the host policy integration; subnet selection alone
-does not enforce isolation. Native host-only per-interface isolation also needs
-replacement to permit peer communication within one host-only virtual network.
+does not enforce isolation. Canonical host-only members use native host mode without per-interface isolation,
+so peer permission follows virtual-network membership. Inter-network exclusion
+is not complete until the host policy integration is installed and verified.

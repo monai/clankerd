@@ -77,9 +77,7 @@ impl NetBackend for VmnetBackend {
                     "--subnet-mask",
                     &mask.to_string(),
                 ]);
-                if spec.host_config.network_mode == NetworkMode::HostOnly
-                    || !spec.host_config.shared_peer_participation
-                {
+                if !spec.host_config.shared_peer_participation {
                     command.arg("--enable-isolation");
                 }
             }

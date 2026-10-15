@@ -630,6 +630,10 @@ fn host_only_native_attachment_and_singleton_membership_persist() {
         machine.start().unwrap();
         let args = rig.args();
         assert!(args.contains("--operation-mode host"), "{args}");
+        assert!(
+            !args.contains("--enable-isolation"),
+            "network members must retain peer communication: {args}"
+        );
         assert!(!args.contains("--operation-mode shared"), "{args}");
         assert!(assigned.virtual_network.is_some());
         assert_eq!(machine.inspect().unwrap().host_config, assigned);

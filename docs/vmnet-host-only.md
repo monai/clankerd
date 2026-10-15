@@ -1,33 +1,24 @@
-Historical native attachment stage
-=================================
+Host-only virtual networks
+==========================
 
-The per-machine policy described below predates the accepted virtual-network
-model. [Virtual network resources](virtual-networks.md) supersede its peer
-participation and mandatory per-interface isolation semantics. Native host
-operation mode remains the attachment mechanism.
+Create a host-only virtual network, then assign its members:
 
-Host-only native attachment
-===========================
+```
+vmctl network create local --mode host-only
+vmctl run --network local --name first IMAGE COMMAND
+vmctl run --network local --name second IMAGE COMMAND
+```
 
-`vmctl create/run --network-mode host-only` selects vmnet-helper's `host`
-operation mode and always passes `--enable-isolation`. The CLI records peer
-participation as false and defaults to `192.168.128.0/24`; `--shared-network`
-selects another private subnet. Native host mode supplies no built-in NAT.
-The selected mode, subnet and participation policy persist through restart.
+Members of `local` are permitted peers. A network containing one machine provides
+individual isolation. Native vmnet host mode supplies addressing and Mac access
+without built-in NAT; canonical members do not use per-interface native isolation,
+which would prevent communication between members of the same network.
 
-API clients set `host_config.network_mode` to `"host-only"` and
-`host_config.shared_peer_participation` to `false`. A true participation value
-is rejected. API clients should select an unused subnet explicitly: the generic
-HostConfig subnet default remains `192.168.105.0/24`. Native host and shared
-attachments cannot use the same subnet; setup failures do not fall back to
-another network or mode.
+Network membership, mode and the allocated subnet persist through machine restart.
+The CLI also accepts the legacy `--network-mode host-only` selection, which is
+mapped to a virtual network; see [virtual network resources](virtual-networks.md).
 
-This implements native attachment selection, not the complete host-only security
-policy. Native isolation alone has not established exclusion of routed traffic
-through the Mac or compatible other VMMs. The shared-mode experiments exposed a
-routed bypass; production host enforcement is still required. PF integration is
-not part of this change. Ticket 05 remains open pending enforcement and actual
-Mac IPv4/IPv6 host access, peer exclusion, naming and external-connectivity gates.
-
-Native mode/address behavior:
-https://github.com/nirs/vmnet-helper/blob/v0.13.0/docs/integration.md
+Host enforcement between virtual networks is still under implementation. Neither
+subnet separation nor absence of a default route establishes exclusion of traffic
+routed through the Mac. Ticket 05 remains open until that production boundary and
+its lifecycle pass actual Mac packet tests.
