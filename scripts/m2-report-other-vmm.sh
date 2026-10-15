@@ -5,7 +5,7 @@ from pathlib import Path
 import json,re,sys
 root=Path(sys.argv[1])
 assert root.is_dir(),root
-for name in ('qemu-version.txt','qemu-netdevs.txt','firmware.json','helper.log','qemu-console.log'):
+for name in ('qemu-version.txt','qemu-netdevs.txt','firmware.json','helper.log','qemu-console.log','guest-network-before-provision.txt','guest-cloud-init.log','provision-timeout.log'):
     path=root/name
     if path.is_file():
         print('\n'+name+':')
@@ -17,7 +17,7 @@ for name in ('qemu-version.txt','qemu-netdevs.txt','firmware.json','helper.log',
             print('Network/boot evidence:\n'+'\n'.join(selected[-110:]))
             print('Console end:\n'+'\n'.join(lines[-25:]))
         else:
-            print('\n'.join(lines[-20:]))
+            print('\n'.join(lines[-70:] if name.startswith('guest-') else lines[-20:]))
 print('\nSeed files:')
 for path in sorted(root.rglob('*')):
     if path.is_file() and path.name in ('user-data','meta-data','network-config'):

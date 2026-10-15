@@ -33,8 +33,16 @@ MACHINES = []
 
 
 def run(args, *, timeout=60, check=True, input=None):
-    result = subprocess.run([str(a) for a in args], input=input, text=True,
-                            capture_output=True, env=ENV, timeout=timeout)
+    try:
+        result = subprocess.run([str(a) for a in args], input=input, text=True,
+                                capture_output=True, env=ENV, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        def decoded(value):return value.decode(errors='replace') if isinstance(value,bytes) else (value or '')
+        partial=shlex.join(map(str,args))+'\n'+decoded(error.stdout)+decoded(error.stderr)
+        with (WORK/'commands.log').open('a') as log:log.write(partial+'\n')
+        (WORK/'provision-timeout.log').write_text(partial)
+        progress('Timed-out command output:\n'+partial[-5000:])
+        raise
     with (WORK/'commands.log').open('a') as log:
         log.write(shlex.join(map(str, args))+'\n'+result.stdout+result.stderr+'\n')
     if check and result.returncode:
