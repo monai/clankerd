@@ -1,3 +1,11 @@
+Historical native attachment stage
+=================================
+
+The per-machine policy described below predates the accepted virtual-network
+model. [Virtual network resources](virtual-networks.md) supersede its peer
+participation and mandatory per-interface isolation semantics. Native host
+operation mode remains the attachment mechanism.
+
 Host-only native attachment
 ===========================
 

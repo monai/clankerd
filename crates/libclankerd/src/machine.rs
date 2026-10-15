@@ -334,11 +334,13 @@ impl Machine {
     /// fails with `InvalidParameter` naming each field that cannot change
     /// (use [`Machine::change_image`] to move to another image). Nothing is
     /// applied on failure.
-    pub fn update(&self, config: &MachineConfig, host_config: HostConfig) -> Result<()> {
+    pub fn update(&self, config: &MachineConfig, mut host_config: HostConfig) -> Result<()> {
         crate::tunnel::validate_host_config(&host_config)?;
         crate::config::validate_bridge_config(&host_config)?;
         crate::net::validate_host_config(&host_config)?;
         crate::mount::validate(&host_config.mounts)?;
+        let networks = crate::networks::Networks::lock(&self.inner.store)?;
+        let _lifecycle = self.inner.store.lock_lifecycle(&self.id)?;
         let starting = self.inner.lock();
         let (mut record, state) = self.inner.store.load(&self.id)?;
         let immutable = record.config.differing_fields(config);
@@ -360,6 +362,7 @@ impl Machine {
             &VolumeStore::new(self.inner.store.volumes_dir()),
             &host_config.mounts,
         )?;
+        networks.assign(&mut host_config, &self.id)?;
         record.host_config = host_config;
         self.inner.store.save_record(&record)?;
         self.inner

@@ -88,6 +88,10 @@ impl Store {
         })
     }
 
+    pub(crate) fn networks_dir(&self) -> PathBuf {
+        self.machines.parent().unwrap().join("networks")
+    }
+
     /// `<state>/volumes`, holding one directory per named volume.
     pub fn volumes_dir(&self) -> &Path {
         &self.volumes
