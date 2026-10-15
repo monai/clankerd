@@ -15,6 +15,7 @@ from pathlib import Path
 import shlex
 import shutil
 import signal
+import select
 import socket
 import subprocess
 import sys
@@ -35,7 +36,8 @@ MACHINES = []
 def run(args, *, timeout=60, check=True, input=None):
     try:
         result = subprocess.run([str(a) for a in args], input=input, text=True,
-                                capture_output=True, env=ENV, timeout=timeout)
+                                capture_output=True, env=ENV, timeout=timeout,
+                                stdin=subprocess.DEVNULL if input is None else None)
     except subprocess.TimeoutExpired as error:
         def decoded(value):return value.decode(errors='replace') if isinstance(value,bytes) else (value or '')
         partial=shlex.join(map(str,args))+'\n'+decoded(error.stdout)+decoded(error.stderr)
@@ -58,7 +60,12 @@ def start(args, log):
 
 
 def progress(message):
-    print(message, flush=True)
+    data=memoryview((message+'\n').encode())
+    while data:
+        try:
+            data=data[os.write(sys.stdout.fileno(),data):]
+        except BlockingIOError:
+            select.select([], [sys.stdout.fileno()], [])
 
 
 def until(action, seconds, description):
@@ -170,7 +177,7 @@ ethernets:
     configuration = {'users':[{'name':'gate','sudo':'ALL=(ALL) NOPASSWD:ALL','shell':'/bin/bash',
                               'ssh_authorized_keys':[ssh_public.strip()]}],
                      'write_files':[{'path':'/opt/echo.py','encoding':'b64','content':base64.b64encode(server.encode()).decode()},
-                                    {'path':'/etc/avahi/avahi-daemon.conf','content':'[server]\nhost-name=interop-qemu\nallow-interfaces=eth0\nuse-ipv4=yes\nuse-ipv6=yes\n[reflector]\nenable-reflector=no\n'}],
+                                    {'path':'/opt/interop-avahi-daemon.conf','content':'[server]\nhost-name=interop-qemu\nallow-interfaces=eth0\nuse-ipv4=yes\nuse-ipv6=yes\n[reflector]\nenable-reflector=no\n'}],
                      'runcmd':[['touch','/var/lib/interop-seed-ready']]}
     configuration['write_files'].append({'path':'/etc/systemd/system/clankerd-interop-echo.service','content':'[Unit]\nDescription=Disposable interoperability echo fixture\nAfter=network.target\n[Service]\nExecStart=/usr/bin/python3 /opt/echo.py server\nRestart=on-failure\n[Install]\nWantedBy=multi-user.target\n'})
     (directory/'user-data').write_text('#cloud-config\n'+json.dumps(configuration))
@@ -298,7 +305,7 @@ def main():
     (WORK/'guest-network-before-provision.txt').write_text(ssh('ip -j address; ip route; ip -6 route; cat /etc/resolv.conf; resolvectl status; sudo cloud-init status --long',check=False))
     ssh('sudo netplan generate',timeout=20)
     progress('Install fixture packages (bounded per-request timeouts and 5-minute command limit)')
-    provision='apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -qq; apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y -qq python3 avahi-daemon avahi-utils; systemctl daemon-reload; systemctl restart avahi-daemon; systemctl start clankerd-interop-echo'
+    provision='apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -qq; apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y -qq python3 avahi-daemon avahi-utils; install -m 0644 /opt/interop-avahi-daemon.conf /etc/avahi/avahi-daemon.conf; systemctl daemon-reload; systemctl restart avahi-daemon; systemctl start clankerd-interop-echo'
     ssh('sudo env DEBIAN_FRONTEND=noninteractive sh -ec '+shlex.quote(provision),timeout=300)
     until(lambda:ssh('systemctl is-active avahi-daemon',timeout=8).strip()=='active',30,'QEMU Avahi readiness')
     # Local listener control before any negative policy observation.
