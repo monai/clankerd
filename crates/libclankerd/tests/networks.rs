@@ -156,3 +156,74 @@ fn legacy_peer_opt_out_allocates_a_singleton_network_instead_of_reusing_the_subn
         "no per-member veto in canonical model"
     );
 }
+
+#[test]
+fn implicit_network_names_cannot_change_requested_mode_or_subnet() {
+    let env = Env::new();
+    let engine = Engine::new(env.config(std::sync::Arc::new(
+        libclankerd::vmm::LocalProcessVmm::new(guestd_path()),
+    )))
+    .unwrap();
+    engine
+        .create_network(
+            "shared-192.168.105.0-24",
+            NetworkKind::HostOnly,
+            Some("192.168.120.0/24".parse().unwrap()),
+        )
+        .unwrap();
+    assert_eq!(
+        engine
+            .create(Some("plain"), sh("true"), Default::default())
+            .err()
+            .unwrap()
+            .kind(),
+        ErrorKind::Conflict
+    );
+}
+
+#[test]
+fn repeated_legacy_singleton_updates_preserve_membership() {
+    let env = Env::new();
+    let engine = Engine::new(env.config(std::sync::Arc::new(
+        libclankerd::vmm::LocalProcessVmm::new(guestd_path()),
+    )))
+    .unwrap();
+    let machine = engine
+        .create(Some("member"), sh("true"), Default::default())
+        .unwrap();
+    let host = libclankerd::HostConfig {
+        shared_peer_participation: false,
+        ..Default::default()
+    };
+    let config = machine.inspect().unwrap().config;
+    machine.update(&config, host.clone()).unwrap();
+    let first = machine.inspect().unwrap().host_config;
+    machine.update(&config, host).unwrap();
+    assert_eq!(machine.inspect().unwrap().host_config, first);
+}
+
+#[test]
+fn missing_network_update_does_not_create_a_volume() {
+    let env = Env::new();
+    let engine = Engine::new(env.config(std::sync::Arc::new(
+        libclankerd::vmm::LocalProcessVmm::new(guestd_path()),
+    )))
+    .unwrap();
+    let machine = engine
+        .create(Some("member"), sh("true"), Default::default())
+        .unwrap();
+    let config = machine.inspect().unwrap().config;
+    let host = libclankerd::HostConfig {
+        virtual_network: Some("missing".into()),
+        mounts: vec![libclankerd::Mount::volume("must-not-exist", "/storage")],
+        ..Default::default()
+    };
+    assert_eq!(
+        machine.update(&config, host).unwrap_err().kind(),
+        ErrorKind::NotFound
+    );
+    assert_eq!(
+        engine.volume("must-not-exist").unwrap_err().kind(),
+        ErrorKind::NotFound
+    );
+}

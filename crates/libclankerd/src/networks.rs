@@ -154,15 +154,29 @@ impl<'a> Networks<'a> {
         let network = if let Some(name) = &host.virtual_network {
             self.get(name)?
         } else if !host.shared_peer_participation {
-            self.create(
-                &format!("machine-{machine_id}"),
-                if host.network_mode == NetworkMode::HostOnly {
-                    NetworkKind::HostOnly
-                } else {
-                    NetworkKind::Shared
-                },
-                None,
-            )?
+            let name = format!("machine-{machine_id}");
+            let kind = if host.network_mode == NetworkMode::HostOnly {
+                NetworkKind::HostOnly
+            } else {
+                NetworkKind::Shared
+            };
+            match self.get(&name) {
+                Ok(network) => {
+                    let (record, _) = self.store.load(machine_id)?;
+                    if network.mode != kind
+                        || record.host_config.virtual_network.as_deref() != Some(&name)
+                    {
+                        return Err(Error::conflict(
+                            "singleton virtual network conflicts with existing membership",
+                        ));
+                    }
+                    network
+                }
+                Err(error) if error.kind() == crate::ErrorKind::NotFound => {
+                    self.create(&name, kind, None)?
+                }
+                Err(error) => return Err(error),
+            }
         } else {
             let kind = if host.network_mode == NetworkMode::HostOnly {
                 NetworkKind::HostOnly
@@ -180,7 +194,14 @@ impl<'a> Networks<'a> {
                 host.shared_network.prefix_len
             );
             match self.get(&name) {
-                Ok(network) => network,
+                Ok(network) => {
+                    if network.mode != kind || network.subnet != host.shared_network {
+                        return Err(Error::conflict(
+                            "implicit virtual network name conflicts with requested mode or subnet",
+                        ));
+                    }
+                    network
+                }
                 Err(error) if error.kind() == crate::ErrorKind::NotFound => {
                     self.create(&name, kind, Some(host.shared_network.clone()))?
                 }

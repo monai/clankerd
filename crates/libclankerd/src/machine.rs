@@ -358,11 +358,11 @@ impl Machine {
                 record.name
             )));
         }
+        networks.assign(&mut host_config, &self.id)?;
         crate::mount::ensure_volume(
             &VolumeStore::new(self.inner.store.volumes_dir()),
             &host_config.mounts,
         )?;
-        networks.assign(&mut host_config, &self.id)?;
         record.host_config = host_config;
         self.inner.store.save_record(&record)?;
         self.inner
