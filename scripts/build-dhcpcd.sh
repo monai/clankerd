@@ -31,6 +31,9 @@ src=$cache/src-$VERSION-$TARGET
 rm -rf "$src"
 mkdir -p "$src"
 tar -C "$src" --strip-components=1 -xf "$tarball"
+# Backport upstream event retirement on failed kernel deletion. Otherwise a
+# reused DHCP socket can remain registered in userspace but absent from epoll.
+patch -s -d "$src" -p1 < "$root/scripts/patches/dhcpcd-eloop-retire-closed-fd.patch"
 wrap=$cache/wrap-$TARGET
 mkdir -p "$wrap"
 printf '#!/bin/sh\nexec zig cc -target %s "$@"\n' "$TARGET" >"$wrap/cc"

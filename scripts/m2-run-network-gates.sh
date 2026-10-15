@@ -41,7 +41,7 @@ fingerprint() {
     git -C "$root" rev-parse HEAD
     git -C "$root" diff HEAD -- crates scripts Makefile Cargo.lock
     find "$root/scripts/fixtures" -type f ! -path '*/__pycache__/*' -exec shasum -a 256 {} + | sort
-    for binary in "${OUT:-$root/build/rust}/darwin-arm64/vmctl" "${OUT:-$root/build/rust}/darwin-arm64/clankerd-vmspawn" "${OUT:-$root/build/rust}/linux-arm64/clankerd-guestd"; do
+    for binary in "${OUT:-$root/build/rust}/darwin-arm64/vmctl" "${OUT:-$root/build/rust}/darwin-arm64/clankerd-vmspawn" "${OUT:-$root/build/rust}/linux-arm64/clankerd-guestd" "${OUT:-$root/build/rust}/linux-arm64/dhcpcd"; do
       shasum -a 256 "$binary"
     done
   } | shasum -a 256 | awk '{print $1}'
