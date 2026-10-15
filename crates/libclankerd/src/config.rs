@@ -238,6 +238,8 @@ impl std::str::FromStr for SharedNetwork {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HostConfig {
+    /// Canonical virtual network membership; bridged attachments have none.
+    pub virtual_network: Option<String>,
     pub network_mode: NetworkMode,
     /// Explicit physical interface for bridged networking; never follows the host default route.
     pub bridge_interface: Option<String>,
@@ -256,11 +258,6 @@ pub struct HostConfig {
 }
 
 pub(crate) fn validate_bridge_config(host: &HostConfig) -> crate::error::Result<()> {
-    if host.network_mode == NetworkMode::HostOnly && host.shared_peer_participation {
-        return Err(crate::error::Error::invalid_parameter(
-            "host-only networking requires shared_peer_participation=false",
-        ));
-    }
     if host.network_mode == NetworkMode::Bridged && !host.shared_peer_participation {
         return Err(crate::error::Error::invalid_parameter(
             "shared peer isolation does not apply to a bridged physical interface",
@@ -295,6 +292,7 @@ pub(crate) fn validate_bridge_config(host: &HostConfig) -> crate::error::Result<
 impl Default for HostConfig {
     fn default() -> Self {
         Self {
+            virtual_network: None,
             network_mode: NetworkMode::default(),
             bridge_interface: None,
             shared_network: SharedNetwork::default(),

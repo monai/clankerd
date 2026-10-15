@@ -199,9 +199,9 @@ fn shared_network_cli_options_are_persisted_and_invalid_subnets_are_rejected() {
     let info: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         info[0]["host_config"]["shared_network"],
-        serde_json::json!({"address":"192.168.109.0","prefix_len":24})
+        serde_json::json!({"address":"192.168.64.0","prefix_len":24})
     );
-    assert_eq!(info[0]["host_config"]["shared_peer_participation"], false);
+    assert_eq!(info[0]["host_config"]["shared_peer_participation"], true);
     let invalid = vmctl(
         dir.path(),
         &guestd,
@@ -218,7 +218,7 @@ fn shared_network_cli_options_are_persisted_and_invalid_subnets_are_rejected() {
 }
 
 #[test]
-fn host_only_cli_persists_mandatory_isolation_and_a_distinct_default_subnet() {
+fn host_only_cli_persists_membership_and_a_distinct_default_subnet() {
     let dir = tempfile::tempdir().unwrap();
     let guestd = guestd();
     let created = vmctl(
@@ -242,7 +242,7 @@ fn host_only_cli_persists_mandatory_isolation_and_a_distinct_default_subnet() {
     let inspected = vmctl(dir.path(), &guestd, &["inspect", "host-only"]);
     let info: serde_json::Value = serde_json::from_slice(&inspected.stdout).unwrap();
     assert_eq!(info[0]["host_config"]["network_mode"], "host-only");
-    assert_eq!(info[0]["host_config"]["shared_peer_participation"], false);
+    assert_eq!(info[0]["host_config"]["shared_peer_participation"], true);
     assert_eq!(
         info[0]["host_config"]["shared_network"],
         serde_json::json!({"address":"192.168.128.0","prefix_len":24})

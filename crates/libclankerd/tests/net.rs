@@ -390,7 +390,7 @@ fn bridged_network_requires_an_explicit_physical_interface() {
 }
 
 #[test]
-fn selected_shared_network_and_peer_isolation_are_used_until_the_next_restart() {
+fn singleton_membership_and_selected_network_are_preserved_until_the_next_restart() {
     let rig = rig(FAKE_VMNET);
     let host: HostConfig = serde_json::from_value(serde_json::json!({
         "shared_network":{"address":"192.168.109.0","prefix_len":24},
@@ -407,11 +407,24 @@ fn selected_shared_network_and_peer_isolation_are_used_until_the_next_restart() 
         .unwrap();
     machine.start().unwrap();
     let args = rig.args();
-    assert!(args.contains("--start-address 192.168.109.1"), "{args}");
-    assert!(args.contains("--end-address 192.168.109.254"), "{args}");
-    assert!(args.contains("--subnet-mask 255.255.255.0"), "{args}");
-    assert!(args.contains("--enable-isolation"), "{args}");
     let before = machine.inspect().unwrap();
+    assert!(before.host_config.virtual_network.is_some());
+    assert_ne!(
+        before.host_config.shared_network.address.to_string(),
+        "192.168.109.0"
+    );
+    let base = u32::from(before.host_config.shared_network.address);
+    assert!(
+        args.contains(&format!(
+            "--start-address {}",
+            std::net::Ipv4Addr::from(base + 1)
+        )),
+        "{args}"
+    );
+    assert!(
+        !args.contains("--enable-isolation"),
+        "membership replaces per-member isolation"
+    );
     let next: HostConfig = serde_json::from_value(serde_json::json!({
         "shared_network":{"address":"192.168.110.0","prefix_len":25},
         "shared_peer_participation":true
@@ -596,7 +609,7 @@ while :; do sleep 0.1; done
 }
 
 #[test]
-fn host_only_native_attachment_persists_and_always_enables_isolation() {
+fn host_only_native_attachment_and_singleton_membership_persist() {
     let rig = rig(FAKE_VMNET);
     let host: HostConfig = serde_json::from_value(serde_json::json!({
         "network_mode":"host-only",
@@ -612,32 +625,32 @@ fn host_only_native_attachment_persists_and_always_enables_isolation() {
             host.clone(),
         )
         .unwrap();
+    let assigned = machine.inspect().unwrap().host_config;
     for _ in 0..2 {
         machine.start().unwrap();
         let args = rig.args();
         assert!(args.contains("--operation-mode host"), "{args}");
         assert!(!args.contains("--operation-mode shared"), "{args}");
-        assert!(args.contains("--enable-isolation"), "{args}");
-        assert!(args.contains("--start-address 192.168.128.1"), "{args}");
-        assert_eq!(machine.inspect().unwrap().host_config, host);
+        assert!(assigned.virtual_network.is_some());
+        assert_eq!(machine.inspect().unwrap().host_config, assigned);
         machine.stop(Duration::from_secs(10)).unwrap();
     }
 }
 
 #[test]
-fn host_only_rejects_peer_participation_before_creating_a_machine() {
+fn host_only_members_share_the_same_virtual_network() {
     let rig = rig(FAKE_VMNET);
-    let host: HostConfig = serde_json::from_value(
-        serde_json::json!({"network_mode":"host-only","shared_peer_participation":true}),
-    )
-    .unwrap();
-    let error = rig
+    let host = HostConfig {
+        network_mode: libclankerd::NetworkMode::HostOnly,
+        ..Default::default()
+    };
+    let a = rig
         .engine
-        .create(Some("host-invalid"), sh("exit 0"), host)
-        .err()
-        .expect("peer participation must be rejected");
-    assert_eq!(error.kind(), ErrorKind::InvalidParameter);
-    assert!(error.message().contains("host-only"), "{error}");
-    assert!(rig.vmm.specs.lock().unwrap().is_empty());
-    assert!(!rig.helper.with_extension("args").exists());
+        .create(Some("host-a"), sh("true"), host.clone())
+        .unwrap();
+    let b = rig.engine.create(Some("host-b"), sh("true"), host).unwrap();
+    let a = a.inspect().unwrap().host_config;
+    let b = b.inspect().unwrap().host_config;
+    assert_eq!(a.virtual_network, b.virtual_network);
+    assert!(a.shared_peer_participation && b.shared_peer_participation);
 }

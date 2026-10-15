@@ -118,6 +118,27 @@ enum Command {
     /// Manage named volumes.
     #[command(subcommand)]
     Volume(VolumeCommand),
+    /// Manage virtual networks and their isolation boundaries.
+    #[command(subcommand)]
+    Network(NetworkCommand),
+}
+
+#[derive(Subcommand)]
+enum NetworkCommand {
+    Ls,
+    Create {
+        name: String,
+        #[arg(long, default_value = "shared")]
+        mode: libclankerd::NetworkKind,
+        #[arg(long)]
+        subnet: Option<SharedNetwork>,
+    },
+    Inspect {
+        names: Vec<String>,
+    },
+    Rm {
+        names: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -168,6 +189,9 @@ struct CreateArgs {
     /// Signal `vmctl stop` sends the main process (default: the image's StopSignal, else SIGTERM).
     #[arg(long = "stop-signal", value_name = "SIGNAL")]
     stop_signal: Option<String>,
+    /// Join an existing virtual network.
+    #[arg(long, conflicts_with_all=["network_mode","bridge_interface","shared_network","isolate_peers"])]
+    network: Option<String>,
     /// Attachment mode; bridged mode requires --bridge-interface.
     #[arg(long, default_value = "shared")]
     network_mode: libclankerd::NetworkMode,
@@ -331,10 +355,11 @@ fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error>
         }
     });
     let host_config = HostConfig {
+        virtual_network: a.network,
         network_mode: a.network_mode,
         bridge_interface: a.bridge_interface,
         shared_network,
-        shared_peer_participation: !host_only && !a.isolate_peers,
+        shared_peer_participation: !a.isolate_peers,
         mounts,
         cpus: a.cpus,
         memory,
@@ -475,6 +500,31 @@ fn run(cli: Cli) -> Result<u8, Error> {
             Ok(n.to_owned())
         })),
         Command::Volume(cmd) => volume(&engine, cmd),
+        Command::Network(cmd) => match cmd {
+            NetworkCommand::Ls => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&engine.networks()?).unwrap()
+                );
+                Ok(0)
+            }
+            NetworkCommand::Create { name, mode, subnet } => {
+                println!("{}", engine.create_network(&name, mode, subnet)?.name);
+                Ok(0)
+            }
+            NetworkCommand::Inspect { names } => {
+                let infos = names
+                    .iter()
+                    .map(|name| engine.inspect_network(name))
+                    .collect::<Result<Vec<_>, _>>()?;
+                println!("{}", serde_json::to_string_pretty(&infos).unwrap());
+                Ok(0)
+            }
+            NetworkCommand::Rm { names } => Ok(each(&names, |name| {
+                engine.remove_network(name)?;
+                Ok(name.to_owned())
+            })),
+        },
     }
 }
 

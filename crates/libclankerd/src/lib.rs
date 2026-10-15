@@ -44,6 +44,7 @@ mod machine;
 mod merge;
 mod mount;
 pub mod net;
+mod networks;
 mod rootdisk;
 mod signal;
 mod state;
@@ -71,3 +72,5 @@ pub use tunnel::GuestBinding;
 pub use vmm::Vmm;
 pub use vmspawn_populator::VmspawnPopulator;
 pub use volumes::{DEFAULT_SIZE as DEFAULT_VOLUME_SIZE, VolumeInfo};
+
+pub use networks::{NetworkKind, VirtualNetwork};

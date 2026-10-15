@@ -273,7 +273,7 @@ impl Inner {
 
 #[derive(Clone)]
 pub struct Engine {
-    inner: Arc<Inner>,
+    pub(crate) inner: Arc<Inner>,
 }
 
 impl Engine {
@@ -312,7 +312,7 @@ impl Engine {
         &self,
         name: Option<&str>,
         config: MachineConfig,
-        host_config: HostConfig,
+        mut host_config: HostConfig,
     ) -> Result<Machine> {
         if config.image.is_empty() {
             return Err(Error::invalid_parameter("image is required"));
@@ -351,6 +351,7 @@ impl Engine {
             None
         };
 
+        let networks = crate::networks::Networks::lock(&self.inner.store)?;
         let mut new_volume = None;
         {
             let _g = self.inner.lock();
@@ -363,6 +364,7 @@ impl Engine {
                     )));
                 }
             }
+            networks.assign(&mut host_config, &id)?;
             let volumes = self.volume_store();
             if crate::mount::ensure_volume(&volumes, &host_config.mounts)? {
                 new_volume = crate::mount::volume_name(&host_config.mounts).map(str::to_owned);
@@ -384,6 +386,7 @@ impl Engine {
                 return Err(e);
             }
         }
+        drop(networks);
         if let Some((_, base)) = base {
             // The machine's root disk: `root.ext4` in its directory, a clone of the
             // cached base. A VMM attaches it as the guest's root block device.
@@ -503,7 +506,7 @@ fn validate_name(name: &str) -> Result<()> {
     }
 }
 
-fn random_id() -> Result<String> {
+pub(crate) fn random_id() -> Result<String> {
     use std::io::Read;
     let mut bytes = [0u8; 32];
     fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
