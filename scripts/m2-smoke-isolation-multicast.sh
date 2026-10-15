@@ -77,7 +77,7 @@ for name in $names; do
     evidence-c|evidence-e) subnet=192.168.106.0/24; isolation=(--isolate-peers);;
     evidence-d) subnet=192.168.107.0/24; isolation=();;
   esac
-  if ! "$vmctl" run -d --name "$name" --shared-network "$subnet" "${isolation[@]}" "$image" python3 -c "$server" server > "$work/$name-start.log" 2>&1; then
+  if ! "$vmctl" run -d --name "$name" --shared-network "$subnet" "${isolation[@]}" "$image" env EVIDENCE_NAME="$name" python3 -c "$server" server > "$work/$name-start.log" 2>&1; then
     echo "$name START FAILED (details retained)"; continue
   fi
   passed=0
@@ -155,6 +155,25 @@ for family in ('IPv4','IPv6'):
     assert observed.get(family,set())==expected,(sys.argv[1],family,observed,expected)
 PYMULTICAST
 done
+for target in "${healthy[@]}"; do
+  read -r v4 _ < "$work/$target-addresses.txt"
+  case "$target" in evidence-a|evidence-b) gateway=192.168.105.1;; evidence-c|evidence-e) gateway=192.168.106.1;; evidence-d) gateway=192.168.107.1;; esac
+  python3 - "$root/scripts/fixtures/vmnet-multicast-evidence.py" "$target" "$v4" "$gateway" <<'PYDISCOVER'
+import runpy,sys
+scope=runpy.run_path(sys.argv[1])
+scope['discover'](sys.argv[2],sys.argv[3],True,sys.argv[4])
+PYDISCOVER
+done
+for source in "${healthy[@]}"; do
+  for target in "${healthy[@]}"; do
+    read -r v4 _ < "$work/$target-addresses.txt"
+    expected=False
+    if [ "$source" = "$target" ] || { [[ "$source" = evidence-[ab] ]] && [[ "$target" = evidence-[ab] ]]; }; then expected=True; fi
+    "$vmctl" exec "$source" python3 -c "$multicast
+discover('$target','$v4',$expected)" > "$work/$source-$target-discovery.log"
+  done
+  echo "PASS $source mDNS A self/allowed-peer discovery and isolated-peer exclusion"
+done
 python3 - <<'PYEXTERNAL'
 import socket
 with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as connection:
@@ -166,4 +185,4 @@ for name in evidence-c evidence-e; do
   "$vmctl" exec "$name" python3 -c 'import socket;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.settimeout(15);s.connect(("1.1.1.1",443));print("PASS isolated IPv4 outbound TCP");s.close()'
 done
 echo 'Gateways: plain A/B 192.168.105.1; isolated C/E 192.168.106.1; separate plain D 192.168.107.1'
-echo 'Multicast DNS query delivery measured; responder discovery/access, other VMMs and external IPv6 remain untested.' 
+echo 'PASS multicast IPv4/IPv6 query delivery and fixture mDNS IPv4 A resolution; other-VMM/LAN discovery and external IPv6 remain untested.' 
