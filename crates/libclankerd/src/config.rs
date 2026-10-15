@@ -156,6 +156,7 @@ impl std::fmt::Display for PullPolicy {
 pub enum NetworkMode {
     #[default]
     Shared,
+    HostOnly,
     Bridged,
 }
 
@@ -166,7 +167,8 @@ impl std::str::FromStr for NetworkMode {
         match value {
             "shared" => Ok(Self::Shared),
             "bridged" => Ok(Self::Bridged),
-            _ => Err("network mode must be shared or bridged".into()),
+            "host-only" => Ok(Self::HostOnly),
+            _ => Err("network mode must be shared, host-only or bridged".into()),
         }
     }
 }
@@ -254,6 +256,11 @@ pub struct HostConfig {
 }
 
 pub(crate) fn validate_bridge_config(host: &HostConfig) -> crate::error::Result<()> {
+    if host.network_mode == NetworkMode::HostOnly && host.shared_peer_participation {
+        return Err(crate::error::Error::invalid_parameter(
+            "host-only networking requires shared_peer_participation=false",
+        ));
+    }
     if host.network_mode == NetworkMode::Bridged && !host.shared_peer_participation {
         return Err(crate::error::Error::invalid_parameter(
             "shared peer isolation does not apply to a bridged physical interface",
