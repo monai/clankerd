@@ -20,8 +20,8 @@
 //! `--boot-dir` (default: next to this binary); `--lenient-ownership` is a
 //! development flag for runs without root.
 //!
-//! As PID 1 (booted by libkrun's init.krun) guestd powers the machine off once
-//! the workload has ended and subscribers have seen the result: it signals
+//! As PID 1 (booted by libkrun's init.krun) guestd outlives the OCI command.
+//! An explicit Shutdown request ends the machine after delivering its result: it signals
 //! and reaps every process, syncs, unmounts and powers off (`power`).
 //!
 //! With `--boot` guestd first mounts the root disk (`/dev/vda`), pivots into
@@ -82,6 +82,7 @@ struct Inner {
     /// Process id of the workload while it runs.
     workload_pid: Option<i32>,
     exit_recorded: bool,
+    shutdown_requested: bool,
     startup_complete: bool,
     expect_attach: bool,
     attach_acknowledged: bool,
@@ -309,7 +310,7 @@ fn spawn_workload(w: &Workload, attach: &Arc<attach::Attach>) -> Result<std::pro
     })
 }
 
-/// Waits for the workload, records its result, then exits once subscribers have seen it.
+/// Records the command result, then waits for an explicit machine shutdown.
 fn supervise(
     child: Result<std::process::Child, i32>,
     shared: Arc<Shared>,
@@ -357,6 +358,12 @@ fn supervise(
     }
     shared.cv.notify_all();
 
+    {
+        let mut g = shared.inner.lock().unwrap();
+        while !g.shutdown_requested {
+            g = shared.cv.wait(g).unwrap();
+        }
+    }
     let deadline = Instant::now() + DRAIN_LIMIT;
     let acknowledged = {
         let mut g = shared.inner.lock().unwrap();
@@ -458,7 +465,14 @@ fn serve(
         METHOD_ATTACH => attach(input, out, call.parameters, &shared),
         METHOD_SHUTDOWN | METHOD_KILL => {
             let result = signal_workload(&call, &shared);
+            let shutdown = call.method == METHOD_SHUTDOWN && result.is_ok();
             let _ = reply(&mut out, result);
+            if shutdown {
+                let mut state = shared.inner.lock().unwrap();
+                state.expect_attach = false;
+                state.shutdown_requested = true;
+            }
+            shared.cv.notify_all();
         }
         clankerd_proto::guest::METHOD_NETWORK_STATUS => {
             let status = if BOOTED.load(std::sync::atomic::Ordering::Relaxed) {
@@ -492,31 +506,28 @@ fn serve(
     }
 }
 
-/// `Shutdown` (the stop signal, SIGTERM by default) and `Kill` (any signal) act on the workload only.
+/// Shutdown requests machine teardown; other signals target the OCI command only.
 fn signal_workload(call: &Call, shared: &Shared) -> Result<Value, exec::Failure> {
-    if call.method == METHOD_SHUTDOWN {
-        shared.inner.lock().unwrap().expect_attach = false;
-        shared.cv.notify_all();
-    }
-    let signal = if call.method == METHOD_SHUTDOWN {
-        // Parameters are optional: a bare Shutdown is SIGTERM.
-        serde_json::from_value::<ShutdownParams>(call.parameters.clone())
-            .map_or(libc::SIGTERM, |p| p.signal)
+    let shutdown = call.method == METHOD_SHUTDOWN;
+    let signal = if shutdown {
+        if call.parameters.is_null() {
+            libc::SIGTERM
+        } else {
+            params::<ShutdownParams>(call)?.signal
+        }
     } else {
         params::<SignalParams>(call)?.signal
     };
-    let Some(pid) = shared.inner.lock().unwrap().workload_pid else {
+    if let Some(pid) = shared.inner.lock().unwrap().workload_pid {
+        // SAFETY: signal delivery to the command owned by this guest agent.
+        if unsafe { libc::kill(pid, signal) } < 0 {
+            let error = std::io::Error::last_os_error();
+            if !shutdown || error.raw_os_error() != Some(libc::ESRCH) {
+                return Err((ERROR_CONFLICT, format!("signalling the workload: {error}")));
+            }
+        }
+    } else if !shutdown {
         return Err((ERROR_CONFLICT, "the workload is not running".into()));
-    };
-    // SAFETY: plain signal delivery to the workload we spawned and have not reaped.
-    if unsafe { libc::kill(pid, signal) } < 0 {
-        return Err((
-            ERROR_CONFLICT,
-            format!(
-                "signalling the workload: {}",
-                std::io::Error::last_os_error()
-            ),
-        ));
     }
     Ok(serde_json::json!({}))
 }

@@ -16,6 +16,12 @@ struct Cli {
     guestd: PathBuf,
 }
 
+impl Drop for Cli {
+    fn drop(&mut self) {
+        drop(common::cleanup_on_drop(self.dir.path(), &self.guestd));
+    }
+}
+
 impl Cli {
     fn new() -> Self {
         Cli {
@@ -75,6 +81,7 @@ fn a_named_volume_is_created_sparse_with_the_requested_size_and_survives_rm() {
     assert!(listing.contains("data"), "{listing}");
 
     // Plain rm keeps the volume.
+    cli.ok(&["stop", "a"]);
     cli.ok(&["rm", "a"]);
     assert!(cli.volume_file("data").exists());
     let inspect = cli.ok(&["volume", "inspect", "data"]);
@@ -97,6 +104,7 @@ fn a_named_volume_is_created_sparse_with_the_requested_size_and_survives_rm() {
     );
 
     // rm -v deletes it.
+    cli.ok(&["stop", "b"]);
     cli.ok(&["rm", "-v", "b"]);
     assert!(!cli.volume_file("data").exists());
 }

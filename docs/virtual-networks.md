@@ -117,8 +117,9 @@ restart and final cleanup. These checks passed in Mac suite
 `/tmp/clankerd-network-gates.M9Cztl`. The host-only gate now additionally verifies
 that independent state roots cannot merge distinct resources at the same subnet;
 that collision check passed with the lifecycle/recovery fixes in Mac suite
-`/tmp/clankerd-network-gates.aI6Qm1`. The added stopped-membership update packet
-checks still require Mac execution.
+`/tmp/clankerd-network-gates.aI6Qm1`. The stopped-membership update packet
+checks also passed in Mac suite `/tmp/clankerd-network-gates.iih6w6` (316s),
+including both-direction reassignment, restart persistence and teardown.
 Earlier prototype passes do not establish production acceptance. Independent
 other-VMM cross-network isolation, sleep/wake, LAN-peer acceptance, host-address
 impersonation and additional raw Ethernet cases remain unverified.

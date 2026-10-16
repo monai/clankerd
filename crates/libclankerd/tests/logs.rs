@@ -10,7 +10,7 @@ fn logs_return_what_the_workload_printed() {
     let engine = env.engine();
     let m = create(&engine, "talker", "echo hello-console; echo oops >&2");
     m.start().unwrap();
-    m.wait().unwrap();
+    common::finish_workload_and_stop(&m).unwrap();
     let logs = String::from_utf8(m.logs().unwrap()).unwrap();
     assert!(logs.contains("hello-console"), "{logs}");
     assert!(logs.contains("oops"), "{logs}");

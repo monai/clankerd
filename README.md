@@ -41,15 +41,19 @@ complete build.
 
 ```sh
 vmctl=build/rust/darwin-arm64/vmctl
-"$vmctl" run -d --name sandbox ghcr.io/monai/clankers:slim sleep infinity
+"$vmctl" create --name sandbox debian:trixie
+"$vmctl" start sandbox
 "$vmctl" exec sandbox -it /bin/bash
 "$vmctl" stop sandbox
 "$vmctl" rm sandbox
 ```
 
-Use `run -it IMAGE COMMAND` to attach to the main workload; the machine exits
-when that workload exits. `exec -it` opens a separate session in a running
-machine. Removing a machine keeps its named volumes unless `rm -v` is requested.
+Guestd is the machine's init process and stays running until `stop` or `kill`.
+The image's ENTRYPOINT/CMD runs once per start; its exit does not stop the VM.
+`run` returns the command's exit code while leaving the machine running;
+`run -it` attaches to that command. `exec -it` opens a separate session even
+when the image command has already finished. Restart policies apply to machine
+failure, not to an image command exiting. Removing a machine keeps its named volumes unless `rm -v` is requested.
 
 Run `vmctl --help` for lifecycle commands and `vmctl run --help` for image,
 resource, mount, port and environment flags. Application leases, mDNS and

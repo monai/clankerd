@@ -1,156 +1,119 @@
-//! Seam A: restart policies restart (or do not restart) the workload as Docker would.
-
+//! Restart policy governs machine failure, not a regular command's exit.
 mod common;
-
-use std::path::Path;
-use std::time::{Duration, Instant};
-
 use common::*;
-use libclankerd::{EventAction, HostConfig, Machine, RestartPolicy, Status};
-
-/// Appends a line to `log` on every run, then exits with `code`.
-fn counting(log: &Path, code: i32) -> String {
-    format!("echo run >> {}; exit {code}", log.display())
-}
-
-fn runs(log: &Path) -> usize {
-    std::fs::read_to_string(log).map_or(0, |s| s.lines().count())
-}
-
-fn wait_until(what: &str, mut ok: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !ok() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-fn create_with(env: &Env, name: &str, script: &str, policy: RestartPolicy) -> Machine {
-    env.engine()
-        .create(
-            Some(name),
-            sh(script),
-            HostConfig {
-                restart_policy: policy,
-                ..Default::default()
-            },
-        )
-        .unwrap()
-}
+use libclankerd::{HostConfig, RestartPolicy, Status};
+use std::time::Duration;
 
 #[test]
 fn policies_parse_like_docker_run_restart() {
-    assert_eq!("no".parse(), Ok(RestartPolicy::No));
-    assert_eq!("always".parse(), Ok(RestartPolicy::Always));
-    assert_eq!("unless-stopped".parse(), Ok(RestartPolicy::UnlessStopped));
-    assert_eq!(
-        "on-failure".parse(),
-        Ok(RestartPolicy::OnFailure { max_retries: None })
-    );
-    assert_eq!(
-        "on-failure:3".parse(),
-        Ok(RestartPolicy::OnFailure {
-            max_retries: Some(3)
-        })
-    );
-    assert!("sometimes".parse::<RestartPolicy>().is_err());
-    assert!("on-failure:x".parse::<RestartPolicy>().is_err());
-    assert_eq!(
-        RestartPolicy::OnFailure {
-            max_retries: Some(3)
-        }
-        .to_string(),
-        "on-failure:3"
-    );
+    for (text, policy) in [
+        ("no", RestartPolicy::No),
+        ("always", RestartPolicy::Always),
+        ("unless-stopped", RestartPolicy::UnlessStopped),
+        ("on-failure", RestartPolicy::OnFailure { max_retries: None }),
+        (
+            "on-failure:3",
+            RestartPolicy::OnFailure {
+                max_retries: Some(3),
+            },
+        ),
+    ] {
+        assert_eq!(text.parse(), Ok(policy));
+        assert_eq!(policy.to_string(), text);
+    }
+    for text in ["sometimes", "on-failure:x"] {
+        assert!(text.parse::<RestartPolicy>().is_err());
+    }
 }
 
 #[test]
-fn no_policy_does_not_restart() {
+fn command_exit_does_not_restart_the_machine_under_any_policy() {
     let env = Env::new();
-    let log = env.root().join("log");
-    let m = create_with(&env, "never", &counting(&log, 1), RestartPolicy::No);
-    m.start().unwrap();
-    assert_eq!(m.wait().unwrap().exit_code, 1);
-    std::thread::sleep(Duration::from_millis(500));
-    assert_eq!(runs(&log), 1);
-    assert_eq!(m.inspect().unwrap().state.status, Status::Exited);
-}
-
-#[test]
-fn on_failure_retries_up_to_the_limit_then_stays_exited() {
-    let env = Env::new();
-    let log = env.root().join("log");
-    let m = create_with(
-        &env,
-        "flaky",
-        &counting(&log, 1),
+    let engine = env.engine();
+    for (i, policy) in [
+        RestartPolicy::No,
+        RestartPolicy::Always,
+        RestartPolicy::UnlessStopped,
         RestartPolicy::OnFailure {
             max_retries: Some(2),
         },
-    );
-    m.start().unwrap();
-    assert_eq!(m.wait().unwrap().exit_code, 1);
-    let state = m.inspect().unwrap().state;
-    assert_eq!(state.status, Status::Exited);
-    assert_eq!(state.restart_count, 2);
-    assert_eq!(runs(&log), 3, "one run plus two restarts");
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let machine = engine
+            .create(
+                Some(&format!("member-{i}")),
+                sh("exit 7"),
+                HostConfig {
+                    restart_policy: policy,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        machine.start().unwrap();
+        let pid = machine.inspect().unwrap().state.pid;
+        assert_eq!(machine.wait_workload().unwrap().exit_code, 7);
+        let state = machine.inspect().unwrap().state;
+        assert_eq!(state.status, Status::Running);
+        assert_eq!(state.pid, pid);
+        assert_eq!(state.restart_count, 0);
+        machine.stop(Duration::from_secs(5)).unwrap();
+        assert_eq!(machine.inspect().unwrap().state.status, Status::Exited);
+    }
 }
 
 #[test]
-fn on_failure_does_not_restart_a_clean_exit() {
-    let env = Env::new();
-    let log = env.root().join("log");
-    let m = create_with(
-        &env,
-        "clean",
-        &counting(&log, 0),
-        RestartPolicy::OnFailure { max_retries: None },
-    );
-    m.start().unwrap();
-    m.wait().unwrap();
-    std::thread::sleep(Duration::from_millis(500));
-    assert_eq!(runs(&log), 1);
-}
-
-#[test]
-fn always_restarts_even_a_clean_exit_until_stopped() {
-    let env = Env::new();
-    let log = env.root().join("log");
-    let m = create_with(&env, "again", &counting(&log, 0), RestartPolicy::Always);
-    m.start().unwrap();
-    wait_until("three runs", || runs(&log) >= 3);
-
-    m.stop(Duration::from_secs(10)).unwrap();
-    let state = m.inspect().unwrap().state;
-    assert_eq!(state.status, Status::Exited);
-    let seen = runs(&log);
-    std::thread::sleep(Duration::from_millis(700));
-    assert_eq!(runs(&log), seen, "a stopped machine is not restarted");
-    assert_eq!(m.inspect().unwrap().state.status, Status::Exited);
-}
-
-#[test]
-fn unless_stopped_restarts_until_stopped() {
-    let env = Env::new();
-    let log = env.root().join("log");
-    let m = create_with(&env, "us", &counting(&log, 2), RestartPolicy::UnlessStopped);
-    m.start().unwrap();
-    wait_until("two runs", || runs(&log) >= 2);
-    m.stop(Duration::from_secs(10)).unwrap();
-    let seen = runs(&log);
-    std::thread::sleep(Duration::from_millis(700));
-    assert_eq!(runs(&log), seen);
-}
-
-#[test]
-fn a_restarting_machine_reports_restarting_and_emits_events() {
+fn machine_failure_retries_to_the_limit_and_manual_stop_cancels_restart() {
     let env = Env::new();
     let engine = env.engine();
-    let log = env.root().join("log");
-    let m = engine
+    let machine = engine
         .create(
-            Some("evt"),
-            sh(&counting(&log, 1)),
+            Some("member"),
+            sh("sleep 60"),
+            HostConfig {
+                restart_policy: RestartPolicy::OnFailure {
+                    max_retries: Some(2),
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    machine.start().unwrap();
+    for expected in 1..=2 {
+        let old_pid = machine.inspect().unwrap().state.pid.unwrap();
+        // A crashed VMM, independent of the guest command.
+        // SAFETY: this PID identifies only the test-owned VMM process group.
+        unsafe {
+            libc::kill(-(old_pid as i32), libc::SIGKILL);
+        }
+        wait_for("replacement machine", || {
+            let state = machine.inspect().unwrap().state;
+            state.status == Status::Running
+                && state.pid != Some(old_pid)
+                && state.restart_count == expected
+        });
+    }
+    let pid = machine.inspect().unwrap().state.pid.unwrap();
+    // SAFETY: this PID identifies only the test-owned VMM process group.
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+    }
+    assert_eq!(machine.wait().unwrap().exit_code, -1);
+    assert_eq!(machine.inspect().unwrap().state.restart_count, 2);
+    machine.start().unwrap();
+    machine.stop(Duration::from_secs(5)).unwrap();
+    assert_eq!(machine.inspect().unwrap().state.status, Status::Exited);
+}
+
+#[test]
+fn a_successful_command_cannot_mask_a_later_machine_failure() {
+    let env = Env::new();
+    let engine = env.engine();
+    let machine = engine
+        .create(
+            Some("member"),
+            sh("exit 0"),
             HostConfig {
                 restart_policy: RestartPolicy::OnFailure {
                     max_retries: Some(1),
@@ -159,31 +122,17 @@ fn a_restarting_machine_reports_restarting_and_emits_events() {
             },
         )
         .unwrap();
-    let mut events = engine.events();
-    m.start().unwrap();
-    m.wait().unwrap();
-
-    let mut actions = Vec::new();
-    while let Some(e) = events.next_timeout(Duration::from_millis(300)) {
-        actions.push(e.action);
+    machine.start().unwrap();
+    assert_eq!(machine.wait_workload().unwrap().exit_code, 0);
+    let old_pid = machine.inspect().unwrap().state.pid.unwrap();
+    // SAFETY: this PID identifies only the test-owned VMM process group.
+    unsafe {
+        libc::kill(-(old_pid as i32), libc::SIGKILL);
     }
-    use EventAction::*;
-    assert_eq!(
-        actions,
-        [Started, Exited, Restarting, Started, Exited],
-        "events in order"
-    );
-}
-
-#[test]
-fn removing_a_machine_during_the_restart_delay_cancels_the_restart() {
-    let env = Env::new();
-    let log = env.root().join("log");
-    let m = create_with(&env, "cancel", &counting(&log, 1), RestartPolicy::Always);
-    m.start().unwrap();
-    wait_until("one run", || runs(&log) >= 1);
-    m.remove(true).unwrap();
-    let seen = runs(&log);
-    std::thread::sleep(Duration::from_millis(700));
-    assert_eq!(runs(&log), seen);
+    wait_for("replacement after idle machine failure", || {
+        let state = machine.inspect().unwrap().state;
+        state.status == Status::Running && state.pid != Some(old_pid) && state.restart_count == 1
+    });
+    assert_eq!(machine.wait_workload().unwrap().exit_code, 0);
+    machine.stop(Duration::from_secs(5)).unwrap();
 }

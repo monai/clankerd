@@ -18,6 +18,12 @@ struct Env {
     guestd: PathBuf,
 }
 
+impl Drop for Env {
+    fn drop(&mut self) {
+        drop(common::cleanup_on_drop(self.dir.path(), &self.guestd));
+    }
+}
+
 impl Env {
     /// A temp state dir with no machines.
     fn empty() -> Env {

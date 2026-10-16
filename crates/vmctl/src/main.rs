@@ -439,7 +439,7 @@ fn run(cli: Cli) -> Result<u8, Error> {
                 })?;
             }
             // Exit codes are 0..=255 on the host.
-            Ok(m.wait()?.exit_code as u8)
+            Ok(m.wait_workload()?.exit_code as u8)
         }
         Command::Exec(args) => exec::run(&engine, args),
         Command::Create(args) => {

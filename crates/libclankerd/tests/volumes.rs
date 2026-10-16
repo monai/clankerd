@@ -134,7 +134,7 @@ fn the_vmm_gets_the_volume_disk_and_the_guest_gets_the_mount() {
         .create(Some("a"), sh("true"), with_mounts(vec![mount]))
         .unwrap();
     m.start().unwrap();
-    m.wait().unwrap();
+    common::finish_workload_and_stop(&m).unwrap();
 
     let specs = vmm.specs.lock().unwrap();
     assert_eq!(
@@ -161,13 +161,13 @@ fn a_volume_survives_stop_start_and_rm_and_is_reused_by_a_new_machine() {
         .create(Some("a"), sh("true"), with_mounts(vec![mount.clone()]))
         .unwrap();
     m.start().unwrap();
-    m.wait().unwrap();
+    common::finish_workload_and_stop(&m).unwrap();
     // The "guest" writes into the volume: here, directly into the file.
     let file = volume_file(&env, "data");
     write_marker(&file);
 
     m.start().unwrap();
-    m.wait().unwrap();
+    common::finish_workload_and_stop(&m).unwrap();
     assert_eq!(read_marker(&file), b"kept");
 
     m.remove(false).unwrap();
@@ -179,7 +179,7 @@ fn a_volume_survives_stop_start_and_rm_and_is_reused_by_a_new_machine() {
         .create(Some("b"), sh("true"), with_mounts(vec![mount]))
         .unwrap();
     b.start().unwrap();
-    b.wait().unwrap();
+    common::finish_workload_and_stop(&b).unwrap();
     assert_eq!(read_marker(&file), b"kept");
 }
 
@@ -237,7 +237,7 @@ fn a_larger_size_grows_the_file_and_is_passed_to_the_guest_at_the_next_start() {
         .create(Some("a"), sh("true"), with_mounts(vec![small]))
         .unwrap();
     a.start().unwrap();
-    a.wait().unwrap();
+    common::finish_workload_and_stop(&a).unwrap();
     a.remove(false).unwrap();
 
     let big = Mount::volume("data", "/storage").with_size(48 * MIB);
@@ -250,7 +250,7 @@ fn a_larger_size_grows_the_file_and_is_passed_to_the_guest_at_the_next_start() {
         16 * MIB
     );
     b.start().unwrap();
-    b.wait().unwrap();
+    common::finish_workload_and_stop(&b).unwrap();
 
     assert_eq!(
         std::fs::metadata(volume_file(&env, "data")).unwrap().len(),
@@ -277,7 +277,7 @@ fn a_smaller_size_never_shrinks_the_volume() {
         .create(Some("b"), sh("true"), with_mounts(vec![small]))
         .unwrap();
     b.start().unwrap();
-    b.wait().unwrap();
+    common::finish_workload_and_stop(&b).unwrap();
     assert_eq!(
         std::fs::metadata(volume_file(&env, "data")).unwrap().len(),
         32 * MIB
@@ -346,7 +346,7 @@ fn bind_mounts_reach_the_vmm_as_shares_and_the_guest_as_mounts() {
         .create(Some("a"), sh("true"), with_mounts(mounts))
         .unwrap();
     m.start().unwrap();
-    m.wait().unwrap();
+    common::finish_workload_and_stop(&m).unwrap();
 
     let specs = vmm.specs.lock().unwrap();
     let tags: Vec<_> = specs[0].shares.iter().map(|s| s.tag.clone()).collect();

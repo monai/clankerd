@@ -127,7 +127,9 @@ fn kill_with_another_signal_goes_to_the_workload_only() {
     m.start().unwrap();
     wait_for_file(&ready);
     m.kill(libc::SIGUSR1).unwrap();
-    assert_eq!(m.wait().unwrap().exit_code, 5);
+    assert_eq!(m.wait_workload().unwrap().exit_code, 5);
+    assert_eq!(m.inspect().unwrap().state.status, Status::Running);
+    m.stop(Duration::from_secs(5)).unwrap();
 }
 
 #[test]
@@ -137,7 +139,7 @@ fn stopping_a_stopped_machine_is_fine_and_killing_it_is_a_conflict() {
     let m = create(&engine, "idle", "true");
     m.stop(Duration::from_secs(1)).unwrap(); // never started
     m.start().unwrap();
-    m.wait().unwrap();
+    m.wait_workload().unwrap();
     m.stop(Duration::from_secs(1)).unwrap(); // already exited
     assert_eq!(
         m.kill(libc::SIGKILL).unwrap_err().kind(),

@@ -31,6 +31,22 @@ pub struct Env {
     pub dir: tempfile::TempDir,
 }
 
+impl Drop for Env {
+    fn drop(&mut self) {
+        if !self.root().join("state/machines").exists() {
+            return;
+        }
+        let engine = self.engine();
+        if let Ok(machines) = engine.list(true) {
+            for machine in machines {
+                let _ = engine
+                    .get(&machine.id)
+                    .and_then(|machine| machine.remove(true));
+            }
+        }
+    }
+}
+
 impl Env {
     pub fn new() -> Self {
         Env {
@@ -163,4 +179,11 @@ fn tool(name: &str) -> String {
         )
         .find(|path| Path::new(path).exists())
         .unwrap_or_else(|| panic!("{name} (e2fsprogs) must be installed"))
+}
+
+/// Finish the command under test, then explicitly shut down its persistent machine.
+pub fn finish_workload_and_stop(machine: &Machine) -> libclankerd::Result<libclankerd::WaitResult> {
+    let result = machine.wait_workload()?;
+    machine.stop(Duration::from_secs(10))?;
+    Ok(result)
 }

@@ -35,14 +35,24 @@ fn attached_status_and_output_survive_machine_shutdown() {
                 .unwrap();
             let mut streams = machine.start_attached(None).unwrap();
             if late {
-                assert_eq!(machine.wait().unwrap().exit_code, code);
+                assert_eq!(
+                    common::finish_workload_and_stop(&machine)
+                        .unwrap()
+                        .exit_code,
+                    code
+                );
             }
             assert_eq!(streams.wait().unwrap().exit_code, code);
             assert_eq!(streams.wait().unwrap().exit_code, code);
             let mut output = String::new();
             streams.stdout.read_to_string(&mut output).unwrap();
             assert_eq!(output, "output");
-            assert_eq!(machine.wait().unwrap().exit_code, code);
+            assert_eq!(
+                common::finish_workload_and_stop(&machine)
+                    .unwrap()
+                    .exit_code,
+                code
+            );
         }
     }
 }

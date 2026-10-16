@@ -208,6 +208,8 @@ impl Machine {
         let exit_file = dir.join("exit");
         let socket = self.inner.socket_path(&self.id);
         let _ = fs::remove_file(&exit_file);
+        let _ = fs::remove_file(dir.join("shutdown-request"));
+        let _ = fs::remove_file(dir.join("kill-request"));
 
         let root_disk = Some(dir.join(crate::engine::ROOT_DISK)).filter(|d| d.exists());
         // Grows the volume file if its size increased; binds are checked here.
@@ -513,6 +515,25 @@ impl Machine {
         self.tunnels()?.bind_socket(g, h)
     }
 
+    /// Waits for the OCI entrypoint/command to finish, without stopping the machine.
+    /// Exec sessions and guest services remain available after this returns.
+    /// If the machine ends first, returns its recorded exit status.
+    pub fn wait_workload(&self) -> Result<WaitResult> {
+        let exit_file = self.inner.store.machine_dir(&self.id).join("exit");
+        loop {
+            if let Some(exit_code) = read_exit_file(&exit_file) {
+                return Ok(WaitResult { exit_code });
+            }
+            let state = self.inner.store.load_state(&self.id)?;
+            if !matches!(state.status, Status::Running | Status::Restarting) {
+                return Ok(WaitResult {
+                    exit_code: state.exit_code,
+                });
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     /// Blocks until the machine is not running and returns its exit code.
     /// Returns immediately for a machine that never started.
     pub fn wait(&self) -> Result<WaitResult> {
@@ -575,6 +596,15 @@ impl Machine {
             }
             _ => return Ok(()),
         }
+        if let Some(pid) = state.pid {
+            fs::write(
+                self.inner
+                    .store
+                    .machine_dir(&self.id)
+                    .join("shutdown-request"),
+                pid.to_string(),
+            )?;
+        }
         self.inner.stopped().insert(self.id.clone());
         let signal = Some(record.config.stop_signal.as_str())
             .filter(|s| !s.is_empty())
@@ -623,6 +653,10 @@ impl Machine {
             )
             .map(|_| ());
         }
+        fs::write(
+            self.inner.store.machine_dir(&self.id).join("kill-request"),
+            pid.to_string(),
+        )?;
         self.inner.emit(&self.id, EventAction::Killed, None);
         self.inner.forced().insert(self.id.clone());
         kill_group(pid);
@@ -761,8 +795,8 @@ fn spawn_monitor(inner: Arc<Inner>, id: String, ready: Ready, run_pid: Option<u3
             },
         };
 
-        // The workload's exit event precedes guestd's sync, unmount and power-off.
-        // Drop its event stream before waiting, so guestd can drain subscribers.
+        // A completed workload leaves guestd alive. Machine state and host resources
+        // change only when the VMM actually exits after shutdown or failure.
         if let Some(pid) = run_pid {
             wait_for_helper_exit(pid);
         }
@@ -799,11 +833,21 @@ fn record_exit(inner: &Arc<Inner>, id: &str, code: Option<i32>, run_pid: Option<
     inner.drop_tunnels(id);
     inner.stop_net(id);
     let _ = fs::remove_file(inner.socket_path(id));
-    // A machine whose helper we killed ended by SIGKILL: Docker's 137.
-    let code = if inner.forced().remove(id) {
+    // Requests persist across independent CLI observers. A command's old exit
+    // result cannot turn an unexpected VMM failure into a successful machine exit.
+    let requested = |name: &str| {
+        fs::read_to_string(inner.store.machine_dir(id).join(name))
+            .ok()
+            .and_then(|text| text.parse::<u32>().ok())
+            .is_some_and(|pid| Some(pid) == run_pid)
+    };
+    let stopped_by_api = requested("shutdown-request") || inner.stopped().remove(id);
+    let code = if requested("kill-request") || inner.forced().remove(id) {
         Some(137)
-    } else {
+    } else if stopped_by_api {
         code
+    } else {
+        None
     };
     let policy = inner
         .store
@@ -827,7 +871,6 @@ fn record_exit(inner: &Arc<Inner>, id: &str, code: Option<i32>, run_pid: Option<
         s.pid = None;
         let now = SystemTime::now();
         s.finished_at = Some(now);
-        let stopped_by_api = inner.stopped().remove(id);
         if !stopped_by_api && policy.restarts(s.exit_code, s.restart_count) {
             // Docker's backoff: the delay doubles while runs are short.
             let ran = s

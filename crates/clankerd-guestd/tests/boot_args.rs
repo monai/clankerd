@@ -110,6 +110,25 @@ fn runs_without_an_exit_file_and_reports_exit_over_events() {
         },
     )
     .unwrap();
+    assert!(child.try_wait().unwrap().is_none());
+    assert!(
+        rpc(
+            clankerd_proto::guest::METHOD_SHUTDOWN,
+            serde_json::json!({"signal":"invalid"})
+        )
+        .error
+        .is_some()
+    );
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(child.try_wait().unwrap().is_none());
+    assert!(
+        rpc(
+            clankerd_proto::guest::METHOD_SHUTDOWN,
+            serde_json::json!({})
+        )
+        .error
+        .is_none()
+    );
     assert!(child.wait().unwrap().success());
 }
 

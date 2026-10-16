@@ -34,7 +34,7 @@ fi
 export CLANKERD_STATE_DIR=$work/state
 export CLANKERD_RUNTIME_DIR=$work/run
 cleanup() {
-  "$vmctl" rm -f vmnet-smoke >/dev/null 2>&1 || true
+  "$vmctl" rm -f vmnet-smoke init-smoke >/dev/null 2>&1 || true
   rm -rf "$work"
 }
 trap cleanup EXIT
@@ -50,9 +50,10 @@ threading.Thread(target=udp,daemon=True).start()
 http.server.HTTPServer(("0.0.0.0",18081),http.server.SimpleHTTPRequestHandler).serve_forever()'
 "$vmctl" run -d --name vmnet-smoke "${IMAGE:-python:3.13-alpine}" python3 -c "$server"
 address() {
+  local name=${1:-vmnet-smoke}
   local address_file=$work/ipv4-ready.txt
   for attempt in $(seq 1 30); do
-    "$vmctl" inspect vmnet-smoke > "$work/ipv4-inspection.json"
+    "$vmctl" inspect "$name" > "$work/ipv4-inspection.json"
     if python3 - "$work/ipv4-inspection.json" > "$address_file" <<'PYADDRESS'
 import json,sys,ipaddress
 machine=json.load(open(sys.argv[1]))[0]
@@ -92,4 +93,28 @@ services "$ip"
 "$vmctl" stop vmnet-smoke
 [ -z "$(find "$work/run" -name '*.net' -print)" ]
 [ -z "$(find "$work/state" -name net.pid -print)" ]
+# The image command may finish; guest init, exec and networking must remain alive.
+status=0
+"$vmctl" run --name init-smoke "${IMAGE:-python:3.13-alpine}" sh -c 'exit 7' || status=$?
+[ "$status" = 7 ] || { echo "FAIL foreground command returned $status, expected 7" >&2; exit 1; }
+for cycle in 1 2; do
+  ip=$(address init-smoke)
+  "$vmctl" inspect init-smoke > "$work/init-before.json"
+  "$vmctl" exec init-smoke python3 -c 'import subprocess,sys;subprocess.Popen(["python3","-c",sys.argv[1]],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)' "$server"
+  for attempt in $(seq 1 20); do services "$ip" && break; sleep 1; done
+  services "$ip"
+  "$vmctl" exec init-smoke python3 -c 'import socket;s=socket.create_connection(("1.1.1.1",443),timeout=10);s.close()'
+  "$vmctl" inspect init-smoke > "$work/init-after.json"
+  python3 - "$work/init-before.json" "$work/init-after.json" <<'PYINIT'
+import json,sys
+before,after=[json.load(open(p))[0] for p in sys.argv[1:]]
+assert before['state']['status']==after['state']['status']=='running',(before,after)
+assert before['state']['pid']==after['state']['pid'],(before,after)
+PYINIT
+  "$vmctl" stop init-smoke
+  [ -z "$(find "$work/run" -name '*.net' -print)" ]
+  [ -z "$(find "$work/state" -name net.pid -print)" ]
+  if [ "$cycle" = 1 ]; then "$vmctl" start init-smoke; fi
+done
+echo 'PASS command exit leaves guest init, exec, Mac TCP/UDP and NAT alive; explicit stop, restart and cleanup'
 echo 'PASS macOS 15: IPv4 TCP/UDP, outbound NAT, no nft, detached lifetime, restart and cleanup'

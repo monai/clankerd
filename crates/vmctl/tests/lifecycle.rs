@@ -18,6 +18,12 @@ struct Cli {
     guestd: PathBuf,
 }
 
+impl Drop for Cli {
+    fn drop(&mut self) {
+        drop(common::cleanup_on_drop(self.dir.path(), &self.guestd));
+    }
+}
+
 impl Cli {
     fn new() -> Self {
         Cli {
@@ -122,11 +128,10 @@ fn kill_defaults_to_sigkill_and_accepts_a_signal() {
     assert_eq!(cli.status_of("a"), "exited 137");
 
     assert!(cli.run(&["kill", "-s", "USR1", "b"]).status.success());
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while cli.status_of("b") != "exited 7" {
-        assert!(Instant::now() < deadline, "b is {}", cli.status_of("b"));
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    assert_eq!(cli.status_of("b"), "running 0");
+    assert!(cli.run(&["exec", "b", "true"]).status.success());
+    assert!(cli.run(&["stop", "b"]).status.success());
+    assert!(cli.status_of("b").starts_with("exited "));
 }
 
 #[test]
@@ -145,15 +150,9 @@ fn create_then_start_runs_the_machine_and_it_can_start_again() {
     assert_eq!(cli.status_of("later"), "created 0");
 
     assert!(cli.run(&["start", "later"]).status.success());
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while cli.status_of("later") != "exited 4" {
-        assert!(
-            Instant::now() < deadline,
-            "later is {}",
-            cli.status_of("later")
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    assert_eq!(cli.status_of("later"), "running 0");
+    assert!(cli.run(&["exec", "later", "true"]).status.success());
+    assert!(cli.run(&["stop", "later"]).status.success());
     assert!(cli.run(&["start", "later"]).status.success());
 }
 
@@ -218,7 +217,7 @@ fn entrypoint_env_user_and_workdir_flags_shape_the_workload() {
 }
 
 #[test]
-fn run_restart_on_failure_reruns_the_workload_and_records_the_restarts() {
+fn command_failure_leaves_the_machine_running_without_policy_restarts() {
     let cli = Cli::new();
     let log = cli.root().join("log");
     let script = format!("echo run >> {}; exit 5", log.display());
@@ -234,10 +233,12 @@ fn run_restart_on_failure_reruns_the_workload_and_records_the_restarts() {
         &script,
     ]);
     assert_eq!(out.status.code(), Some(5), "{}", text(&out.stderr));
-    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 3);
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
     let inspect = cli.run(&["inspect", "flaky"]);
     let v: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
-    assert_eq!(v[0]["state"]["restart_count"], 2);
+    assert_eq!(v[0]["state"]["restart_count"], 0);
+    assert_eq!(v[0]["state"]["status"], "running");
+    assert!(cli.run(&["stop", "flaky"]).status.success());
     assert_eq!(
         v[0]["host_config"]["restart_policy"]["on-failure"]["max_retries"],
         2

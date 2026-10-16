@@ -155,13 +155,15 @@ fn the_sidecar_ends_when_the_machine_is_killed_or_removed() {
 }
 
 #[test]
-fn the_sidecar_ends_when_the_workload_exits_by_itself() {
+fn the_sidecar_outlives_the_command_until_the_machine_is_stopped() {
     let rig = rig(FAKE_VMNET);
     let m = create(&rig.engine, "net-exit", "sleep 0.3");
     m.start().unwrap();
     let pid = rig.sidecar_pid();
-    m.wait().unwrap();
-    assert_eq!(m.inspect().unwrap().state.status, Status::Exited);
+    m.wait_workload().unwrap();
+    assert_eq!(m.inspect().unwrap().state.status, Status::Running);
+    assert!(alive(pid));
+    m.stop(Duration::from_secs(5)).unwrap();
     wait_gone(pid);
 }
 
@@ -213,7 +215,7 @@ fn without_a_net_backend_machines_boot_without_a_nic() {
         .create(Some("plain"), sh("sleep 0.1"), HostConfig::default())
         .unwrap();
     m.start().unwrap();
-    m.wait().unwrap();
+    common::finish_workload_and_stop(&m).unwrap();
     let spec = vmm.specs.lock().unwrap()[0].clone();
     assert!(spec.net.is_none());
     assert!(spec.workload.network.is_none());

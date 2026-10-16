@@ -33,7 +33,7 @@ fn run_returns_the_exit_code_through_the_helper() {
     let engine = libclankerd::Engine::new(env.config(dev_vmm())).unwrap();
     let m = create(&engine, "viahelper", "echo booted; exit 5");
     m.start().unwrap();
-    assert_eq!(m.wait().unwrap().exit_code, 5);
+    assert_eq!(common::finish_workload_and_stop(&m).unwrap().exit_code, 5);
     assert_eq!(m.inspect().unwrap().state.status, Status::Exited);
 }
 
@@ -43,7 +43,7 @@ fn logs_show_what_the_guest_printed() {
     let engine = libclankerd::Engine::new(env.config(dev_vmm())).unwrap();
     let m = create(&engine, "chatty", "echo from-the-guest");
     m.start().unwrap();
-    m.wait().unwrap();
+    common::finish_workload_and_stop(&m).unwrap();
     let logs = String::from_utf8(m.logs().unwrap()).unwrap();
     assert!(logs.contains("from-the-guest"), "{logs}");
 }
@@ -69,7 +69,7 @@ fn the_helper_outlives_the_library_process() {
     let m = engine.get("survivor").unwrap();
     assert_eq!(m.inspect().unwrap().state.status, Status::Running);
     std::fs::write(&marker, "").unwrap();
-    assert_eq!(m.wait().unwrap().exit_code, 9);
+    assert_eq!(common::finish_workload_and_stop(&m).unwrap().exit_code, 9);
 }
 
 #[test]
@@ -234,7 +234,7 @@ fn a_machine_with_a_root_disk_hands_it_to_the_helper() {
         )
         .unwrap();
     m.start().unwrap();
-    m.wait().unwrap();
+    common::finish_workload_and_stop(&m).unwrap();
 
     let spec = spawn_spec(&env, m.id());
     let disk = env
@@ -252,7 +252,7 @@ fn a_machine_without_an_image_boots_from_the_boot_directory_alone() {
     let engine = libclankerd::Engine::new(env.config(dev_vmm())).unwrap();
     let m = create(&engine, "bootdir", "exit 0");
     m.start().unwrap();
-    m.wait().unwrap();
+    common::finish_workload_and_stop(&m).unwrap();
     assert!(spawn_spec(&env, m.id())["root_disk"].is_null());
 }
 
@@ -338,9 +338,19 @@ fn startup_acknowledgment_failure_leaves_a_terminal_retryable_machine() {
         assert_eq!(state.status, Status::Dead);
         assert_eq!(state.pid, None);
         assert!(!state.error.is_empty());
-        assert_eq!(machine.wait().unwrap().exit_code, -1);
+        assert_eq!(
+            common::finish_workload_and_stop(&machine)
+                .unwrap()
+                .exit_code,
+            -1
+        );
         machine.start().unwrap();
-        assert_eq!(machine.wait().unwrap().exit_code, 7);
+        assert_eq!(
+            common::finish_workload_and_stop(&machine)
+                .unwrap()
+                .exit_code,
+            7
+        );
     }
 }
 
@@ -528,7 +538,7 @@ fn helper_descriptor_capacity_is_raised_within_its_inherited_hard_limit_only() {
         ),
     );
     machine.start().unwrap();
-    machine.wait().unwrap();
+    common::finish_workload_and_stop(&machine).unwrap();
     assert_eq!(std::fs::read_to_string(observed).unwrap().trim(), "512 512");
     // SAFETY: after is writable initialized rlimit storage; observation does not change limits.
     let mut after: libc::rlimit = unsafe { std::mem::zeroed() };

@@ -21,7 +21,7 @@ fn run_as(env: &Env, user: &str, script: &str) -> (i32, String) {
     };
     let m = engine.create(None, cfg, HostConfig::default()).unwrap();
     m.start().unwrap();
-    let code = m.wait().unwrap().exit_code;
+    let code = common::finish_workload_and_stop(&m).unwrap().exit_code;
     (
         code,
         String::from_utf8_lossy(&m.logs().unwrap()).into_owned(),

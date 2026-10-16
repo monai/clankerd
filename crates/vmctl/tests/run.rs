@@ -11,6 +11,7 @@ use common::{built, command, guestd, vmctl};
 fn immediate_foreground_commands_preserve_output_and_exit_codes() {
     let dir = tempfile::Builder::new().prefix("vm").tempdir().unwrap();
     let guestd = guestd();
+    let _cleanup = common::cleanup_on_drop(dir.path(), &guestd);
     let helper = built("clankerd-vmspawn");
     for i in 0..10 {
         let name = format!("quick-{i}");
@@ -50,6 +51,7 @@ fn immediate_foreground_commands_preserve_output_and_exit_codes() {
 fn logs_show_workload_output() {
     let dir = tempfile::Builder::new().prefix("vm").tempdir().unwrap();
     let guestd = guestd();
+    let _cleanup = common::cleanup_on_drop(dir.path(), &guestd);
     let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
     let run = [
         "run",
@@ -71,6 +73,7 @@ fn logs_show_workload_output() {
 fn run_ps_inspect_rm() {
     let dir = tempfile::Builder::new().prefix("vm").tempdir().unwrap();
     let guestd = guestd();
+    let _cleanup = common::cleanup_on_drop(dir.path(), &guestd);
     let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
 
     assert_eq!(
@@ -87,20 +90,21 @@ fn run_ps_inspect_rm() {
     );
 
     assert!(
-        v(&["ps"]).stdout.iter().filter(|b| **b == b'\n').count() == 1,
-        "ps shows only the header"
+        v(&["ps"]).stdout.iter().filter(|b| **b == b'\n').count() == 3,
+        "both machines remain running after their commands finish"
     );
     let all = String::from_utf8(v(&["ps", "-a"]).stdout).unwrap();
     assert!(
-        all.contains("Exited (3)") && all.contains("Exited (0)"),
+        all.contains("three") && all.contains("ok") && all.contains("Up"),
         "{all}"
     );
 
     let inspect: serde_json::Value =
         serde_json::from_slice(&v(&["inspect", "three"]).stdout).unwrap();
-    assert_eq!(inspect[0]["state"]["status"], "exited");
-    assert_eq!(inspect[0]["state"]["exit_code"], 3);
+    assert_eq!(inspect[0]["state"]["status"], "running");
+    assert_eq!(inspect[0]["state"]["exit_code"], 0);
 
+    assert!(v(&["stop", "ok", "three"]).status.success());
     assert!(v(&["rm", "ok", "three"]).status.success());
     let all = String::from_utf8(v(&["ps", "-a"]).stdout).unwrap();
     assert_eq!(all.lines().count(), 1, "{all}");
@@ -110,6 +114,7 @@ fn run_ps_inspect_rm() {
 fn run_and_logs_through_the_vmspawn_helper() {
     let dir = tempfile::Builder::new().prefix("vm").tempdir().unwrap();
     let (guestd, vmspawn) = (guestd(), built("clankerd-vmspawn"));
+    let _cleanup = common::cleanup_on_drop(dir.path(), &guestd);
     let v = |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_vmctl"))
             .args(args)
@@ -156,6 +161,7 @@ fn a_missing_helper_binary_is_reported_by_path() {
 fn cpus_and_memory_are_recorded_in_the_machine_config() {
     let dir = tempfile::Builder::new().prefix("vm").tempdir().unwrap();
     let guestd = guestd();
+    let _cleanup = common::cleanup_on_drop(dir.path(), &guestd);
     let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
     let created = v(&[
         "create", "--name", "sized", "--cpus", "2", "--memory", "512M", "img", "true",
@@ -176,6 +182,7 @@ fn cpus_and_memory_are_recorded_in_the_machine_config() {
 fn shared_network_cli_options_are_persisted_and_invalid_subnets_are_rejected() {
     let dir = tempfile::Builder::new().prefix("vm").tempdir().unwrap();
     let guestd = guestd();
+    let _cleanup = common::cleanup_on_drop(dir.path(), &guestd);
     let output = vmctl(
         dir.path(),
         &guestd,
@@ -221,6 +228,7 @@ fn shared_network_cli_options_are_persisted_and_invalid_subnets_are_rejected() {
 fn host_only_cli_persists_membership_and_a_distinct_default_subnet() {
     let dir = tempfile::tempdir().unwrap();
     let guestd = guestd();
+    let _cleanup = common::cleanup_on_drop(dir.path(), &guestd);
     let created = vmctl(
         dir.path(),
         &guestd,

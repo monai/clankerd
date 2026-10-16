@@ -70,7 +70,7 @@ pub fn start_reaper() {
     });
 }
 
-/// Ends the machine once the workload is done: as PID 1 it stops every
+/// Ends the machine on explicit shutdown: as PID 1 it stops every
 /// process, syncs, unmounts and powers off; elsewhere (the Linux stand-in) it
 /// just exits.
 pub fn exit_machine() -> ! {

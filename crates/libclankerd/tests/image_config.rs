@@ -162,7 +162,7 @@ fn the_workload_runs_the_merged_entrypoint_cmd_and_env() {
         )
         .unwrap();
     m.start().unwrap();
-    assert_eq!(m.wait().unwrap().exit_code, 0);
+    assert_eq!(common::finish_workload_and_stop(&m).unwrap().exit_code, 0);
     assert_eq!(std::fs::read_to_string(&out).unwrap(), "1 3 /tmp\n");
 }
 

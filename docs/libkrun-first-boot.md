@@ -151,8 +151,8 @@ checks remain open:
    `krun_add_virtiofs3(..., read_only)` root is the follow-up.
 4. **Exit code path.** The exit code comes from guestd's `Exited` event,
    recorded by the helper in `exit`; libkrun's own exit status is ignored.
-   guestd powers off with `reboot(RB_POWER_OFF)` when PID 1, after subscribers
-   have read the event.
+   guestd remains alive after this event. An explicit Shutdown powers off
+   with `reboot(RB_POWER_OFF)` when PID 1, after subscribers have read the result.
 5. **vsock proxy.** libkrun creates a unix socket (`<runtime>/<id12>.vsock`,
    `listen=true`) for guest port 1024; the helper proxies the `LISTEN_FDS`
    socket (`<runtime>/<id12>.sock`) to it. A connection made before guestd
@@ -232,7 +232,7 @@ $vmctl exec dev sh -c 'id -un; pwd; env | sort; ls -la /.clankerdenv'
 $vmctl exec dev cat /sys/fs/cgroup/cgroup.subtree_control   # cpuset cpu io memory pids ...
 $vmctl exec dev date; date                              # clocks agree
 $vmctl stop dev; $vmctl ps -a; $vmctl logs dev | tail   # Exited (143), shutdown lines in the log
-$vmctl run $img true; echo $?                           # 0, machine reaches exited
+$vmctl run $img true; echo $?                           # 0, machine remains running
 $vmctl run -e FOO=bar -u root -w /tmp --entrypoint sh $img -c 'id -un; pwd; echo $FOO'
 $vmctl run -d --name stubborn --entrypoint sh $img -c 'trap "" TERM; sleep infinity'
 time $vmctl stop -t 2 stubborn                          # ~2 s, then Exited (137)
@@ -307,7 +307,7 @@ shutdown steps (`stopping processes`, `syncing and unmounting`, `powering off`).
 ### Ticket 05 checklist for you
 
 - [x] `vmctl run -d --name dev IMAGE sleep infinity` boots from the image; the workload runs as the image's USER in its WORKDIR with the merged env (exec `id`, `pwd`, `env`)
-- [x] `vmctl run IMAGE true` exits 0 and the machine is `exited` in `ps -a`
+- [x] `vmctl run IMAGE true` exits 0 and the machine stays running until explicitly stopped
 - [x] `vmctl stop dev` is graceful for a plain `sleep` (shutdown lines and `Exited (143)`); `stop -t 2` kills a TERM-ignoring workload after 2 s (`Exited (137)`)
 - [ ] A trapped TERM handler runs on the real VM before shutdown
 - [x] `/.clankerdenv` exists in the machine

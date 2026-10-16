@@ -40,3 +40,29 @@ pub fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+/// Removes persistent machines while their test state directory still exists.
+pub struct Cleanup {
+    dir: PathBuf,
+    guestd: PathBuf,
+}
+
+pub fn cleanup_on_drop(dir: &Path, guestd: &Path) -> Cleanup {
+    Cleanup {
+        dir: dir.to_owned(),
+        guestd: guestd.to_owned(),
+    }
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        let Ok(entries) = std::fs::read_dir(self.dir.join("state/machines")) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if let Some(id) = entry.file_name().to_str() {
+                let _ = vmctl(&self.dir, &self.guestd, &["rm", "-f", id]);
+            }
+        }
+    }
+}

@@ -44,7 +44,8 @@ impl MachineConfig {
     }
 }
 
-/// When a machine whose workload exited is started again (Docker's `--restart`).
+/// When an ended machine is started again (Docker-style `--restart` syntax).
+/// An OCI command exiting does not end or restart the machine.
 /// A machine stopped through the API is never restarted.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

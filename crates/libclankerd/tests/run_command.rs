@@ -17,6 +17,8 @@ fn wait_does_not_finish_until_the_guest_process_has_exited() {
     let machine = create(&engine, "finished", "sleep 0.1; exit 0");
     machine.start().unwrap();
     let pid = machine.inspect().unwrap().state.pid.unwrap();
+    machine.wait_workload().unwrap();
+    machine.stop(Duration::from_secs(5)).unwrap();
     machine.wait().unwrap();
     // SAFETY: signal zero only checks process existence.
     assert_eq!(
@@ -57,7 +59,7 @@ fn run_returns_exit_code_zero() {
     let engine = env.engine();
     let m = create(&engine, "ok", "exit 0");
     m.start().unwrap();
-    assert_eq!(m.wait().unwrap().exit_code, 0);
+    assert_eq!(common::finish_workload_and_stop(&m).unwrap().exit_code, 0);
     assert_eq!(m.inspect().unwrap().state.status, Status::Exited);
 }
 
@@ -67,7 +69,7 @@ fn run_returns_nonzero_exit_code() {
     let engine = env.engine();
     let m = create(&engine, "three", "exit 3");
     m.start().unwrap();
-    assert_eq!(m.wait().unwrap().exit_code, 3);
+    assert_eq!(common::finish_workload_and_stop(&m).unwrap().exit_code, 3);
     let state = m.inspect().unwrap().state;
     assert_eq!(state.status, Status::Exited);
     assert_eq!(state.exit_code, 3);
@@ -79,7 +81,7 @@ fn killed_workload_reports_128_plus_signal() {
     let engine = env.engine();
     let m = create(&engine, "sig", "kill -9 $$");
     m.start().unwrap();
-    assert_eq!(m.wait().unwrap().exit_code, 137);
+    assert_eq!(common::finish_workload_and_stop(&m).unwrap().exit_code, 137);
 }
 
 #[test]
@@ -93,7 +95,7 @@ fn missing_binary_exits_127_like_docker() {
     };
     let m = engine.create(None, cfg, HostConfig::default()).unwrap();
     m.start().unwrap();
-    assert_eq!(m.wait().unwrap().exit_code, 127);
+    assert_eq!(common::finish_workload_and_stop(&m).unwrap().exit_code, 127);
 }
 
 #[test]
@@ -111,7 +113,7 @@ fn env_and_working_dir_reach_the_workload() {
         .create(Some("env"), cfg, HostConfig::default())
         .unwrap();
     m.start().unwrap();
-    m.wait().unwrap();
+    common::finish_workload_and_stop(&m).unwrap();
     assert_eq!(std::fs::read_to_string(out).unwrap(), "hello\n/tmp\n");
 }
 
@@ -131,7 +133,7 @@ fn state_goes_created_running_exited() {
     assert_eq!(engine.list(false).unwrap().len(), 1);
 
     std::fs::write(&marker, "").unwrap();
-    assert_eq!(m.wait().unwrap().exit_code, 2);
+    assert_eq!(common::finish_workload_and_stop(&m).unwrap().exit_code, 2);
     let state = m.inspect().unwrap().state;
     assert_eq!(state.status, Status::Exited);
     assert!(state.finished_at.is_some());
@@ -145,7 +147,7 @@ fn remove_deletes_state() {
     let engine = env.engine();
     let m = create(&engine, "gone", "exit 0");
     m.start().unwrap();
-    m.wait().unwrap();
+    common::finish_workload_and_stop(&m).unwrap();
     m.remove(false).unwrap();
     assert_eq!(
         engine.get("gone").err().unwrap().kind(),
@@ -173,7 +175,7 @@ fn config_and_state_survive_a_restart() {
         let engine = env.engine();
         let m = create(&engine, "persist", "exit 6");
         m.start().unwrap();
-        m.wait().unwrap();
+        common::finish_workload_and_stop(&m).unwrap();
     }
     let engine = env.engine();
     let info = engine.get("persist").unwrap().inspect().unwrap();
@@ -196,33 +198,25 @@ fn a_running_machine_is_reattached_after_restart() {
     let m = second.get("survivor").unwrap();
     assert_eq!(m.inspect().unwrap().state.status, Status::Running);
     std::fs::write(&marker, "").unwrap();
-    assert_eq!(m.wait().unwrap().exit_code, 4);
+    assert_eq!(common::finish_workload_and_stop(&m).unwrap().exit_code, 4);
     assert_eq!(m.inspect().unwrap().state.status, Status::Exited);
 }
 
 #[test]
-fn exit_while_the_library_was_away_is_recorded_on_reattach() {
+fn command_exit_is_available_after_library_reattachment_without_stopping_the_machine() {
     let env = Env::new();
     let first = env.engine();
-    let m = create(&first, "away", "sleep 0.3; exit 9");
-    m.start().unwrap();
-    // Wait for the exit, then rewind the persisted state as if no process had seen it.
-    assert_eq!(m.wait().unwrap().exit_code, 9);
-    let path = env
-        .root()
-        .join("state/machines")
-        .join(m.id())
-        .join("state.json");
-    let mut state: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    state["status"] = "running".into();
-    state["exit_code"] = 0.into();
-    std::fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
-
+    let machine = create(&first, "away", "exit 9");
+    machine.start().unwrap();
+    assert_eq!(machine.wait_workload().unwrap().exit_code, 9);
+    let pid = machine.inspect().unwrap().state.pid;
     let second = env.engine();
-    let info = second.get("away").unwrap().inspect().unwrap();
-    assert_eq!(info.state.status, Status::Exited);
-    assert_eq!(info.state.exit_code, 9);
+    let reattached = second.get("away").unwrap();
+    assert_eq!(reattached.wait_workload().unwrap().exit_code, 9);
+    assert_eq!(reattached.inspect().unwrap().state.status, Status::Running);
+    assert_eq!(reattached.inspect().unwrap().state.pid, pid);
+    reattached.stop(Duration::from_secs(5)).unwrap();
+    assert_eq!(reattached.wait().unwrap().exit_code, 9);
 }
 
 #[test]

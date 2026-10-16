@@ -25,7 +25,7 @@ fn a_machine_lifecycle_emits_its_events_in_order() {
 
     let m = create(&engine, "evt", "exit 3");
     m.start().unwrap();
-    m.wait().unwrap();
+    common::finish_workload_and_stop(&m).unwrap();
     m.remove(false).unwrap();
 
     let got = drain(&mut events, 4);

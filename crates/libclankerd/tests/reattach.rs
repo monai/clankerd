@@ -36,11 +36,11 @@ fn a_reattached_machine_keeps_its_restart_policy() {
     assert_eq!(m.inspect().unwrap().state.status, Status::Running);
     std::fs::write(&go, "").unwrap();
 
-    // The workload fails once, is restarted by the policy, fails again.
-    assert_eq!(m.wait().unwrap().exit_code, 1);
+    // A completed command remains available across library reattachment.
+    assert_eq!(common::finish_workload_and_stop(&m).unwrap().exit_code, 1);
     let state = m.inspect().unwrap().state;
-    assert_eq!((state.status, state.restart_count), (Status::Exited, 1));
-    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 2);
+    assert_eq!((state.status, state.restart_count), (Status::Exited, 0));
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
 }
 
 #[test]
@@ -102,13 +102,23 @@ fn several_machines_run_side_by_side_independently() {
 
     // Ending one leaves the others running.
     std::fs::write(env.root().join("go1"), "").unwrap();
-    assert_eq!(machines[1].wait().unwrap().exit_code, 11);
+    assert_eq!(
+        common::finish_workload_and_stop(&machines[1])
+            .unwrap()
+            .exit_code,
+        11
+    );
     assert_eq!(engine.list(false).unwrap().len(), 2);
     assert_eq!(machines[0].inspect().unwrap().state.status, Status::Running);
 
     for i in [0, 2] {
         std::fs::write(env.root().join(format!("go{i}")), "").unwrap();
-        assert_eq!(machines[i].wait().unwrap().exit_code, 10 + i as i32);
+        assert_eq!(
+            common::finish_workload_and_stop(&machines[i])
+                .unwrap()
+                .exit_code,
+            10 + i as i32
+        );
     }
 }
 
