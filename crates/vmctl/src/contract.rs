@@ -671,7 +671,7 @@ fn metadata(command: &clap::Command) -> serde_json::Value {
         "exit_codes": {"success":0,"operation_or_partial_failure":1,"invalid_invocation":2,"process":"foreground run/exec return process exit status when available"},
         "empty_operation_results":"[] on setup failure; image pull uses null when no image result exists",
         "identifiers":{"machine_create_run":"full machine identifier", "machine_existing_mutations":"supplied name or identifier", "image":"sha256 digest", "network_volume":"name"},
-        "collections": {"env":"key-based library override", "mounts":"unique guest targets; at most one named volume currently supported", "sockets":"unique guest endpoints", "update":"remove then add; omitted fields preserved; at least one change required", "removal":{"absent_target":"success", "duplicates":"idempotent", "eligibility":"existing stopped machine"}},
+        "collections": {"env":"key-based library override", "mounts":"unique guest targets and named volume sources; multiple named volumes supported", "sockets":"unique guest endpoints", "update":"remove then add; omitted fields preserved; at least one change required", "removal":{"absent_target":"success", "duplicates":"idempotent", "eligibility":"existing stopped machine"}},
         "eligibility": {"update":"stopped", "reimage":"stopped", "exec":"running"},
         "schemas": {"machine": schemars::schema_for!(results::MachineRecord), "image": schemars::schema_for!(results::ImageRecord), "network": schemars::schema_for!(results::NetworkRecord), "volume": schemars::schema_for!(results::VolumeRecord), "operation": schemars::schema_for!(results::Operation), "diagnostic": schemars::schema_for!(results::Diagnostic)}})
 }

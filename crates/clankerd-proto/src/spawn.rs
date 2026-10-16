@@ -20,8 +20,6 @@ pub const BOOT_WORKLOAD: &str = "workload.json";
 pub const ROOT_DEVICE: &str = "/dev/vda";
 /// Where guestd keeps the boot directory inside the machine after it pivoted
 /// into the root disk (it holds the static e2fsprogs binaries).
-/// Where the machine's volume shows up: the block device after the root disk.
-pub const VOLUME_DEVICE: &str = "/dev/vdb";
 pub const GUEST_BOOT_MOUNT: &str = "/run/clankerd/boot";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,9 +48,13 @@ pub struct SpawnSpec {
     /// root-disk methods, then powers off.
     #[serde(default)]
     pub populate: bool,
-    /// Raw ext4 volume attached as the block device after the root disk.
-    #[serde(default)]
-    pub volume_disk: Option<PathBuf>,
+    /// Raw ext4 volumes in attachment order, following the optional root disk.
+    #[serde(
+        default,
+        alias = "volume_disk",
+        deserialize_with = "deserialize_volume_disks"
+    )]
+    pub volume_disks: Vec<PathBuf>,
     /// Host directories shared into the guest over virtio-fs.
     #[serde(default)]
     pub shares: Vec<Share>,
@@ -88,4 +90,20 @@ pub struct NetDevice {
     pub features: u32,
     /// Send the vfkit magic when connecting (gvproxy `-listen-vfkit`).
     pub vfkit: bool,
+}
+
+// Accept specs written before volumes became a collection.
+fn deserialize_volume_disks<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<PathBuf>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Disks {
+        Many(Vec<PathBuf>),
+        One(Option<PathBuf>),
+    }
+    Ok(match Disks::deserialize(deserializer)? {
+        Disks::Many(disks) => disks,
+        Disks::One(disk) => disk.into_iter().collect(),
+    })
 }

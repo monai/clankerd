@@ -162,7 +162,7 @@ impl Machine {
             if !restart {
                 self.inner.stopped().remove(&self.id);
             }
-            if let Some(name) = crate::mount::volume_name(&info.host_config.mounts) {
+            for name in crate::mount::volume_names(&info.host_config.mounts) {
                 self.check_volume_free(&starting, name)?;
             }
             starting.insert(self.id.clone());
@@ -187,7 +187,9 @@ impl Machine {
                 continue;
             };
             let busy = state.status == Status::Running || starting.contains(&id);
-            if busy && crate::mount::volume_name(&record.host_config.mounts) == Some(volume) {
+            if busy
+                && crate::mount::volume_names(&record.host_config.mounts).any(|name| name == volume)
+            {
                 return Err(Error::conflict(format!(
                     "volume \"{volume}\" is in use by running machine {}",
                     record.name
@@ -253,7 +255,7 @@ impl Machine {
             },
             cpus: info.host_config.cpus,
             memory: info.host_config.memory,
-            volume_disk: plan.volume_disk,
+            volume_disks: plan.volume_disks,
             shares: plan.shares,
             net,
         };
@@ -355,12 +357,18 @@ impl Machine {
             )));
         }
         networks.assign(&mut host_config, &self.id)?;
-        crate::mount::ensure_volume(
+        let new_volumes = crate::mount::ensure_volume(
             &VolumeStore::new(self.inner.store.volumes_dir()),
             &host_config.mounts,
         )?;
         record.host_config = host_config;
-        self.inner.store.save_record(&record)?;
+        if let Err(error) = self.inner.store.save_record(&record) {
+            let volumes = VolumeStore::new(self.inner.store.volumes_dir());
+            for name in new_volumes {
+                let _ = volumes.remove(&name);
+            }
+            return Err(error);
+        }
         self.inner
             .emit_named(&self.id, record.name, EventAction::Updated, None);
         Ok(())
@@ -679,27 +687,32 @@ impl Machine {
         }
     }
 
-    /// Like [`Machine::remove`], and deletes the machine's named volume too.
-    /// Refuses (removing nothing) while another machine uses the volume.
+    /// Like [`Machine::remove`], and deletes all the machine's named volumes.
+    /// Refuses (removing nothing) while another machine uses any of them.
     pub fn remove_with_volumes(&self, force: bool) -> Result<()> {
         let info = self.inspect()?;
-        let Some(volume) = crate::mount::volume_name(&info.host_config.mounts) else {
-            return self.remove(force);
-        };
-        if let Some(other) = crate::volumes::users_of(&self.inner, volume, Some(&self.id))?.first()
-        {
-            return Err(Error::conflict(format!(
-                "volume \"{volume}\" is also used by machine {other}"
-            )));
+        let volumes: Vec<_> = crate::mount::volume_names(&info.host_config.mounts).collect();
+        for volume in &volumes {
+            if let Some(other) =
+                crate::volumes::users_of(&self.inner, volume, Some(&self.id))?.first()
+            {
+                return Err(Error::conflict(format!(
+                    "volume \"{volume}\" is also used by machine {other}"
+                )));
+            }
         }
         self.remove(force)?;
-        match VolumeStore::new(self.inner.store.volumes_dir()).remove(volume) {
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
-            other => other,
+        let store = VolumeStore::new(self.inner.store.volumes_dir());
+        for volume in volumes {
+            match store.remove(volume) {
+                Err(e) if e.kind() == ErrorKind::NotFound => {}
+                other => other?,
+            }
         }
+        Ok(())
     }
 
-    /// Deletes the machine and its state, keeping its named volume. A running
+    /// Deletes the machine and its state, keeping its named volumes. A running
     /// machine needs `force`.
     pub fn remove(&self, force: bool) -> Result<()> {
         let _lifecycle = self.inner.store.lock_lifecycle(&self.id)?;

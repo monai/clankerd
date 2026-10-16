@@ -185,7 +185,7 @@ pub(crate) fn users_of(
             continue;
         }
         if let Ok((record, _)) = inner.store.load(&id)
-            && crate::mount::volume_name(&record.host_config.mounts) == Some(volume)
+            && crate::mount::volume_names(&record.host_config.mounts).any(|name| name == volume)
         {
             names.push(record.name);
         }

@@ -137,10 +137,7 @@ fn the_vmm_gets_the_volume_disk_and_the_guest_gets_the_mount() {
     common::finish_workload_and_stop(&m).unwrap();
 
     let specs = vmm.specs.lock().unwrap();
-    assert_eq!(
-        specs[0].volume_disk.as_deref(),
-        Some(volume_file(&env, "data").as_path())
-    );
+    assert_eq!(specs[0].volume_disks, vec![volume_file(&env, "data")]);
     assert_eq!(
         specs[0].workload.mounts,
         [GuestMount::Volume {
@@ -367,7 +364,7 @@ fn bind_mounts_reach_the_vmm_as_shares_and_the_guest_as_mounts() {
             },
         ]
     );
-    assert!(specs[0].volume_disk.is_none());
+    assert!(specs[0].volume_disks.is_empty());
 }
 
 #[test]
@@ -381,8 +378,8 @@ fn invalid_mounts_are_rejected_at_create() {
         ("dotdot target", vec![Mount::volume("data", "/a/../b")]),
         ("bad volume name", vec![Mount::volume("../x", "/s")]),
         (
-            "two volumes",
-            vec![Mount::volume("a", "/a"), Mount::volume("b", "/b")],
+            "duplicate volume",
+            vec![Mount::volume("a", "/a"), Mount::volume("a", "/b")],
         ),
         (
             "duplicate target",
@@ -436,4 +433,89 @@ fn volumes_can_be_created_and_removed_on_their_own() {
         engine.remove_volume("data").unwrap_err().kind(),
         ErrorKind::Conflict
     );
+}
+
+#[test]
+fn all_named_volumes_are_attached_retained_and_checked_for_conflicts() {
+    let env = Env::new();
+    let (engine, vmm) = recording(&env);
+    let machine = engine
+        .create(
+            Some("multi"),
+            sh("sleep 60"),
+            with_mounts(vec![
+                Mount::volume("first", "/first").with_size(2 * MIB),
+                Mount::volume("second", "/second").with_size(3 * MIB),
+            ]),
+        )
+        .unwrap();
+    assert_eq!(engine.volume("second").unwrap().size, 3 * MIB);
+    machine.start().unwrap();
+    let specs = vmm.specs.lock().unwrap();
+    assert_eq!(
+        specs[0].volume_disks,
+        [volume_file(&env, "first"), volume_file(&env, "second")]
+    );
+    let devices: Vec<_> = specs[0]
+        .workload
+        .mounts
+        .iter()
+        .map(|mount| match mount {
+            GuestMount::Volume { device, .. } => device.as_str(),
+            _ => panic!("expected volume"),
+        })
+        .collect();
+    assert_eq!(devices, ["/dev/vda", "/dev/vdb"]);
+    drop(specs);
+    let other = engine
+        .create(
+            Some("other"),
+            sh("true"),
+            with_mounts(vec![
+                Mount::volume("spare", "/spare").with_size(MIB),
+                Mount::volume("second", "/data"),
+            ]),
+        )
+        .unwrap();
+    assert_eq!(other.start().unwrap_err().kind(), ErrorKind::Conflict);
+    assert_eq!(
+        engine.remove_volume("second").unwrap_err().kind(),
+        ErrorKind::Conflict
+    );
+    machine.stop(std::time::Duration::from_secs(10)).unwrap();
+    assert_eq!(
+        machine.remove_with_volumes(false).unwrap_err().kind(),
+        ErrorKind::Conflict
+    );
+    assert!(engine.volume("first").is_ok());
+    other.remove(false).unwrap();
+    engine.remove_volume("spare").unwrap();
+    machine.remove_with_volumes(false).unwrap();
+    assert!(engine.volumes().unwrap().is_empty());
+}
+
+#[test]
+fn failed_collection_creation_removes_only_new_volumes() {
+    let env = Env::new();
+    let (engine, _) = recording(&env);
+    engine.create_volume("existing", Some(MIB)).unwrap();
+    write_marker(&volume_file(&env, "existing"));
+    // An incomplete volume directory must not be overwritten.
+    std::fs::create_dir(env.root().join("state/volumes/blocked")).unwrap();
+    let result = engine.create(
+        Some("failed"),
+        sh("true"),
+        with_mounts(vec![
+            Mount::volume("existing", "/existing"),
+            Mount::volume("new", "/new").with_size(MIB),
+            Mount::volume("blocked", "/blocked"),
+        ]),
+    );
+    assert!(result.is_err());
+    assert_eq!(read_marker(&volume_file(&env, "existing")), b"kept");
+    assert_eq!(
+        engine.volume("new").unwrap_err().kind(),
+        ErrorKind::NotFound
+    );
+    assert!(engine.list(true).unwrap().is_empty());
 }

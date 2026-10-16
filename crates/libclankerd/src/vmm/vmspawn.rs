@@ -67,7 +67,7 @@ impl VmspawnVmm {
         if spec.net.is_some() && !self.dev_local {
             self.place_network_tools(boot)?;
         }
-        if spec.volume_disk.is_some() {
+        if !spec.volume_disks.is_empty() {
             self.place_volume_tools(boot)?;
         }
         fs::write(
@@ -146,7 +146,7 @@ impl Vmm for VmspawnVmm {
             memory_mib: (spec.memory.unwrap_or(DEFAULT_MEMORY) / (1024 * 1024)).max(128) as u32,
             root_disk: spec.root_disk.clone(),
             populate: false,
-            volume_disk: spec.volume_disk.clone(),
+            volume_disks: spec.volume_disks.clone(),
             shares: spec.shares.clone(),
             net: spec.net.as_ref().map(|n| NetDevice {
                 socket: n.socket.clone(),

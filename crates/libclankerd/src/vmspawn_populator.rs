@@ -127,7 +127,7 @@ impl DiskPopulator for VmspawnPopulator {
             memory_mib: 1024,
             root_disk: Some(disk.to_path_buf()),
             populate: true,
-            volume_disk: None,
+            volume_disks: Vec::new(),
             shares: Vec::new(),
             net: None,
         };

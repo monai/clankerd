@@ -217,7 +217,14 @@ fn a_machine_with_a_root_disk_hands_it_to_the_helper() {
     let env = Env::new();
     let registry = Registry::start();
     registry.push("test/app", "v1", &[layer(&[("hello", b"hi")])]);
-    let mut cfg = env.config(dev_vmm());
+    let tools = env.root().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    std::fs::copy(guestd_path(), tools.join("clankerd-guestd")).unwrap();
+    for name in ["mke2fs", "resize2fs"] {
+        std::fs::copy(common::tool(name), tools.join(name)).unwrap();
+    }
+    let vmm = Arc::new(VmspawnVmm::new(vmspawn_path(), tools.join("clankerd-guestd")).dev_local());
+    let mut cfg = env.config(vmm);
     cfg.cache_dir = Some(env.root().join("cache"));
     cfg.populator = Some(Arc::new(TarCapture::default()));
     cfg.insecure_registries = vec![registry.addr.clone()];
@@ -230,7 +237,13 @@ fn a_machine_with_a_root_disk_hands_it_to_the_helper() {
                 cmd: vec!["/bin/true".into()],
                 ..Default::default()
             },
-            libclankerd::HostConfig::default(),
+            libclankerd::HostConfig {
+                mounts: vec![
+                    libclankerd::Mount::volume("data", "/data").with_size(1 << 20),
+                    libclankerd::Mount::volume("logs", "/logs").with_size(2 << 20),
+                ],
+                ..Default::default()
+            },
         )
         .unwrap();
     m.start().unwrap();
@@ -244,6 +257,34 @@ fn a_machine_with_a_root_disk_hands_it_to_the_helper() {
         .join(libclankerd::ROOT_DISK);
     assert_eq!(spec["root_disk"], disk.to_str().unwrap());
     assert_eq!(spec["populate"], false);
+    assert_eq!(
+        spec["volume_disks"],
+        serde_json::json!([
+            env.root().join("state/volumes/data/data.ext4"),
+            env.root().join("state/volumes/logs/data.ext4"),
+        ])
+    );
+    let workload: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            env.root()
+                .join("state/machines")
+                .join(m.id())
+                .join("boot/workload.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(workload["mounts"][0]["device"], "/dev/vdb");
+    assert_eq!(workload["mounts"][1]["device"], "/dev/vdc");
+    // The public spawn protocol still accepts specs emitted by the old helper client.
+    for legacy in [serde_json::Value::Null, serde_json::json!("/old/data.ext4")] {
+        let mut old = spec.clone();
+        old.as_object_mut().unwrap().remove("volume_disks");
+        old["volume_disk"] = legacy.clone();
+        let decoded: clankerd_proto::spawn::SpawnSpec = serde_json::from_value(old).unwrap();
+        let expected: Vec<PathBuf> = legacy.as_str().map(PathBuf::from).into_iter().collect();
+        assert_eq!(decoded.volume_disks, expected);
+    }
 }
 
 #[test]

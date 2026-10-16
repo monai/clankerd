@@ -61,9 +61,9 @@ impl Hypervisor for Libkrun {
                 read_only: false,
             });
         }
-        if let Some(disk) = &spec.volume_disk {
+        for (index, disk) in spec.volume_disks.iter().enumerate() {
             cfg.disks.push(libkrun_sys::Disk {
-                block_id: "volume".into(),
+                block_id: format!("volume{index}"),
                 path: disk.clone(),
                 read_only: false,
             });

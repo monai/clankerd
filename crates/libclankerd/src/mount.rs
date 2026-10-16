@@ -1,12 +1,12 @@
 //! Mounts: the [`Mount`] configuration type, its validation, and the plan that
-//! turns a machine's mounts into what the VMM attaches (a volume disk, virtio-fs
+//! turns a machine's mounts into what the VMM attaches (volume disks, virtio-fs
 //! shares) and what guestd mounts (`GuestMount`).
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use clankerd_proto::guest::GuestMount;
-use clankerd_proto::spawn::{Share, VOLUME_DEVICE};
+use clankerd_proto::spawn::Share;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
@@ -114,7 +114,7 @@ fn valid_guest_path(p: &Path) -> bool {
 /// Checks mounts without touching the disk, except that bind sources must be
 /// existing directories.
 pub(crate) fn validate(mounts: &[Mount]) -> Result<()> {
-    let mut volumes = 0;
+    let mut volumes = std::collections::HashSet::new();
     let mut targets: Vec<&Path> = Vec::new();
     for m in mounts {
         let target = m.target();
@@ -134,10 +134,9 @@ pub(crate) fn validate(mounts: &[Mount]) -> Result<()> {
         match m {
             Mount::Bind { source, .. } => check_bind_source(source)?,
             Mount::Volume { name, .. } => {
-                volumes += 1;
-                if volumes > 1 {
+                if !volumes.insert(name) {
                     return Err(Error::invalid_parameter(
-                        "a machine can have at most one named volume",
+                        "a named volume may only be mounted once per machine",
                     ));
                 }
                 if !valid_name(name) {
@@ -174,9 +173,9 @@ fn check_bind_source(source: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Name of the machine's volume, if it mounts one.
-pub(crate) fn volume_name(mounts: &[Mount]) -> Option<&str> {
-    mounts.iter().find_map(|m| match m {
+/// Names of every attached volume, in mount order.
+pub(crate) fn volume_names(mounts: &[Mount]) -> impl Iterator<Item = &str> {
+    mounts.iter().filter_map(|m| match m {
         Mount::Volume { name, .. } => Some(name.as_str()),
         Mount::Bind { .. } => None,
     })
@@ -185,26 +184,35 @@ pub(crate) fn volume_name(mounts: &[Mount]) -> Option<&str> {
 /// What a boot needs for a machine's mounts.
 #[derive(Debug, Default)]
 pub(crate) struct MountPlan {
-    pub volume_disk: Option<PathBuf>,
+    pub volume_disks: Vec<PathBuf>,
     pub shares: Vec<Share>,
     pub guest: Vec<GuestMount>,
 }
 
-/// Creates the machine's volume if it does not exist yet; returns whether it did.
-pub(crate) fn ensure_volume(volumes: &VolumeStore, mounts: &[Mount]) -> Result<bool> {
+/// Creates missing volumes, rolling back newly created files on failure.
+pub(crate) fn ensure_volume(volumes: &VolumeStore, mounts: &[Mount]) -> Result<Vec<String>> {
+    let mut created: Vec<String> = Vec::new();
     for m in mounts {
         if let Mount::Volume { name, .. } = m {
             if volumes.exists(name) {
-                return Ok(false);
+                continue;
             }
-            volumes.create(name, Some(m.requested_size()?.unwrap_or(DEFAULT_SIZE)))?;
-            return Ok(true);
+            let result = m
+                .requested_size()
+                .and_then(|size| volumes.create(name, Some(size.unwrap_or(DEFAULT_SIZE))));
+            if let Err(error) = result {
+                for name in &created {
+                    let _ = volumes.remove(name);
+                }
+                return Err(error);
+            }
+            created.push(name.clone());
         }
     }
-    Ok(false)
+    Ok(created)
 }
 
-/// Prepares the mounts for a boot: grows the volume file to the size asked
+/// Prepares the mounts for a boot: grows each volume file to the size asked
 /// for (never shrinks), checks bind sources, assigns virtio-fs tags.
 pub(crate) fn plan(
     volumes: &VolumeStore,
@@ -216,14 +224,19 @@ pub(crate) fn plan(
         match m {
             Mount::Volume { name, target, .. } => {
                 let size = volumes.grow_to(name, m.requested_size()?)?;
-                plan.volume_disk = Some(volumes.data_path(name));
+                let index = plan.volume_disks.len() + usize::from(has_root_disk);
+                let mut suffix = String::new();
+                let mut n = index;
+                loop {
+                    suffix.insert(0, (b'a' + (n % 26) as u8) as char);
+                    if n < 26 {
+                        break;
+                    }
+                    n = n / 26 - 1;
+                }
+                plan.volume_disks.push(volumes.data_path(name));
                 plan.guest.push(GuestMount::Volume {
-                    // Without a root disk the volume is the first block device.
-                    device: if has_root_disk {
-                        VOLUME_DEVICE.into()
-                    } else {
-                        clankerd_proto::spawn::ROOT_DEVICE.into()
-                    },
+                    device: format!("/dev/vd{suffix}"),
                     target: target.to_string_lossy().into_owned(),
                     size,
                 });

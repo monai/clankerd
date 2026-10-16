@@ -90,3 +90,13 @@ the Mac smoke scripts. Docker image assets live in `images/slim/`.
 CI tests the Rust workspace, runs privileged filesystem checks, generates
 coverage, and builds and signs the host/guest binaries. Tagged releases package
 those binaries and guest utilities.
+
+Named-volume mounts form a collection: for example,
+`vmctl create --name app -v data:/data -v logs:/logs IMAGE`. Each volume can appear once per machine;
+guest targets must be unique across bind and volume mounts. Volumes are attached
+in mount order after the optional image root disk. Detach, reimage and machine
+removal retain their data. Use matching versions of vmctl and clankerd-vmspawn;
+the helper protocol now writes a `volume_disks` collection (the new helper also
+accepts older singular `volume_disk` specs). Native disk counts remain subject
+to [libkrun's shared device/IRQ capacity](https://github.com/containers/libkrun/blob/main/src/libkrun/src/vmm/device_manager/hvf/mmio.rs);
+attachment failures are reported at boot.

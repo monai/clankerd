@@ -42,10 +42,10 @@ pub struct BootSpec {
     pub root_disk: Option<PathBuf>,
     pub cpus: Option<u32>,
     pub memory: Option<u64>,
-    /// The machine's volume image (sparse raw ext4), attached as the block
-    /// device after the root disk. guestd formats, grows and mounts it per
+    /// The machine's volume images (sparse raw ext4), in mount order after
+    /// the optional root disk. guestd formats, grows and mounts them per
     /// `workload.mounts`; the local stand-in ignores it.
-    pub volume_disk: Option<PathBuf>,
+    pub volume_disks: Vec<PathBuf>,
     /// Host directories to share over virtio-fs, mounted by tag per
     /// `workload.mounts`; the local stand-in ignores them.
     pub shares: Vec<Share>,

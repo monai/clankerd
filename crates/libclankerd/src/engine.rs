@@ -358,7 +358,7 @@ impl Engine {
         };
 
         let networks = crate::networks::Networks::lock(&self.inner.store)?;
-        let mut new_volume = None;
+        let new_volumes;
         {
             let _g = self.inner.lock();
             for existing in self.inner.store.ids()? {
@@ -372,9 +372,7 @@ impl Engine {
             }
             networks.assign(&mut host_config, &id)?;
             let volumes = self.volume_store();
-            if crate::mount::ensure_volume(&volumes, &host_config.mounts)? {
-                new_volume = crate::mount::volume_name(&host_config.mounts).map(str::to_owned);
-            }
+            new_volumes = crate::mount::ensure_volume(&volumes, &host_config.mounts)?;
             let record = Record {
                 id: id.clone(),
                 name,
@@ -386,7 +384,7 @@ impl Engine {
                 image_config,
             };
             if let Err(e) = self.inner.store.create(&record, &MachineState::created()) {
-                if let Some(v) = &new_volume {
+                for v in &new_volumes {
                     let _ = volumes.remove(v);
                 }
                 return Err(e);
@@ -399,7 +397,7 @@ impl Engine {
             let disk = self.inner.store.machine_dir(&id).join(ROOT_DISK);
             if let Err(e) = clone_file(&base, &disk) {
                 let _ = self.inner.store.remove(&id);
-                if let Some(v) = &new_volume {
+                for v in &new_volumes {
                     let _ = self.volume_store().remove(v);
                 }
                 return Err(e);

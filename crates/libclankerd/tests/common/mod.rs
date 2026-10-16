@@ -168,7 +168,7 @@ pub fn debugfs(image: &Path, request: &str) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-fn tool(name: &str) -> String {
+pub fn tool(name: &str) -> String {
     std::env::var_os("CLANKERD_TEST_BOOT_DIR")
         .map(|dir| PathBuf::from(dir).join(name).to_string_lossy().into_owned())
         .into_iter()
