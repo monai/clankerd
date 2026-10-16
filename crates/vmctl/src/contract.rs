@@ -259,13 +259,13 @@ pub struct UpdateArgs {
     /// Add a typed mount: type=bind|volume,source=SOURCE,target=/GUEST[,readonly].
     #[arg(long, value_parser = parse::typed_mount)]
     pub mount_add: Vec<Mount>,
-    /// Detach the mount at this absolute guest target, retaining its data.
+    /// Ensure the mount at this absolute guest target is detached; absent targets succeed; data is retained.
     #[arg(long, value_parser = parse::guest_path)]
     pub mount_remove: Vec<PathBuf>,
     /// Add a persisted socket binding: host=/HOST,guest=/GUEST.
     #[arg(long, value_parser = parse::socket)]
     pub socket_add: Vec<SocketBinding>,
-    /// Remove a socket binding by its absolute guest endpoint.
+    /// Ensure the socket binding at this absolute guest endpoint is absent; absent targets succeed.
     #[arg(long, value_parser = parse::guest_path)]
     pub socket_remove: Vec<PathBuf>,
     #[arg(required = true)]
@@ -321,22 +321,10 @@ impl UpdateArgs {
     ) -> Result<(), libclankerd::Error> {
         self.host.apply(engine, host)?;
         for target in &self.mount_remove {
-            if !host.mounts.iter().any(|m| m.target() == target) {
-                return Err(libclankerd::Error::invalid_parameter(format!(
-                    "no mount at {}",
-                    target.display()
-                )));
-            }
             host.mounts.retain(|m| m.target() != target);
         }
         host.mounts.extend(self.mount_add.clone());
         for target in &self.socket_remove {
-            if !host.socket_bindings.iter().any(|s| &s.guest_path == target) {
-                return Err(libclankerd::Error::invalid_parameter(format!(
-                    "no socket at {}",
-                    target.display()
-                )));
-            }
             host.socket_bindings.retain(|s| &s.guest_path != target);
         }
         host.socket_bindings.extend(self.socket_add.clone());
@@ -675,7 +663,7 @@ fn metadata(command: &clap::Command) -> serde_json::Value {
         "exit_codes": {"success":0,"operation_or_partial_failure":1,"invalid_invocation":2,"process":"foreground run/exec return process exit status when available"},
         "empty_operation_results":"[] on setup failure; image pull uses null when no image result exists",
         "identifiers":{"machine_create_run":"full machine identifier", "machine_existing_mutations":"supplied name or identifier", "image":"sha256 digest", "network_volume":"name"},
-        "collections": {"env":"key-based library override", "mounts":"unique guest targets; at most one named volume currently supported", "sockets":"unique guest endpoints", "update":"remove then add; omitted fields preserved; at least one change required"},
+        "collections": {"env":"key-based library override", "mounts":"unique guest targets; at most one named volume currently supported", "sockets":"unique guest endpoints", "update":"remove then add; omitted fields preserved; at least one change required", "removal":{"absent_target":"success", "duplicates":"idempotent", "eligibility":"existing stopped machine"}},
         "eligibility": {"update":"stopped", "reimage":"stopped", "exec":"running"},
         "schemas": {"machine": schemars::schema_for!(results::MachineRecord), "image": schemars::schema_for!(results::ImageRecord), "network": schemars::schema_for!(results::NetworkRecord), "volume": schemars::schema_for!(results::VolumeRecord), "operation": schemars::schema_for!(results::Operation), "diagnostic": schemars::schema_for!(results::Diagnostic)}})
 }

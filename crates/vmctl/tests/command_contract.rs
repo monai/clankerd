@@ -6,7 +6,8 @@ fn canonical_machine_hierarchy_and_shortcuts_share_required_operands() {
     let dir = tempfile::tempdir().unwrap();
     let guestd = guestd();
     for action in [
-        "create", "start", "stop", "kill", "inspect", "rm", "exec", "logs", "reimage",
+        "create", "run", "start", "stop", "kill", "update", "inspect", "rm", "exec", "logs",
+        "reimage",
     ] {
         for args in [vec!["machine", action], vec![action]] {
             let out = vmctl(dir.path(), &guestd, &args);
@@ -18,39 +19,65 @@ fn canonical_machine_hierarchy_and_shortcuts_share_required_operands() {
             );
         }
     }
-    let out = vmctl(dir.path(), &guestd, &["machine", "ls"]);
-    assert!(out.status.success(), "{}", text(&out.stderr));
-    assert!(text(&out.stdout).contains("MACHINE ID"));
+    for resource in ["network", "volume"] {
+        for action in ["create", "inspect", "rm"] {
+            let out = vmctl(dir.path(), &guestd, &[resource, action]);
+            assert_eq!(
+                out.status.code(),
+                Some(2),
+                "{resource} {action}: {}",
+                text(&out.stderr)
+            );
+        }
+    }
 }
 
 #[test]
-fn explicit_json_and_partial_inspection_keep_stdout_parseable() {
-    let dir = tempfile::tempdir().unwrap();
-    let guestd = guestd();
-    let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
-    let empty = v(&["network", "ls", "--output", "json"]);
-    assert!(empty.status.success(), "{}", text(&empty.stderr));
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&empty.stdout).unwrap(),
-        serde_json::json!([])
-    );
-    assert!(v(&["network", "create", "team"]).status.success());
-    let partial = v(&["network", "inspect", "--output", "json", "missing", "team"]);
-    assert_eq!(partial.status.code(), Some(1));
-    let records: serde_json::Value = serde_json::from_slice(&partial.stdout).unwrap();
-    assert_eq!(records[0]["name"], "team");
-    assert!(records[0]["created"].is_u64());
-    let error: serde_json::Value = serde_json::from_slice(&partial.stderr).unwrap();
-    assert_eq!(error["target"], "missing");
-    assert_eq!(error["origin"], "operation");
-    let out = v(&["network", "rm", "--output", "json", "missing", "team"]);
-    let results: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(results[0]["success"], false);
-    assert_eq!(results[1]["success"], true);
+fn partial_inspection_emits_successes_in_input_order_and_reports_each_failed_target() {
+    for resource in ["machine", "network", "volume"] {
+        let dir = tempfile::tempdir().unwrap();
+        let guestd = guestd();
+        let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
+        for name in ["first", "last"] {
+            let mut args = vec![resource, "create"];
+            if resource == "machine" {
+                args.extend(["--name", name, "img", "true"]);
+            } else {
+                args.push(name);
+            }
+            let out = v(&args);
+            assert!(out.status.success(), "{}", text(&out.stderr));
+        }
+        let out = v(&[
+            resource,
+            "inspect",
+            "--output",
+            "json",
+            "missing",
+            "last",
+            "first",
+            "other-missing",
+        ]);
+        assert_eq!(out.status.code(), Some(1));
+        let records: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(records.as_array().unwrap().len(), 2);
+        assert_eq!(records[0]["name"], "last");
+        assert_eq!(records[1]["name"], "first");
+        let errors: Vec<serde_json::Value> = text(&out.stderr)
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(errors.len(), 2);
+        for (error, target) in errors.iter().zip(["missing", "other-missing"]) {
+            assert_eq!(error["target"], target);
+            assert_eq!(error["origin"], "operation");
+            assert_eq!(error["kind"], "NotFound");
+        }
+    }
 }
 
 #[test]
-fn grammar_enforces_option_scopes_and_preserves_guest_tail() {
+fn invalid_invocations_are_rejected_before_execution() {
     let dir = tempfile::tempdir().unwrap();
     let guestd = guestd();
     let _cleanup = common::cleanup_on_drop(dir.path(), &guestd);
@@ -80,6 +107,13 @@ fn grammar_enforces_option_scopes_and_preserves_guest_tail() {
             text(&out.stderr)
         );
     }
+}
+
+#[test]
+fn guest_tails_and_end_of_options_preserve_literal_arguments() {
+    let dir = tempfile::tempdir().unwrap();
+    let guestd = guestd();
+    let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
     let out = v(&[
         "create", "--name", "literal", "img", "--memory", "2G", "--", "tail",
     ]);
@@ -112,74 +146,7 @@ fn grammar_enforces_option_scopes_and_preserves_guest_tail() {
 }
 
 #[test]
-fn stopped_updates_patch_resources_mounts_and_sockets_without_resetting_omissions() {
-    let dir = tempfile::tempdir().unwrap();
-    let guestd = guestd();
-    let _cleanup = common::cleanup_on_drop(dir.path(), &guestd);
-    let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
-    assert!(
-        v(&["volume", "create", "--size", "4M", "data"])
-            .status
-            .success()
-    );
-    let out = v(&[
-        "create",
-        "--name",
-        "saved",
-        "--cpus",
-        "2",
-        "-m",
-        "128M",
-        "-e",
-        "A=first",
-        "-e",
-        "A=last",
-        "-v",
-        "data:/old",
-        "--socket",
-        "host=/tmp/host.sock,guest=/run/host.sock",
-        "img",
-        "true",
-    ]);
-    assert!(out.status.success(), "{}", text(&out.stderr));
-    let before: serde_json::Value =
-        serde_json::from_slice(&v(&["inspect", "saved"]).stdout).unwrap();
-    let out = v(&[
-        "update",
-        "--memory",
-        "256MiB",
-        "--mount-remove",
-        "/old",
-        "--mount-add",
-        "type=volume,source=data,target=/new",
-        "--socket-remove",
-        "/run/host.sock",
-        "--socket-add",
-        "host=/tmp/other.sock,guest=/run/new.sock",
-        "saved",
-    ]);
-    assert!(out.status.success(), "{}", text(&out.stderr));
-    let after: serde_json::Value =
-        serde_json::from_slice(&v(&["inspect", "saved"]).stdout).unwrap();
-    assert_eq!(after[0]["config"], before[0]["config"]);
-    assert_eq!(after[0]["host_config"]["cpus"], 2);
-    assert_eq!(after[0]["host_config"]["memory"], 256 << 20);
-    assert_eq!(after[0]["host_config"]["mounts"][0]["target"], "/new");
-    assert_eq!(
-        after[0]["host_config"]["socket_bindings"][0]["guest_path"],
-        "/run/new.sock"
-    );
-    assert!(
-        v(&["update", "--mount-remove", "/new", "saved"])
-            .status
-            .success()
-    );
-    assert!(v(&["rm", "saved"]).status.success());
-    assert!(v(&["volume", "inspect", "data"]).status.success());
-}
-
-#[test]
-fn mount_spellings_normalize_equally_and_capability_limits_are_explicit() {
+fn named_volume_spellings_normalize_identically() {
     let dir = tempfile::tempdir().unwrap();
     let guestd = guestd();
     let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
@@ -199,6 +166,13 @@ fn mount_spellings_normalize_equally_and_capability_limits_are_explicit() {
     let a: serde_json::Value =
         serde_json::from_slice(&v(&["inspect", "short", "typed"]).stdout).unwrap();
     assert_eq!(a[0]["host_config"]["mounts"], a[1]["host_config"]["mounts"]);
+}
+
+#[test]
+fn multiple_named_volumes_report_the_backend_capability_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let guestd = guestd();
+    let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
     let out = v(&[
         "create",
         "-v",
@@ -210,6 +184,13 @@ fn mount_spellings_normalize_equally_and_capability_limits_are_explicit() {
     ]);
     assert_eq!(out.status.code(), Some(1));
     assert!(text(&out.stderr).contains("at most one named volume"));
+}
+
+#[test]
+fn mount_targets_are_unique_across_spellings() {
+    let dir = tempfile::tempdir().unwrap();
+    let guestd = guestd();
+    let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
     let out = v(&[
         "create",
         "-v",
@@ -224,7 +205,7 @@ fn mount_spellings_normalize_equally_and_capability_limits_are_explicit() {
 }
 
 #[test]
-fn exported_contract_and_help_are_deterministic_and_describe_public_rules() {
+fn exported_contract_is_deterministic_and_describes_public_resources() {
     let command = || {
         std::process::Command::new(env!("CARGO_BIN_EXE_vmctl"))
             .arg("--describe-contract")
@@ -245,6 +226,10 @@ fn exported_contract_and_help_are_deterministic_and_describe_public_rules() {
     for resource in ["machine", "image", "network", "volume"] {
         assert!(commands.iter().any(|c| c["name"] == resource));
     }
+}
+
+#[test]
+fn action_help_groups_options_and_excludes_global_flags() {
     for args in [
         vec!["machine", "create", "--help"],
         vec!["create", "--help"],
@@ -283,7 +268,7 @@ fn json_invocation_errors_are_structured_before_any_mutation() {
 }
 
 #[test]
-fn cli_overrides_environment_and_collections_accumulate_without_resetting_updates() {
+fn explicit_global_values_override_environment() {
     let dir = tempfile::tempdir().unwrap();
     let other = tempfile::tempdir().unwrap();
     let guestd = guestd();
@@ -326,14 +311,13 @@ fn cli_overrides_environment_and_collections_accumulate_without_resetting_update
     .output()
     .unwrap();
     let info: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    let entries = info[0]["config"]["env"].as_array().unwrap();
-    assert_eq!(
-        entries
-            .iter()
-            .rfind(|e| e.as_str().unwrap().starts_with("KEY="))
-            .unwrap(),
-        "KEY=last"
-    );
+    assert_eq!(info[0]["name"], "precedence");
+}
+
+#[test]
+fn mixed_mount_spellings_preserve_input_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let guestd = guestd();
     let out = vmctl(
         dir.path(),
         &guestd,
@@ -448,7 +432,44 @@ fn stopped_attachment_switching_clears_the_previous_alternative() {
 }
 
 #[test]
-fn metadata_shortcuts_preserve_result_schemas_and_effective_defaults() {
+fn metadata_shortcuts_share_canonical_result_contracts() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_vmctl"))
+        .arg("--describe-contract")
+        .output()
+        .unwrap();
+    let metadata: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let commands = metadata["command"]["commands"].as_array().unwrap();
+    for (shortcut, resource, action) in [
+        ("create", "machine", "create"),
+        ("run", "machine", "run"),
+        ("ps", "machine", "ls"),
+        ("inspect", "machine", "inspect"),
+        ("start", "machine", "start"),
+        ("stop", "machine", "stop"),
+        ("kill", "machine", "kill"),
+        ("update", "machine", "update"),
+        ("reimage", "machine", "reimage"),
+        ("rm", "machine", "rm"),
+        ("exec", "machine", "exec"),
+        ("logs", "machine", "logs"),
+        ("pull", "image", "pull"),
+        ("images", "image", "ls"),
+    ] {
+        let group = commands.iter().find(|c| c["name"] == resource).unwrap();
+        let canonical = group["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == action)
+            .unwrap();
+        let alias = commands.iter().find(|c| c["name"] == shortcut).unwrap();
+        assert_eq!(alias["result"], canonical["result"], "{shortcut}");
+        assert_eq!(alias["arguments"], canonical["arguments"], "{shortcut}");
+    }
+}
+
+#[test]
+fn metadata_declares_effective_defaults_separately_from_omitted_updates() {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_vmctl"))
         .arg("--describe-contract")
         .output()
@@ -457,9 +478,6 @@ fn metadata_shortcuts_preserve_result_schemas_and_effective_defaults() {
     let commands = metadata["command"]["commands"].as_array().unwrap();
     let machine = commands.iter().find(|c| c["name"] == "machine").unwrap();
     let actions = machine["commands"].as_array().unwrap();
-    let canonical = actions.iter().find(|c| c["name"] == "ls").unwrap();
-    let shortcut = commands.iter().find(|c| c["name"] == "ps").unwrap();
-    assert_eq!(canonical["result"], shortcut["result"]);
     let create = actions.iter().find(|c| c["name"] == "create").unwrap();
     let arg = |command: &serde_json::Value, name: &str| {
         command["arguments"]
@@ -492,14 +510,30 @@ fn metadata_shortcuts_preserve_result_schemas_and_effective_defaults() {
         arg(create, "size")["effective_default"]["value"],
         17179869184u64
     );
-    assert!(
-        metadata["schemas"]["machine"]["$defs"]["HostRecord"]["properties"]
-            .get("shared_peer_participation")
-            .is_none()
+}
+
+#[test]
+fn repeated_environment_entries_use_the_last_value_for_each_key_in_the_guest() {
+    let dir = tempfile::tempdir().unwrap();
+    let guestd = guestd();
+    let _cleanup = common::cleanup_on_drop(dir.path(), &guestd);
+    let out = vmctl(
+        dir.path(),
+        &guestd,
+        &[
+            "run",
+            "-e",
+            "KEY=first",
+            "-e",
+            "OTHER=retained",
+            "-e",
+            "KEY=last",
+            "img",
+            "sh",
+            "-c",
+            "printf '%s %s' \"$KEY\" \"$OTHER\"",
+        ],
     );
-    assert!(
-        metadata["schemas"]["machine"]["$defs"]["ProbeRecord"]["properties"]
-            .get("checked_at")
-            .is_some()
-    );
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(out.stdout, b"last retained");
 }

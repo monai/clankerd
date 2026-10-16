@@ -60,8 +60,11 @@ resource, mount, socket and environment flags.
 Global options precede the resource or shortcut; action options precede operands.
 Lists default to tables; use `--output json` before operands for structured
 results. `vmctl --describe-contract` exports deterministic command metadata and
-JSON schemas for the public result records. Application leases, mDNS and
-managed Chrome are outside the current runtime's API.
+JSON schemas for the public result records.
+Stopped-machine `update --mount-remove TARGET` and `--socket-remove TARGET`
+ensure the attachment is absent, succeeding when it was already absent.
+Removal preserves stored data; missing or running machines still fail.
+Application leases, mDNS and managed Chrome are outside the current runtime's API.
 
 ## Test
 

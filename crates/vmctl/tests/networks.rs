@@ -226,7 +226,17 @@ fn update_network_rejects_invalid_requests_without_changing_saved_configuration(
         ],
     ] {
         let rejected = v(&args);
-        assert!(!rejected.status.success(), "{args:?}");
+        let expected = if args == ["update", "--network", "missing", "member"] {
+            1
+        } else {
+            2
+        };
+        assert_eq!(
+            rejected.status.code(),
+            Some(expected),
+            "{args:?}: {}",
+            text(&rejected.stderr)
+        );
         assert_eq!(
             inspect(dir.path(), &guestd, "member")["host_config"],
             before["host_config"]

@@ -246,14 +246,14 @@ fn command_failure_leaves_the_machine_running_without_policy_restarts() {
 fn invalid_restart_and_pull_policies_are_usage_errors() {
     let cli = Cli::new();
     let out = cli.run(&["create", "--restart", "sometimes", "img", "true"]);
-    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(2));
     assert!(
         text(&out.stderr).contains("invalid restart policy"),
         "{}",
         text(&out.stderr)
     );
     let out = cli.run(&["create", "--pull", "sometimes", "img", "true"]);
-    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(2));
     assert!(
         text(&out.stderr).contains("possible values: missing, always, never"),
         "{}",

@@ -69,7 +69,11 @@ pub fn parse_mount(s: &str) -> Result<Mount, String> {
 fn fields(s: &str) -> Result<std::collections::BTreeMap<&str, &str>, String> {
     let mut fields = std::collections::BTreeMap::new();
     for field in s.split(',') {
-        let (key, value) = field.split_once('=').unwrap_or((field, "true"));
+        let (key, value) = match field.split_once('=') {
+            Some(pair) => pair,
+            None if field == "readonly" => (field, "true"),
+            None => return Err(format!("field {field} requires a value")),
+        };
         if fields.insert(key, value).is_some() {
             return Err(format!("repeated field {key}"));
         }

@@ -78,6 +78,20 @@ fn reimage_rebuilds_the_root_and_retains_volume_and_explicit_configuration() {
         .unwrap()
         .write_all(b"precious")
         .unwrap();
+    let alias_changed = v(&["reimage", "saved", &refs[1]]);
+    assert!(
+        alias_changed.status.success(),
+        "{}",
+        text(&alias_changed.stderr)
+    );
+    let alias_inspect = v(&["inspect", "saved"]);
+    let alias_info: serde_json::Value = serde_json::from_slice(&alias_inspect.stdout).unwrap();
+    assert_eq!(alias_info[0]["image_id"], digests[1]);
+    assert!(
+        v(&["machine", "reimage", "saved", &refs[0]])
+            .status
+            .success()
+    );
     let changed = v(&["machine", "reimage", "saved", &refs[1]]);
     assert!(changed.status.success(), "{}", text(&changed.stderr));
     let inspected = v(&["inspect", "saved"]);

@@ -147,7 +147,125 @@ fn malformed_volume_flags_are_rejected() {
         &["create", "--volume-size", "1G", "img", "true"],
     ] {
         let out = cli.run(args);
-        assert!(!out.status.success(), "{args:?} should fail");
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            common::text(&out.stderr)
+        );
     }
     assert!(cli.run(&["volume", "ls"]).status.success());
+}
+
+#[test]
+fn typed_mount_fields_require_values_and_have_unique_known_keys() {
+    let cli = Cli::new();
+    for mount in [
+        "type=volume,source,target=/storage",
+        "type,source=data,target=/storage",
+        "type=volume,source=data,target",
+        "type=volume,source=,target=/storage",
+        "type=volume,target=/storage",
+        "type=volume,source=data",
+        "type=volume,source=data,source=other,target=/storage",
+        "type=volume,source=data,target=/storage,unknown=value",
+        "type=bind,source=/tmp,target=/storage,readonly=maybe",
+    ] {
+        let out = cli.run(&["create", "--mount", mount, "img", "true"]);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{mount}: {}",
+            common::text(&out.stderr)
+        );
+        assert!(out.stdout.is_empty());
+    }
+    let machines: serde_json::Value =
+        serde_json::from_str(&cli.ok(&["machine", "ls", "--all", "--output", "json"])).unwrap();
+    assert_eq!(machines, serde_json::json!([]));
+}
+
+#[test]
+fn bind_spellings_resolve_paths_and_access_to_the_same_attachment() {
+    let cli = Cli::new();
+    std::fs::create_dir(cli.root().join("proj")).unwrap();
+    std::fs::create_dir(cli.root().join("child")).unwrap();
+    let absolute = cli.root().join("proj").canonicalize().unwrap();
+    for (index, source, cwd) in [
+        (0, "./proj".to_owned(), cli.root().to_owned()),
+        (1, "../proj".to_owned(), cli.root().join("child")),
+        (2, "~/proj".to_owned(), cli.root().to_owned()),
+        (3, absolute.display().to_string(), cli.root().to_owned()),
+    ] {
+        for readonly in [false, true] {
+            for typed in [false, true] {
+                let name = format!("case-{index}-{readonly}-{typed}");
+                let value = if typed {
+                    format!("type=bind,source={source},target=/shared,readonly={readonly}")
+                } else {
+                    format!("{source}:/shared:{}", if readonly { "ro" } else { "rw" })
+                };
+                let out = command(
+                    cli.root(),
+                    &cli.guestd,
+                    &[
+                        "create",
+                        "--name",
+                        &name,
+                        if typed { "--mount" } else { "--volume" },
+                        &value,
+                        "img",
+                        "true",
+                    ],
+                )
+                .current_dir(&cwd)
+                .env("HOME", cli.root())
+                .output()
+                .unwrap();
+                assert!(
+                    out.status.success(),
+                    "{value}: {}",
+                    common::text(&out.stderr)
+                );
+                let info: serde_json::Value =
+                    serde_json::from_str(&cli.ok(&["inspect", &name])).unwrap();
+                assert_eq!(
+                    info[0]["host_config"]["mounts"],
+                    serde_json::json!([{"type":"bind","source":absolute,"target":"/shared","read_only":readonly}])
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn read_only_access_is_rejected_for_named_volume_attachments() {
+    let cli = Cli::new();
+    for args in [
+        vec!["create", "-v", "data:/storage:ro", "img", "true"],
+        vec![
+            "create",
+            "--mount",
+            "type=volume,source=data,target=/storage,readonly",
+            "img",
+            "true",
+        ],
+        vec![
+            "create",
+            "--mount",
+            "type=volume,source=data,target=/storage,readonly=true",
+            "img",
+            "true",
+        ],
+    ] {
+        let out = cli.run(&args);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            common::text(&out.stderr)
+        );
+        assert!(out.stdout.is_empty());
+        assert!(common::text(&out.stderr).contains("read-only"));
+    }
 }

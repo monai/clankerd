@@ -60,3 +60,79 @@ fn pulling_a_missing_image_fails_with_a_clear_error() {
     assert_eq!(out.status.code(), Some(1));
     assert!(text(&out.stderr).contains("nope"), "{}", text(&out.stderr));
 }
+
+#[test]
+fn json_image_pulls_return_typed_image_objects() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = registry::Registry::start();
+    let layer = registry::layer(&[("example", b"content")]);
+    let size = layer.len() as u64;
+    let digest = reg.push("example/app", "v1", &[layer]);
+    let reference = format!("{}/example/app:v1", reg.addr);
+    for prefix in [vec!["image", "pull"], vec!["pull"]] {
+        let mut args = prefix;
+        args.extend(["--output", "json", &reference]);
+        let out = vmctl(dir.path(), &reg.addr, &args);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        assert!(out.stderr.is_empty());
+        let record: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert!(record.is_object());
+        assert_eq!(record["id"], digest);
+        assert_eq!(record["size"], size);
+        assert_eq!(record["layers"][0]["size"], size);
+        assert_eq!(record["layers"].as_array().unwrap().len(), 1);
+        assert!(
+            record["references"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(reference))
+        );
+        assert!(record["pulled"].as_u64().unwrap() > 1_000_000_000_000);
+    }
+}
+
+#[test]
+fn populated_image_lists_return_typed_image_arrays() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = registry::Registry::start();
+    let layer = registry::layer(&[("example", b"content")]);
+    let size = layer.len() as u64;
+    let digest = reg.push("example/app", "v1", &[layer]);
+    let reference = format!("{}/example/app:v1", reg.addr);
+    assert!(
+        vmctl(dir.path(), &reg.addr, &["image", "pull", &reference])
+            .status
+            .success()
+    );
+    for prefix in [vec!["image", "ls"], vec!["images"]] {
+        let mut args = prefix;
+        args.extend(["--output", "json"]);
+        let out = vmctl(dir.path(), &reg.addr, &args);
+        assert!(out.status.success());
+        assert!(out.stderr.is_empty());
+        let records: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(records.as_array().unwrap().len(), 1);
+        assert_eq!(records[0]["id"], digest);
+        assert_eq!(records[0]["size"], size);
+    }
+}
+
+#[test]
+fn failed_json_pulls_emit_null_and_an_operation_diagnostic() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = registry::Registry::start();
+    for prefix in [vec!["image", "pull"], vec!["pull"]] {
+        let reference = format!("{}/example/missing:v1", reg.addr);
+        let mut args = prefix;
+        args.extend(["--output", "json", &reference]);
+        let out = vmctl(dir.path(), &reg.addr, &args);
+        assert_eq!(out.status.code(), Some(1));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap(),
+            serde_json::Value::Null
+        );
+        let error: serde_json::Value = serde_json::from_slice(&out.stderr).unwrap();
+        assert_eq!(error["origin"], "operation");
+        assert!(error["message"].as_str().unwrap().contains("missing"));
+    }
+}

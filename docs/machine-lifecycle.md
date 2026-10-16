@@ -14,7 +14,7 @@ restart the machine.
 | `run -d` | Creates and starts a machine, returning immediately. |
 | `exec` | Runs a separate process, including after the image command has finished. |
 | `stop` | Requests shutdown; signals a running image command with its configured stop signal, then tears down the guest. Works if the command already ended. |
-| `kill` | SIGKILL terminates the VM immediately; other signals target the image command if it is running. |
+| `kill` | Forcibly terminates the machine; manage individual guest processes with `exec`. |
 | `start` after `stop` | Boots the saved machine again and reruns ENTRYPOINT/CMD. |
 
 A shell started without stdin or a terminal can exit immediately. That is a

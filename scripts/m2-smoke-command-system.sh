@@ -35,6 +35,7 @@ assert len(h['mounts'])==2 and m['config']['cmd']==['sleep','infinity']
 assert m['state']['status']=='created'
 PY
 "$vmctl" machine update --socket-remove /run/host.sock member
+"$vmctl" machine update --socket-remove /run/host.sock --mount-remove /absent member
 "$vmctl" machine start member
 "$vmctl" machine exec member sh -c '[ "$(cat /shared/host-marker)" = retained; echo persisted > /storage/marker; sync'
 if "$vmctl" machine update --memory 1G member; then echo 'running update accepted' >&2; exit 1; fi
