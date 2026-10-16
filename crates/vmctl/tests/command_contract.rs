@@ -169,7 +169,7 @@ fn named_volume_spellings_normalize_identically() {
 }
 
 #[test]
-fn multiple_named_volumes_are_created_and_preserved_on_removal() {
+fn multiple_named_volume_spellings_preserve_collection_order() {
     let dir = tempfile::tempdir().unwrap();
     let guestd = guestd();
     let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
@@ -189,26 +189,6 @@ fn multiple_named_volumes_are_created_and_preserved_on_removal() {
     let machines: serde_json::Value = serde_json::from_slice(&inspected.stdout).unwrap();
     assert_eq!(machines[0]["host_config"]["mounts"][0]["name"], "one");
     assert_eq!(machines[0]["host_config"]["mounts"][1]["name"], "two");
-    let updated = v(&[
-        "update",
-        "--mount-remove",
-        "/a",
-        "--mount-add",
-        "type=volume,source=three,target=/c",
-        "multi",
-    ]);
-    assert!(updated.status.success(), "{}", text(&updated.stderr));
-    let inspected = v(&["inspect", "multi"]);
-    let machines: serde_json::Value = serde_json::from_slice(&inspected.stdout).unwrap();
-    assert_eq!(machines[0]["host_config"]["mounts"][0]["name"], "two");
-    assert_eq!(machines[0]["host_config"]["mounts"][1]["name"], "three");
-    assert!(v(&["rm", "multi"]).status.success());
-    let volumes = v(&["volume", "inspect", "one", "two", "three"]);
-    assert!(volumes.status.success(), "{}", text(&volumes.stderr));
-    let volumes: serde_json::Value = serde_json::from_slice(&volumes.stdout).unwrap();
-    assert_eq!(volumes[0]["name"], "one");
-    assert_eq!(volumes[1]["name"], "two");
-    assert_eq!(volumes[2]["name"], "three");
 }
 
 #[test]

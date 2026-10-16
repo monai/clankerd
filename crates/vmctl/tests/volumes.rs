@@ -95,6 +95,43 @@ fn a_named_volume_is_created_sparse_with_the_requested_size_and_survives_rm() {
 }
 
 #[test]
+fn machine_removal_preserves_the_data_of_every_named_volume() {
+    use std::io::{Read, Write};
+    let cli = Cli::new();
+    cli.ok(&["volume", "create", "--size", "1M", "first"]);
+    cli.ok(&["volume", "create", "--size", "2M", "second"]);
+    cli.ok(&[
+        "create",
+        "--name",
+        "example",
+        "-v",
+        "first:/first",
+        "-v",
+        "second:/second",
+        "img",
+        "true",
+    ]);
+    for (name, marker) in [("first", b"first"), ("second", b"other")] {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(cli.volume_file(name))
+            .unwrap()
+            .write_all(marker)
+            .unwrap();
+    }
+    cli.ok(&["rm", "example"]);
+    for (name, expected) in [("first", b"first"), ("second", b"other")] {
+        let mut marker = [0; 5];
+        std::fs::File::open(cli.volume_file(name))
+            .unwrap()
+            .read_exact(&mut marker)
+            .unwrap();
+        assert_eq!(&marker, expected);
+        cli.ok(&["volume", "inspect", name]);
+    }
+}
+
+#[test]
 fn volume_subcommands_create_and_remove() {
     let cli = Cli::new();
     cli.ok(&["volume", "create", "--size", "4M", "scratch"]);

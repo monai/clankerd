@@ -70,6 +70,8 @@ fn mount_updates_remove_then_add_without_replacing_other_mounts() {
             "-v",
             "/tmp:/keep:ro",
             "-v",
+            "retained:/retain",
+            "-v",
             "data:/old",
             "img",
             "true"
@@ -82,7 +84,7 @@ fn mount_updates_remove_then_add_without_replacing_other_mounts() {
         "--mount-remove",
         "/old",
         "--mount-add",
-        "type=volume,source=data,target=/new",
+        "type=volume,source=new,target=/new",
         "saved",
     ]);
     assert!(out.status.success(), "{}", text(&out.stderr));
@@ -91,7 +93,8 @@ fn mount_updates_remove_then_add_without_replacing_other_mounts() {
         info["host_config"]["mounts"],
         json!([
             {"type":"bind","source":std::fs::canonicalize("/tmp").unwrap().display().to_string(),"target":"/keep","read_only":true},
-            {"type":"volume","name":"data","target":"/new"}
+            {"type":"volume","name":"retained","target":"/retain"},
+            {"type":"volume","name":"new","target":"/new"}
         ])
     );
 }

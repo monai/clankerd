@@ -126,27 +126,98 @@ fn a_new_volume_is_a_sparse_file_of_the_requested_size() {
 }
 
 #[test]
-fn the_vmm_gets_the_volume_disk_and_the_guest_gets_the_mount() {
-    let env = Env::new();
-    let (engine, vmm) = recording(&env);
-    let mount = Mount::volume("data", "/storage").with_size(32 * MIB);
-    let m = engine
-        .create(Some("a"), sh("true"), with_mounts(vec![mount]))
-        .unwrap();
-    m.start().unwrap();
-    common::finish_workload_and_stop(&m).unwrap();
-
-    let specs = vmm.specs.lock().unwrap();
-    assert_eq!(specs[0].volume_disks, vec![volume_file(&env, "data")]);
-    assert_eq!(
-        specs[0].workload.mounts,
-        [GuestMount::Volume {
-            // No root disk in the stand-in, so the volume is the first device.
-            device: "/dev/vda".into(),
-            target: "/storage".into(),
-            size: 32 * MIB
-        }]
-    );
+fn volume_boot_mappings_preserve_order_targets_and_sizes_with_or_without_a_root() {
+    use common::registry::{Registry, layer};
+    const DEVICES: [&str; 28] = [
+        "/dev/vda",
+        "/dev/vdb",
+        "/dev/vdc",
+        "/dev/vdd",
+        "/dev/vde",
+        "/dev/vdf",
+        "/dev/vdg",
+        "/dev/vdh",
+        "/dev/vdi",
+        "/dev/vdj",
+        "/dev/vdk",
+        "/dev/vdl",
+        "/dev/vdm",
+        "/dev/vdn",
+        "/dev/vdo",
+        "/dev/vdp",
+        "/dev/vdq",
+        "/dev/vdr",
+        "/dev/vds",
+        "/dev/vdt",
+        "/dev/vdu",
+        "/dev/vdv",
+        "/dev/vdw",
+        "/dev/vdx",
+        "/dev/vdy",
+        "/dev/vdz",
+        "/dev/vdaa",
+        "/dev/vdab",
+    ];
+    for has_root in [false, true] {
+        for count in [0, 1, 2, 27] {
+            let env = Env::new();
+            let vmm = Arc::new(Recording {
+                inner: LocalProcessVmm::new(guestd_path()),
+                specs: Mutex::default(),
+            });
+            let mut cfg = env.config(vmm.clone());
+            let registry = Registry::start();
+            let mut config = sh("true");
+            if has_root {
+                registry.push("test/app", "v1", &[layer(&[("example", b"foo")])]);
+                cfg.cache_dir = Some(env.root().join("cache"));
+                cfg.populator = Some(Arc::new(TarCapture::default()));
+                cfg.insecure_registries = vec![registry.addr.clone()];
+                config.image = format!("{}/test/app:v1", registry.addr);
+            }
+            let engine = Engine::new(cfg).unwrap();
+            let mut mounts = Vec::new();
+            let mut disks = Vec::new();
+            let mut expected = Vec::new();
+            for (index, device) in DEVICES[usize::from(has_root)..][..count].iter().enumerate() {
+                let name = format!("volume{index}");
+                let target = format!("/data/{index}");
+                let size = (index as u64 + 2) * MIB;
+                mounts.push(Mount::volume(&name, &target).with_size(size));
+                disks.push(volume_file(&env, &name));
+                expected.push(GuestMount::Volume {
+                    device: (*device).into(),
+                    target,
+                    size,
+                });
+            }
+            // A bind interleaved with volumes must not consume a block index.
+            mounts.insert(count.min(1), Mount::bind(env.root(), "/shared"));
+            expected.insert(
+                count.min(1),
+                GuestMount::Bind {
+                    tag: "bind0".into(),
+                    target: "/shared".into(),
+                    read_only: false,
+                },
+            );
+            let machine = engine
+                .create(Some("example"), config, with_mounts(mounts))
+                .unwrap();
+            machine.start().unwrap();
+            common::finish_workload_and_stop(&machine).unwrap();
+            let specs = vmm.specs.lock().unwrap();
+            assert_eq!(specs[0].root_disk.is_some(), has_root);
+            assert_eq!(
+                specs[0].volume_disks, disks,
+                "root={has_root}, count={count}"
+            );
+            assert_eq!(
+                specs[0].workload.mounts, expected,
+                "root={has_root}, count={count}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -192,37 +263,87 @@ fn read_marker(file: &std::path::Path) -> Vec<u8> {
 }
 
 #[test]
-fn remove_with_volumes_deletes_the_machines_volume() {
-    let env = Env::new();
-    let (engine, _) = recording(&env);
-    let m = engine
-        .create(
-            Some("a"),
-            sh("true"),
-            with_mounts(vec![Mount::volume("data", "/storage")]),
-        )
-        .unwrap();
-    m.remove_with_volumes(false).unwrap();
-    assert!(!volume_file(&env, "data").exists());
-    assert!(engine.volumes().unwrap().is_empty());
-    assert_eq!(
-        engine.volume("data").unwrap_err().kind(),
-        ErrorKind::NotFound
-    );
+fn remove_with_volumes_deletes_every_attached_volume() {
+    for count in [0, 1, 2] {
+        let env = Env::new();
+        let (engine, _) = recording(&env);
+        let mounts = (0..count)
+            .map(|index| {
+                Mount::volume(format!("volume{index}"), format!("/data/{index}")).with_size(MIB)
+            })
+            .collect();
+        let machine = engine
+            .create(Some("example"), sh("true"), with_mounts(mounts))
+            .unwrap();
+        machine.remove_with_volumes(false).unwrap();
+        assert!(engine.volumes().unwrap().is_empty());
+        assert_eq!(
+            engine.get("example").err().unwrap().kind(),
+            ErrorKind::NotFound
+        );
+        for index in 0..count {
+            assert!(!volume_file(&env, &format!("volume{index}")).exists());
+        }
+    }
 }
 
 #[test]
-fn remove_with_volumes_refuses_a_volume_another_machine_uses() {
+fn remove_with_volumes_checks_every_other_user_before_deleting_anything() {
+    for shared in ["first", "second"] {
+        let env = Env::new();
+        let (engine, _) = recording(&env);
+        let machine = engine
+            .create(
+                Some("example"),
+                sh("true"),
+                with_mounts(vec![
+                    Mount::volume("first", "/first").with_size(MIB),
+                    Mount::volume("second", "/second").with_size(MIB),
+                ]),
+            )
+            .unwrap();
+        engine
+            .create(
+                Some("other"),
+                sh("true"),
+                with_mounts(vec![Mount::volume(shared, "/data")]),
+            )
+            .unwrap();
+        for name in ["first", "second"] {
+            write_marker(&volume_file(&env, name));
+        }
+        assert_eq!(
+            machine.remove_with_volumes(false).unwrap_err().kind(),
+            ErrorKind::Conflict
+        );
+        assert!(engine.get("example").is_ok());
+        for name in ["first", "second"] {
+            assert_eq!(read_marker(&volume_file(&env, name)), b"kept");
+        }
+    }
+}
+
+#[test]
+fn volume_removal_rejects_references_at_every_attachment_position() {
     let env = Env::new();
     let (engine, _) = recording(&env);
-    let host = || with_mounts(vec![Mount::volume("data", "/storage")]);
-    let a = engine.create(Some("a"), sh("true"), host()).unwrap();
-    engine.create(Some("b"), sh("true"), host()).unwrap();
-    let err = a.remove_with_volumes(false).unwrap_err();
-    assert_eq!(err.kind(), ErrorKind::Conflict);
-    // Nothing was removed.
-    assert!(volume_file(&env, "data").exists());
-    engine.get("a").unwrap();
+    engine
+        .create(
+            Some("example"),
+            sh("true"),
+            with_mounts(vec![
+                Mount::volume("first", "/first").with_size(MIB),
+                Mount::volume("second", "/second").with_size(MIB),
+            ]),
+        )
+        .unwrap();
+    for name in ["first", "second"] {
+        assert_eq!(
+            engine.remove_volume(name).unwrap_err().kind(),
+            ErrorKind::Conflict
+        );
+        assert!(engine.volume(name).is_ok());
+    }
 }
 
 #[test]
@@ -313,16 +434,33 @@ fn size_comes_from_driver_opts_and_accepts_suffixes() {
 }
 
 #[test]
-fn a_machine_cannot_start_while_another_running_machine_holds_its_volume() {
-    let env = Env::new();
-    let (engine, _) = recording(&env);
-    let host = || with_mounts(vec![Mount::volume("data", "/storage")]);
-    let a = engine.create(Some("a"), sh("sleep 30"), host()).unwrap();
-    a.start().unwrap();
-    let b = engine.create(Some("b"), sh("true"), host()).unwrap();
-    assert_eq!(b.start().unwrap_err().kind(), ErrorKind::Conflict);
-    a.kill(libc::SIGKILL).unwrap();
-    b.start().unwrap();
+fn starting_checks_every_volume_in_both_machines_for_exclusive_use() {
+    for shared in ["first", "second"] {
+        for candidate_position in [0, 1] {
+            let env = Env::new();
+            let (engine, _) = recording(&env);
+            let owner = engine
+                .create(
+                    Some("owner"),
+                    sh("sleep 60"),
+                    with_mounts(vec![
+                        Mount::volume("first", "/first").with_size(MIB),
+                        Mount::volume("second", "/second").with_size(MIB),
+                    ]),
+                )
+                .unwrap();
+            owner.start().unwrap();
+            let mut mounts = vec![Mount::volume("spare", "/spare").with_size(MIB)];
+            mounts.insert(candidate_position, Mount::volume(shared, "/data"));
+            let candidate = engine
+                .create(Some("candidate"), sh("true"), with_mounts(mounts))
+                .unwrap();
+            assert_eq!(candidate.start().unwrap_err().kind(), ErrorKind::Conflict);
+            owner.stop(std::time::Duration::from_secs(10)).unwrap();
+            candidate.start().unwrap();
+            common::finish_workload_and_stop(&candidate).unwrap();
+        }
+    }
 }
 
 #[test]
@@ -436,86 +574,96 @@ fn volumes_can_be_created_and_removed_on_their_own() {
 }
 
 #[test]
-fn all_named_volumes_are_attached_retained_and_checked_for_conflicts() {
-    let env = Env::new();
-    let (engine, vmm) = recording(&env);
-    let machine = engine
-        .create(
-            Some("multi"),
-            sh("sleep 60"),
-            with_mounts(vec![
-                Mount::volume("first", "/first").with_size(2 * MIB),
-                Mount::volume("second", "/second").with_size(3 * MIB),
-            ]),
-        )
-        .unwrap();
-    assert_eq!(engine.volume("second").unwrap().size, 3 * MIB);
-    machine.start().unwrap();
-    let specs = vmm.specs.lock().unwrap();
-    assert_eq!(
-        specs[0].volume_disks,
-        [volume_file(&env, "first"), volume_file(&env, "second")]
-    );
-    let devices: Vec<_> = specs[0]
-        .workload
-        .mounts
-        .iter()
-        .map(|mount| match mount {
-            GuestMount::Volume { device, .. } => device.as_str(),
-            _ => panic!("expected volume"),
-        })
-        .collect();
-    assert_eq!(devices, ["/dev/vda", "/dev/vdb"]);
-    drop(specs);
-    let other = engine
-        .create(
-            Some("other"),
-            sh("true"),
-            with_mounts(vec![
-                Mount::volume("spare", "/spare").with_size(MIB),
-                Mount::volume("second", "/data"),
-            ]),
-        )
-        .unwrap();
-    assert_eq!(other.start().unwrap_err().kind(), ErrorKind::Conflict);
-    assert_eq!(
-        engine.remove_volume("second").unwrap_err().kind(),
-        ErrorKind::Conflict
-    );
-    machine.stop(std::time::Duration::from_secs(10)).unwrap();
-    assert_eq!(
-        machine.remove_with_volumes(false).unwrap_err().kind(),
-        ErrorKind::Conflict
-    );
-    assert!(engine.volume("first").is_ok());
-    other.remove(false).unwrap();
-    engine.remove_volume("spare").unwrap();
-    machine.remove_with_volumes(false).unwrap();
-    assert!(engine.volumes().unwrap().is_empty());
+fn failed_collection_creation_removes_all_new_volumes_and_preserves_existing_data() {
+    for new_count in [0, 1, 2, 3] {
+        let env = Env::new();
+        let (engine, _) = recording(&env);
+        engine.create_volume("existing", Some(MIB)).unwrap();
+        write_marker(&volume_file(&env, "existing"));
+        std::fs::create_dir(env.root().join("state/volumes/blocked")).unwrap();
+        let mut mounts = vec![Mount::volume("existing", "/existing")];
+        for index in 0..new_count {
+            mounts
+                .push(Mount::volume(format!("new{index}"), format!("/new/{index}")).with_size(MIB));
+        }
+        mounts.push(Mount::volume("blocked", "/blocked"));
+        let result = engine.create(Some("example"), sh("true"), with_mounts(mounts));
+        assert_eq!(result.err().unwrap().kind(), ErrorKind::Conflict);
+        assert_eq!(read_marker(&volume_file(&env, "existing")), b"kept");
+        for index in 0..new_count {
+            let name = format!("new{index}");
+            assert_eq!(
+                engine.volume(&name).unwrap_err().kind(),
+                ErrorKind::NotFound
+            );
+            assert!(!volume_file(&env, &name).parent().unwrap().exists());
+        }
+        assert!(engine.list(true).unwrap().is_empty());
+    }
 }
 
 #[test]
-fn failed_collection_creation_removes_only_new_volumes() {
-    let env = Env::new();
-    let (engine, _) = recording(&env);
-    engine.create_volume("existing", Some(MIB)).unwrap();
-    write_marker(&volume_file(&env, "existing"));
-    // An incomplete volume directory must not be overwritten.
-    std::fs::create_dir(env.root().join("state/volumes/blocked")).unwrap();
-    let result = engine.create(
-        Some("failed"),
-        sh("true"),
-        with_mounts(vec![
-            Mount::volume("existing", "/existing"),
-            Mount::volume("new", "/new").with_size(MIB),
-            Mount::volume("blocked", "/blocked"),
-        ]),
-    );
-    assert!(result.is_err());
-    assert_eq!(read_marker(&volume_file(&env, "existing")), b"kept");
-    assert_eq!(
-        engine.volume("new").unwrap_err().kind(),
-        ErrorKind::NotFound
-    );
-    assert!(engine.list(true).unwrap().is_empty());
+fn failed_update_persistence_rolls_back_all_new_volumes_and_preserves_saved_configuration() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::CommandExt;
+    if common::is_root() {
+        // Run this permission-denial contract without root's DAC override.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "failed_update_persistence_rolls_back_all_new_volumes_and_preserves_saved_configuration", "--nocapture"])
+            .gid(65534).uid(65534).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    for new_count in [1, 2, 3] {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::new(libclankerd::EngineConfig::new(
+            dir.path().join("state"),
+            dir.path().join("run"),
+        ))
+        .unwrap();
+        let machine = engine
+            .create(
+                Some("example"),
+                sh("true"),
+                with_mounts(vec![Mount::volume("existing", "/data").with_size(MIB)]),
+            )
+            .unwrap();
+        let existing = dir.path().join("state/volumes/existing/data.ext4");
+        write_marker(&existing);
+        let before = machine.inspect().unwrap();
+        // Establish the lifecycle lock before making record persistence fail.
+        machine
+            .update(&before.config, before.host_config.clone())
+            .unwrap();
+        let machine_dir = dir.path().join("state/machines").join(machine.id());
+        let permissions = std::fs::metadata(&machine_dir).unwrap().permissions();
+        std::fs::set_permissions(&machine_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let mut host = before.host_config.clone();
+        host.memory = Some(128 * MIB);
+        for index in 0..new_count {
+            host.mounts
+                .push(Mount::volume(format!("new{index}"), format!("/new/{index}")).with_size(MIB));
+        }
+        let result = machine.update(&before.config, host);
+        std::fs::set_permissions(&machine_dir, permissions).unwrap();
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::System);
+        assert_eq!(
+            serde_json::to_value(machine.inspect().unwrap()).unwrap(),
+            serde_json::to_value(before).unwrap()
+        );
+        assert_eq!(read_marker(&existing), b"kept");
+        for index in 0..new_count {
+            let name = format!("new{index}");
+            assert_eq!(
+                engine.volume(&name).unwrap_err().kind(),
+                ErrorKind::NotFound
+            );
+            assert!(!dir.path().join("state/volumes").join(name).exists());
+        }
+    }
 }
