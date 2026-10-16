@@ -28,6 +28,7 @@ while True:
     let backend = VmnetBackend::new(&helper);
     let spec = NetSpec {
         machine_id: "abcdef0123456789".into(),
+        network_id: None,
         dir: directory.path().into(),
         socket: directory.path().join("backend.net"),
         host_config: libclankerd::HostConfig {
@@ -117,4 +118,54 @@ while True:
             .all(|arguments| arguments == &invocations[0]),
         "recovery changed network policy: {invocations:?}"
     );
+}
+
+#[test]
+fn automatic_native_prefix_bounds_the_relay() {
+    let directory = tempfile::tempdir().unwrap();
+    let helper = directory.path().join("vmnet-helper");
+    std::fs::write(&helper, r#"#!/usr/bin/env python3
+import socket,sys
+path=sys.argv[sys.argv.index('--socket')+1]
+sock=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM);sock.bind(path)
+print('{"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514,"vmnet_nat66_prefix":"fd42:1::"}',flush=True)
+while True:
+    packet,peer=sock.recvfrom(65536)
+    if len(packet)>=64:sock.sendto(packet,peer)
+"#).unwrap();
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let spec = NetSpec {
+        machine_id: "abcdef0123456789".into(),
+        network_id: None,
+        dir: directory.path().into(),
+        socket: directory.path().join("backend.net"),
+        host_config: Default::default(),
+    };
+    let backend = VmnetBackend::new(&helper);
+    backend.start(&spec).unwrap();
+    let relay = Relay::start(&spec.dir, &spec.socket).unwrap().unwrap();
+    let guest = UnixDatagram::bind(directory.path().join("guest.net")).unwrap();
+    guest.connect(relay.socket()).unwrap();
+    guest
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+    let mut frame = [0; 70];
+    frame[12..14].copy_from_slice(&[0x86, 0xdd]);
+    frame[14] = 0x60;
+    frame[18..20].copy_from_slice(&16u16.to_be_bytes());
+    frame[20] = 17;
+    frame[22..38].copy_from_slice(&"fd42:1::2".parse::<std::net::Ipv6Addr>().unwrap().octets());
+    frame[38..54].copy_from_slice(&"fd42:2::2".parse::<std::net::Ipv6Addr>().unwrap().octets());
+    guest.send(&frame).unwrap();
+    let mut response = [0; 70];
+    assert_eq!(guest.recv(&mut response).unwrap(), frame.len());
+    assert_eq!(response, frame);
+    frame[22..38].copy_from_slice(&"fd42:2::2".parse::<std::net::Ipv6Addr>().unwrap().octets());
+    guest.send(&frame).unwrap();
+    let error = guest.recv(&mut response).unwrap_err();
+    assert!(matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    ));
+    backend.stop(&spec);
 }

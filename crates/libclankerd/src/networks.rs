@@ -3,7 +3,7 @@ use crate::store::{LifecycleLock, Store};
 use crate::{Engine, Error, HostConfig, NetworkMode, Result, SharedNetwork};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +41,19 @@ pub struct VirtualNetwork {
     pub created: SystemTime,
 }
 
+impl VirtualNetwork {
+    /// Select this resource's membership and addressing, preserving unrelated host settings.
+    /// Persist the result with [`crate::Machine::update`] before starting the machine.
+    pub fn configure_member(&self, host: &mut HostConfig) {
+        host.virtual_network = Some(self.name.clone());
+        host.network_mode = self.mode.mode();
+        host.shared_network = self.subnet.clone();
+        host.shared_ipv6_prefix = self.ipv6_prefix;
+        host.shared_peer_participation = true;
+        host.bridge_interface = None;
+    }
+}
+
 pub(crate) struct Networks<'a> {
     store: &'a Store,
     root: PathBuf,
@@ -58,21 +71,12 @@ impl<'a> Networks<'a> {
         })
     }
     fn path(&self, name: &str) -> Result<PathBuf> {
-        if !crate::volumes::valid_name(name) || name.len() > 128 {
-            return Err(Error::invalid_parameter("invalid virtual network name"));
-        }
-        Ok(self.root.join(format!("{name}.json")))
+        resource_path(&self.root, name)
     }
     fn get(&self, name: &str) -> Result<VirtualNetwork> {
-        let path = self.path(name)?;
-        match fs::read(path) {
-            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Err(Error::not_found(format!("no such virtual network: {name}")))
-            }
-            Err(error) => Err(error.into()),
-        }
+        read_resource(&self.root, name)
     }
+
     fn list(&self) -> Result<Vec<VirtualNetwork>> {
         let mut networks = Vec::new();
         for entry in fs::read_dir(&self.root)? {
@@ -230,15 +234,29 @@ impl<'a> Networks<'a> {
                 Err(error) => return Err(error),
             }
         };
-        host.virtual_network = Some(network.name);
-        host.network_mode = network.mode.mode();
-        host.shared_network = network.subnet;
-        host.shared_ipv6_prefix = network.ipv6_prefix;
-        // Compatibility field now describes native network participation, never a per-member veto.
-        host.shared_peer_participation = true;
+        network.configure_member(host);
         Ok(())
     }
 }
+pub(crate) fn resource_id(store: &Store, name: &str) -> Result<String> {
+    Ok(read_resource(&store.networks_dir(), name)?.id)
+}
+fn resource_path(root: &Path, name: &str) -> Result<PathBuf> {
+    if !crate::volumes::valid_name(name) || name.len() > 128 {
+        return Err(Error::invalid_parameter("invalid virtual network name"));
+    }
+    Ok(root.join(format!("{name}.json")))
+}
+fn read_resource(root: &Path, name: &str) -> Result<VirtualNetwork> {
+    match fs::read(resource_path(root, name)?) {
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(Error::not_found(format!("no such virtual network: {name}")))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn overlaps(a: &SharedNetwork, b: &SharedNetwork) -> bool {
     let prefix = a.prefix_len.min(b.prefix_len);
     let mask = u32::MAX << (32 - prefix);

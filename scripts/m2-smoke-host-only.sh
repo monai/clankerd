@@ -13,7 +13,12 @@ echo "Evidence directory: $work"
 export CLANKERD_STATE_DIR=$work/state CLANKERD_RUNTIME_DIR=$work/run
 host_pid=''
 names='evidence-a evidence-b evidence-c evidence-d evidence-e'
+secondary() {
+  CLANKERD_STATE_DIR=$work/conflicting-state CLANKERD_RUNTIME_DIR=$work/conflicting-run "$vmctl" "$@"
+}
 cleanup() {
+  secondary rm -f host-only-conflict >/dev/null 2>&1 || true
+  secondary network rm other >/dev/null 2>&1 || true
   if [ -n "$host_pid" ]; then kill "$host_pid" 2>/dev/null || true; wait "$host_pid" 2>/dev/null || true; fi
   python3 - "$work/state" "$work/retained-state" <<'PYLOGS' || true
 from pathlib import Path
@@ -216,6 +221,40 @@ assert len(rows)==4 and all(row['reached'] for row in rows),rows
 print('PASS host-only members IPv4/scoped IPv6 TCP/UDP')
 PYMEMBERS
 done
+# Distinct resources in independent state roots must not merge on a native bridge.
+"$vmctl" network inspect local > "$work/host-only-network.json"
+subnet=$(python3 -c 'import json,sys;n=json.load(open(sys.argv[1]))[0]["subnet"];print(n["address"]+"/"+str(n["prefix_len"]))' "$work/host-only-network.json")
+secondary network create other --mode host-only --subnet "$subnet" > "$work/conflicting-network.json"
+if secondary run -d --name host-only-conflict --network other "$image" sh -c 'echo UNEXPECTED_WORKLOAD; sleep 60' > "$work/conflicting-start.log" 2>&1; then
+  echo 'FAIL distinct host-only resources merged across state roots'
+  exit 1
+fi
+python3 - "$work/conflicting-start.log" <<'PYCONFLICT'
+import sys
+text=open(sys.argv[1]).read()
+assert 'native bridge conflicts with an active virtual network' in text,text
+PYCONFLICT
+secondary inspect host-only-conflict > "$work/conflicting-machine.json"
+python3 - "$work/conflicting-machine.json" "$work/conflicting-state" <<'PYNOLAUNCH'
+import json,sys
+from pathlib import Path
+machine=json.load(open(sys.argv[1]))[0]
+assert machine['state']['pid'] is None,machine['state']
+assert not list(Path(sys.argv[2]).rglob('net.pid'))
+PYNOLAUNCH
+secondary logs host-only-conflict > "$work/conflicting-workload.log" 2>&1 || true
+if python3 -c 'import sys;sys.exit(0 if "UNEXPECTED_WORKLOAD" in open(sys.argv[1]).read() else 1)' "$work/conflicting-workload.log"; then echo 'FAIL conflicting workload was launched'; exit 1; fi
+secondary rm -f host-only-conflict > "$work/conflicting-remove.log"
+secondary network rm other > "$work/conflicting-network-remove.log"
+# Recheck the permitted peer path after rejecting the conflicting registration.
+read -r member4 _ member6 < "$work/evidence-e-addresses.txt"
+"$vmctl" exec evidence-c python3 -c "$peer" 64 "$member4" "$member6" > "$work/after-conflict-peers.jsonl"
+python3 - "$work/after-conflict-peers.jsonl" <<'PYUNCHANGED'
+import json,sys
+rows=[json.loads(line) for line in open(sys.argv[1])]
+assert len(rows)==4 and all(row['reached'] for row in rows),rows
+print('PASS resource identity rejects cross-state host-only collision before workload, preserving existing peers')
+PYUNCHANGED
 if "$vmctl" network rm local > "$work/in-use-removal.log" 2>&1; then echo 'FAIL removed network with live members'; exit 1; fi
 echo 'PASS network removal rejects live membership'
 "$vmctl" stop evidence-c > "$work/restart-stop.log"
@@ -233,4 +272,4 @@ qemu-system-aarch64 --version > "$work/qemu-version.txt"
 qemu-system-aarch64 -machine virt -netdev help > "$work/qemu-netdevs.txt" 2>&1 || true
 limactl list --json > "$work/lima-instances.json" 2> "$work/lima-list.log" || true
 cat "$work/qemu-version.txt" "$work/qemu-netdevs.txt" "$work/lima-instances.json"
-echo 'PASS host-only virtual-network members communicate, Mac services/mDNS, absent default routes, outbound rejection and restart; production cross-network enforcement remains open.'
+echo 'PASS host-only virtual-network members communicate, Mac services/mDNS, absent default routes, outbound rejection and restart; cross-network host-only routing remains unverified.'

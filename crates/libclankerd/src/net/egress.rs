@@ -18,9 +18,12 @@ pub(super) fn permits(frame: &[u8], host: &HostConfig) -> bool {
         offset += 4;
     }
     if kind == 0x86dd {
-        return host
-            .shared_ipv6_prefix
-            .is_none_or(|prefix| permits_ipv6(&frame[offset..], prefix));
+        return if host.network_mode == NetworkMode::HostOnly {
+            permits_ipv6(&frame[offset..], None)
+        } else {
+            host.shared_ipv6_prefix
+                .is_none_or(|prefix| permits_ipv6(&frame[offset..], Some(prefix)))
+        };
     }
     if kind != 0x0800 {
         return true;
@@ -56,7 +59,7 @@ pub(super) fn permits(frame: &[u8], host: &HostConfig) -> bool {
         && ip[header..header + 4] == [0, 68, 0, 67]
 }
 
-fn permits_ipv6(ip: &[u8], prefix: std::net::Ipv6Addr) -> bool {
+fn permits_ipv6(ip: &[u8], prefix: Option<std::net::Ipv6Addr>) -> bool {
     if ip.len() < 40 || ip[0] >> 4 != 6 {
         return false;
     }
@@ -66,7 +69,7 @@ fn permits_ipv6(ip: &[u8], prefix: std::net::Ipv6Addr) -> bool {
     }
     let source = &ip[8..24];
     let link_local = |address: &[u8]| address[0] == 0xfe && address[1] & 0xc0 == 0x80;
-    if source[..8] == prefix.octets()[..8] || link_local(source) {
+    if prefix.is_some_and(|prefix| source[..8] == prefix.octets()[..8]) || link_local(source) {
         return true;
     }
     if source != [0; 16] || ip[24..26] != [0xff, 2] {
@@ -88,7 +91,9 @@ fn permits_ipv6(ip: &[u8], prefix: std::net::Ipv6Addr) -> bool {
         135 if ip[7] == 255 && length >= offset + 24 => {
             let target = &ip[offset + 8..offset + 24];
             let solicited = [0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xff];
-            ip[24..37] == solicited && (target[..8] == prefix.octets()[..8] || link_local(target))
+            ip[24..37] == solicited
+                && (prefix.is_some_and(|prefix| target[..8] == prefix.octets()[..8])
+                    || link_local(target))
         }
         _ => false,
     }
@@ -235,5 +240,27 @@ mod tests {
         mld[8] = 143;
         assert!(permits(&ipv6_packet("::", "ff02::16", 0, &mld), &host));
         assert!(!permits(&ipv6_packet("::", "ff02::fb", 17, &[0; 8]), &host));
+    }
+    #[test]
+    fn host_only_has_link_local_ipv6_without_foreign_global_sources() {
+        let host = HostConfig {
+            network_mode: NetworkMode::HostOnly,
+            ..Default::default()
+        };
+        assert!(permits(
+            &ipv6_packet("fe80::2", "ff02::fb", 17, &[0; 8]),
+            &host
+        ));
+        assert!(!permits(
+            &ipv6_packet("fd42:2::2", "fd42:3::2", 17, &[0; 8]),
+            &host
+        ));
+        let mut ns = vec![0; 24];
+        ns[0] = 135;
+        ns[8..24].copy_from_slice(&"fe80::2".parse::<std::net::Ipv6Addr>().unwrap().octets());
+        assert!(permits(
+            &ipv6_packet("::", "ff02::1:ff00:2", 58, &ns),
+            &host
+        ));
     }
 }

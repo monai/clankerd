@@ -12,6 +12,7 @@ fi
 work=$(mktemp -d /tmp/clankerd-network-gates.XXXXXX)
 echo "Suite evidence: $work"
 sudo -n true
+/usr/bin/python3 -I -B -m unittest discover -s "$root/scripts/tests" -p test_network_pf.py > "$work/controller-tests.log" 2>&1 || { cat "$work/controller-tests.log"; exit 1; }
 (
   while sleep 30; do sudo -n -v || exit; done
 ) &
@@ -39,6 +40,8 @@ fingerprint() {
   {
     printf '%s\n' "$1" "${PF_TEST_STATE_POLICY:-if-bound}" "${IMAGE:-}" "${OUT:-}"
     if [ -n "${CLANKERD_VMNET_HELPER:-}" ]; then shasum -a 256 "$CLANKERD_VMNET_HELPER"; fi
+    shasum -a 256 "$root/scripts/clankerd-network-pf.py"
+    if [ -f /opt/clankerd/libexec/clankerd-network-pf ]; then shasum -a 256 /opt/clankerd/libexec/clankerd-network-pf; fi
     git -C "$root" rev-parse HEAD
     git -C "$root" diff HEAD -- crates scripts Makefile Cargo.lock
     find "$root/scripts/fixtures" -type f ! -path '*/__pycache__/*' -exec shasum -a 256 {} + | sort
@@ -79,5 +82,5 @@ echo 'Suite results:'
 cat "$work/results.txt"
 echo "Full logs and host preflight: $work"
 echo "Resume unchanged successful gates: scripts/m2-run-network-gates.sh --resume $work"
-echo 'These gates do not complete routed production isolation, cross-network isolation with another VMM, sleep/wake or independent LAN-peer acceptance.'
+echo 'These gates assume the trusted Mac retains installed PF policy; cross-network isolation with another VMM, sleep/wake and independent LAN-peer acceptance remain outstanding.'
 [ "$failures" = 0 ]

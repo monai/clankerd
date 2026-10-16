@@ -8,6 +8,10 @@ vmctl network create team --mode shared --subnet 192.168.120.0/24
 vmctl create --network team --name member IMAGE COMMAND
 vmctl network inspect team
 vmctl network ls
+vmctl stop member
+vmctl network create other-team --mode host-only
+vmctl update --network other-team member
+vmctl start member
 vmctl network rm team
 ```
 
@@ -24,6 +28,14 @@ also retains the selected mode and subnet. An assigned resource is authoritative
 for these values. The CLI rejects combining `--network` with legacy mode/subnet/
 isolation options. Bridged attachments cannot join a virtual network.
 
+`vmctl update --network NAME MACHINE...` replaces each stopped machine's single
+membership. It preserves the workload, volumes and resource settings, selects the
+target's mode, subnet and IPv6 prefix, and clears any previous physical bridge
+selection. The target must already exist. Running machines are rejected without
+being stopped automatically. Changes persist across subsequent starts; there is
+no live connect/disconnect or multiple-network membership. Batch updates report
+per-machine errors and continue with the remaining machines.
+
 A state-directory flock serializes creation, allocation, membership changes and
 network removal across Engine instances and CLI processes. Membership changes
 require a stopped machine and its lifecycle lock. A network cannot be removed
@@ -39,11 +51,18 @@ to true. Existing records without membership are not silently migrated while
 running. They need explicit stopped configuration updates before membership can
 serve as an enforced security identity.
 
-This change stores policy identity and addressing. Packet enforcement between
-virtual networks requires the host policy integration; subnet selection alone
-does not enforce isolation. Canonical host-only members use native host mode without per-interface isolation,
-so peer permission follows virtual-network membership. Inter-network exclusion
-is not complete until the host policy integration is installed and verified.
+Active native attachments register with the installed host PF controller before
+the workload starts. It marks packets by their incoming native bridge and blocks
+them from leaving through another managed network's bridge. Members on the same
+bridge can communicate. Traffic terminating on the Mac and traffic leaving via
+the Mac's physical Internet interface do not cross this boundary. Canonical
+host-only members use native host mode without per-interface isolation.
+
+The Mac host and its administrator are trusted. The policy assumes the host
+retains the installed rules and does not install conflicting rules or states.
+Clankerd does not monitor or undo deliberate host firewall changes. To run a
+controlled PF experiment, `CLANKERD_NETWORK_PF=off` explicitly disables registration;
+this override also disables the production isolation guarantee.
 
 New explicitly created shared networks also persist a randomly allocated ULA /64
 in `ipv6_prefix`; canonical member configuration copies it to
@@ -57,15 +76,49 @@ absent prefix are not silently readdressed.
 The prefix-capable helper is built from checksum-pinned upstream 0.13.0 plus the
 reviewable patch in `scripts/patches/vmnet-helper-nat66-prefix.patch`.
 `scripts/m2-install-and-run-network-gates.sh` installs it root-owned at
-`/opt/clankerd/libexec/vmnet-helper`, with a dedicated sudoers entry, then runs the
-consolidated gates. The upstream `/opt/vmnet-helper` installation is unchanged.
+`/opt/clankerd/libexec/vmnet-helper` and the PF controller at
+`/opt/clankerd/libexec/clankerd-network-pf`, with a dedicated sudoers entry, then
+runs the consolidated gates. The controller uses Apple's `/usr/bin/python3` in
+isolated mode, checked by the installer. The upstream `/opt/vmnet-helper` installation is unchanged.
 The backend prefers the clankerd helper when installed; an explicit
 `CLANKERD_VMNET_HELPER` selection remains authoritative.
 
-The VMM-owned relay rejects IPv4 sources outside the selected guest subnet and,
-for an explicitly prefixed resource, IPv6 sources outside its ULA /64 or
-link-local scope. Bootstrap DAD, router solicitation and MLD reports remain
-permitted. This removes the demonstrated foreign-prefix state-spoof path before
-host PF lookup. It does not constitute completed cross-network isolation: the
-production PF controller, legacy/host-only IPv6 policy, host-address impersonation
-and the remaining raw Ethernet cases still require enforcement and acceptance.
+The VMM-owned relay rejects IPv4 sources outside the selected guest subnet and
+IPv6 sources outside the actual native-advertised ULA /64 or link-local scope.
+Automatic legacy shared prefixes are read from native metadata without changing
+the persisted resource's addressing. Host-only attachments permit link-local IPv6
+and its bootstrap traffic, without accepting foreign global IPv6 sources.
+Bootstrap DAD, router solicitation and MLD reports remain permitted. These checks
+reject foreign-prefix state spoofing before host PF lookup.
+
+The controller keeps a root-owned active-attachment registry under
+`/var/run/clankerd-network-pf`, serialized with a file lock across CLI processes
+and state directories. It verifies each helper PID, caller, socket and stable virtual-network resource
+ID, discovers the bridge through its gateway, validates PF syntax, and replaces only
+`com.apple/clankerd-networks`. The normal macOS root rules must include
+`anchor "com.apple/*"`. No root ruleset or unrelated states are flushed. Different resource IDs cannot
+share one native bridge, even if their subnets and IPv6 prefixes match. One
+resource cannot be split over different native bridges. A native addressing
+collision across state directories therefore fails startup instead of merging
+networks. Each attachment's recovery configuration retains its resource ID.
+
+Stopping an attachment removes its registration. Other members retain the rules;
+the last attachment releases clankerd's own PF enable reference. Helper recovery
+registers its new PID and bridge before reconnecting Ethernet. Stale helper
+registrations are pruned on the next controller operation. Failed registration
+prevents workload startup. A failed registry write or rename restores the previous
+rules and releases any reference acquired by that registration. A failed reference
+release retains a registry entry so cleanup can retry. Failed cleanup is reported and can leave restrictive
+rules until the next operation reconciles the registry.
+
+The native-prefix gate now checks the installed controller with actual routed
+IPv4/IPv6 TCP/UDP traffic, same-network controls, Mac access, NAT, member stop,
+restart and final cleanup. These checks passed in Mac suite
+`/tmp/clankerd-network-gates.M9Cztl`. The host-only gate now additionally verifies
+that independent state roots cannot merge distinct resources at the same subnet;
+that collision check passed with the lifecycle/recovery fixes in Mac suite
+`/tmp/clankerd-network-gates.aI6Qm1`. The added stopped-membership update packet
+checks still require Mac execution.
+Earlier prototype passes do not establish production acceptance. Independent
+other-VMM cross-network isolation, sleep/wake, LAN-peer acceptance, host-address
+impersonation and additional raw Ethernet cases remain unverified.

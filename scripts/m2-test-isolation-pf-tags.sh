@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+# This prototype owns its test anchor and measures an unfiltered baseline.
+export CLANKERD_NETWORK_PF=off
 [ "$(uname -s)" = Darwin ] || { echo 'Requires the Mac host' >&2; exit 1; }
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${OUT:-$root/build/rust}

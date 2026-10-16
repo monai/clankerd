@@ -717,3 +717,56 @@ fn wrong_native_prefix_prevents_workload_start() {
     );
     machine.remove(true).unwrap();
 }
+
+#[test]
+fn resource_identity_follows_membership_through_restart_and_recovery_configuration() {
+    let rig = rig(FAKE_VMNET);
+    let first = rig
+        .engine
+        .create_network("first", libclankerd::NetworkKind::HostOnly, None)
+        .unwrap();
+    let second = rig
+        .engine
+        .create_network("second", libclankerd::NetworkKind::HostOnly, None)
+        .unwrap();
+    let machine = rig
+        .engine
+        .create(
+            Some("member"),
+            sh("sleep 60"),
+            HostConfig {
+                virtual_network: Some(first.name.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let recovery_path = rig
+        ._env
+        .root()
+        .join("state/machines")
+        .join(machine.id())
+        .join("net-recovery.json");
+    let identity = || {
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&recovery_path).unwrap()).unwrap();
+        record["spec"]["network_id"].as_str().unwrap().to_owned()
+    };
+    for _ in 0..2 {
+        machine.start().unwrap();
+        assert_eq!(identity(), first.id);
+        machine.stop(Duration::from_secs(10)).unwrap();
+    }
+    let config = machine.inspect().unwrap().config;
+    machine
+        .update(
+            &config,
+            HostConfig {
+                virtual_network: Some(second.name.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    machine.start().unwrap();
+    assert_eq!(identity(), second.id);
+    machine.remove(true).unwrap();
+}

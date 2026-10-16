@@ -77,6 +77,14 @@ enum Command {
     Create(CreateArgs),
     /// Start created or exited machines.
     Start { machines: Vec<String> },
+    /// Replace stopped machines' virtual-network membership.
+    Update {
+        /// Existing virtual network to join on the next start.
+        #[arg(long)]
+        network: String,
+        #[arg(required = true)]
+        machines: Vec<String>,
+    },
     /// Stop machines gracefully: the workload gets its stop signal (SIGTERM unless the
     /// image's StopSignal or --stop-signal says otherwise), the machine syncs,
     /// unmounts and powers off; it is killed after the timeout.
@@ -442,6 +450,17 @@ fn run(cli: Cli) -> Result<u8, Error> {
             engine.get(n)?.start()?;
             Ok(n.to_owned())
         })),
+        Command::Update { network, machines } => {
+            let target = engine.inspect_network(&network)?;
+            Ok(each(&machines, |name| {
+                let machine = engine.get(name)?;
+                let info = machine.inspect()?;
+                let mut host = info.host_config;
+                target.configure_member(&mut host);
+                machine.update(&info.config, host)?;
+                Ok(name.to_owned())
+            }))
+        }
         Command::Stop { time, machines } => Ok(each(&machines, |n| {
             engine.get(n)?.stop(Duration::from_secs(time))?;
             Ok(n.to_owned())

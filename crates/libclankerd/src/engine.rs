@@ -184,13 +184,19 @@ impl Inner {
     }
 
     pub fn net_spec(&self, id: &str) -> NetSpec {
+        let host_config = self
+            .store
+            .load(id)
+            .map(|(record, _)| record.host_config)
+            .unwrap_or_default();
+        let network_id = host_config
+            .virtual_network
+            .as_deref()
+            .and_then(|name| crate::networks::resource_id(&self.store, name).ok());
         NetSpec {
             machine_id: id.to_owned(),
-            host_config: self
-                .store
-                .load(id)
-                .map(|(record, _)| record.host_config)
-                .unwrap_or_default(),
+            network_id,
+            host_config,
             dir: self.store.machine_dir(id),
             socket: self.net_socket_path(id),
         }

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+# This prototype owns its test anchor and measures an unfiltered baseline.
+export CLANKERD_NETWORK_PF=off
 [ "$(uname -s)" = Darwin ] || { echo 'Requires the Mac host' >&2; exit 1; }
 state_policy=${PF_TEST_STATE_POLICY:-floating}
 case "$state_policy" in floating|if-bound) ;; *) echo 'PF_TEST_STATE_POLICY must be floating or if-bound' >&2; exit 1;; esac

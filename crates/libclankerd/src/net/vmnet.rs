@@ -178,12 +178,24 @@ impl NetBackend for VmnetBackend {
                 return Err(error.into());
             }
         }
+        let pid = fs::read_to_string(spec.dir.join(PID_FILE))?
+            .trim()
+            .parse::<u32>()
+            .map_err(|error| Error::unavailable(format!("reading native helper PID: {error}")))?;
+        let prefix = native_prefix(&log_path);
+        if let Err(error) = super::pf::register(spec, pid, prefix)
+            .and_then(|_| super::recovery::record(binary, spec, prefix))
+        {
+            self.stop_helper(spec);
+            super::pf::remove(spec);
+            let _ = child.wait();
+            return Err(error);
+        }
         // Reap it when it ends while we are still alive.
         std::thread::spawn(move || {
             let _ = child.wait();
         });
 
-        super::recovery::record(binary, spec)?;
         Ok(NetAttachment {
             socket: spec.socket.clone(),
             mac: machine_mac(&spec.machine_id),
@@ -195,6 +207,7 @@ impl NetBackend for VmnetBackend {
     fn stop(&self, spec: &NetSpec) {
         super::recovery::remove(spec);
         self.stop_helper(spec);
+        super::pf::remove(spec);
     }
 
     fn connected(&self, spec: &NetSpec) -> bool {
@@ -386,4 +399,15 @@ fn interface_ready(path: &Path, expected_prefix: Option<std::net::Ipv6Addr>) -> 
                 && (576..=65535).contains(&info.vmnet_mtu)
                 && info.vmnet_max_packet_size >= info.vmnet_mtu + 14
         })
+}
+
+fn native_prefix(path: &Path) -> Option<std::net::Ipv6Addr> {
+    fs::read_to_string(path).ok()?.lines().find_map(|line| {
+        serde_json::from_str::<serde_json::Value>(line)
+            .ok()?
+            .get("vmnet_nat66_prefix")?
+            .as_str()?
+            .parse()
+            .ok()
+    })
 }

@@ -8,6 +8,7 @@
 
 mod bridge;
 mod egress;
+mod pf;
 pub mod recovery;
 mod vmnet;
 
@@ -21,6 +22,9 @@ pub use vmnet::VmnetBackend;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NetSpec {
     pub machine_id: String,
+    /// Stable resource identity, independent of names, state paths and native addressing.
+    #[serde(default)]
+    pub network_id: Option<String>,
     pub host_config: crate::HostConfig,
     /// The machine's state directory (pid file, sidecar log).
     pub dir: PathBuf,

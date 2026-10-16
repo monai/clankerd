@@ -17,12 +17,19 @@ const HEALTH: &str = "net-connected";
 struct Configuration {
     binary: PathBuf,
     spec: NetSpec,
+    #[serde(default)]
+    source_ipv6_prefix: Option<std::net::Ipv6Addr>,
 }
 
-pub(super) fn record(binary: &Path, spec: &NetSpec) -> crate::Result<()> {
+pub(super) fn record(
+    binary: &Path,
+    spec: &NetSpec,
+    source_ipv6_prefix: Option<std::net::Ipv6Addr>,
+) -> crate::Result<()> {
     let bytes = serde_json::to_vec(&Configuration {
         binary: binary.into(),
         spec: spec.clone(),
+        source_ipv6_prefix,
     })?;
     let temporary = spec.dir.join("net-recovery.tmp");
     fs::write(&temporary, bytes)?;
@@ -104,6 +111,10 @@ fn serve(
     active: Arc<AtomicBool>,
 ) {
     let backend = VmnetBackend::new(&config.binary);
+    let mut source_policy = config.spec.host_config.clone();
+    source_policy.shared_ipv6_prefix = config
+        .source_ipv6_prefix
+        .or(source_policy.shared_ipv6_prefix);
     let mut back = Some(back);
     let mut helper_pid = pid(&config.spec);
     let mut retry_at = Instant::now();
@@ -214,7 +225,7 @@ fn serve(
                             }
                         }
                     }
-                    if !super::egress::permits(&buffer[..count], &config.spec.host_config) {
+                    if !super::egress::permits(&buffer[..count], &source_policy) {
                         if diagnostics {
                             eprintln!(
                                 "native relay: rejected source outside selected guest network"
