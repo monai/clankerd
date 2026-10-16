@@ -7,23 +7,24 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "vmctl", version, about = "Run Linux machines from OCI images")]
 pub struct Cli {
-    /// Directory for machine config and state.
-    #[arg(long, env = "CLANKERD_STATE_DIR")]
+    /// Machine configuration and state directory.
+    #[arg(long, env = "CLANKERD_STATE_DIR", value_name = "DIR")]
     pub state_dir: Option<PathBuf>,
-    /// Directory for runtime sockets.
-    #[arg(long, env = "CLANKERD_RUNTIME_DIR")]
+    /// Runtime socket directory.
+    #[arg(long, env = "CLANKERD_RUNTIME_DIR", value_name = "DIR")]
     pub runtime_dir: Option<PathBuf>,
     /// Development: run clankerd-guestd from this path as a local process
     /// instead of booting a VM.
     #[arg(long, env = "CLANKERD_DEV_GUESTD", hide = true)]
     pub dev_guestd: Option<PathBuf>,
-    /// Directory for the image cache (blobs, base root disks).
-    #[arg(long, env = "CLANKERD_CACHE_DIR")]
+    /// Image cache directory.
+    #[arg(long, env = "CLANKERD_CACHE_DIR", value_name = "DIR")]
     pub cache_dir: Option<PathBuf>,
-    /// Registries (host:port) to reach over plain HTTP.
+    /// Use plain HTTP for this registry. Repeatable.
     #[arg(
         long = "insecure-registry",
         env = "CLANKERD_INSECURE_REGISTRIES",
+        value_name = "HOST:PORT",
         value_delimiter = ','
     )]
     pub insecure_registries: Vec<String>,
@@ -35,15 +36,14 @@ pub struct Cli {
     /// image's root disk (the first-boot check of docs/libkrun-first-boot.md).
     #[arg(long, env = "CLANKERD_BOOT_DIR_ROOT", hide = true)]
     pub boot_dir_root: bool,
-    /// clankerd-vmspawn helper binary (default: next to vmctl).
-    #[arg(long, env = "CLANKERD_VMSPAWN")]
+    /// Machine launcher executable.
+    #[arg(long, env = "CLANKERD_VMSPAWN", value_name = "PATH")]
     pub vmspawn: Option<PathBuf>,
-    /// Static aarch64 Linux clankerd-guestd placed in the guest's boot
-    /// directory (default: next to vmctl, or ../linux-arm64/ as in build/rust).
-    #[arg(long, env = "CLANKERD_GUESTD")]
+    /// Guest init executable.
+    #[arg(long, env = "CLANKERD_GUESTD", value_name = "PATH")]
     pub guestd: Option<PathBuf>,
-    /// Installed vmnet-helper binary (macOS 15 requires its sudoers setup).
-    #[arg(long, env = "CLANKERD_VMNET_HELPER")]
+    /// Host networking helper executable.
+    #[arg(long, env = "CLANKERD_VMNET_HELPER", value_name = "PATH")]
     pub vmnet_helper: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Command,
@@ -458,7 +458,7 @@ fn definition() -> clap::Command {
         clap::Arg::new("describe-contract")
             .long("describe-contract")
             .action(clap::ArgAction::SetTrue)
-            .help("Print the typed command contract and result schemas as JSON")
+            .help("Print command metadata and result schemas as JSON")
             .exclusive(true),
     );
     root = decorate(root, 0);
@@ -478,7 +478,7 @@ fn definition() -> clap::Command {
     for action in shortcuts {
         root = root.subcommand(action);
     }
-    root.after_help("Global options precede the resource or shortcut. Action options precede operands.\nCreate/run: IMAGE [COMMAND [ARG...]]; exec: MACHINE COMMAND [ARG...].\nAfter IMAGE or exec MACHINE all tokens belong to the guest, with no shell interpretation.\nUse -- before operands to end option parsing; a -- in the guest tail is passed literally.\nCLI values override environment values, which override documented defaults.")
+    root.after_help("Global options precede the resource or shortcut. Action options precede operands.\nCreate/run: IMAGE [COMMAND [ARG...]]; exec: MACHINE COMMAND [ARG...].\nAfter IMAGE or exec MACHINE all tokens belong to the guest, with no shell interpretation.\nUse -- before operands to end option parsing; a -- in the guest tail is passed literally.\nExecutable paths are resolved automatically when omitted.\nCLI values override environment values, which override documented defaults.")
 }
 fn shortcut(resource: &str, action: &str) -> String {
     match (resource, action) {
@@ -523,8 +523,16 @@ fn decorate(mut command: clap::Command, depth: usize) -> clap::Command {
             } else {
                 arg
             };
+            let arg = if depth == 0 {
+                arg.hide_env_values(true)
+            } else {
+                arg
+            };
             let group = if depth == 0 {
-                "Global options"
+                match arg.get_id().as_str() {
+                    "vmspawn" | "guestd" | "vmnet_helper" => "Executable overrides (global)",
+                    _ => "Global options",
+                }
             } else {
                 match arg.get_id().as_str() {
                     "cpus" | "memory" | "restart" | "pull" => "Host configuration",

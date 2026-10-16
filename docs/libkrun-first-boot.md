@@ -100,9 +100,13 @@ build/rust/darwin-arm64/vmctl logs t1
 
 The guest root is the machine's `boot/` directory (guestd and `workload.json`
 only), so for now the command must be a file in it; images arrive with ticket
-04. On macOS `vmctl` picks the libkrun backend by itself and finds the helper
-and guestd next to it (`../linux-arm64/`); override with `CLANKERD_VMSPAWN` and
-`CLANKERD_GUESTD`.
+04. On macOS `vmctl` selects the libkrun backend automatically.
+The machine launcher defaults to `clankerd-vmspawn` beside `vmctl`; override it
+with `--vmspawn PATH` or `CLANKERD_VMSPAWN`. Guest init defaults to
+`clankerd-guestd` beside `vmctl`, then in `../linux-arm64/` relative to it;
+override it with `--guestd PATH` or `CLANKERD_GUESTD`. Guest init must be a
+static aarch64 Linux executable, with the shipped filesystem tools beside it.
+Executable overrides are global options and precede the resource or shortcut.
 
 State lives in `~/Library/Application Support/clankerd/machines/<id>/`:
 `console.log` (what `vmctl logs` prints), `vmspawn.log` (helper stderr, read
@@ -437,7 +441,8 @@ failure prevents workload startup, and no image-provided nft executable is neede
 
 Install vmnet-helper using its [supported installer](https://github.com/nirs/vmnet-helper#installation)
 and [sudoers rule](https://github.com/nirs/vmnet-helper/blob/main/sudoers.d/README.md).
-The macOS 15 binary lives at `/opt/vmnet-helper/bin/vmnet-helper`. Startup uses
+vmctl prefers `/opt/clankerd/libexec/vmnet-helper` when installed, then falls
+back to `/opt/vmnet-helper/bin/vmnet-helper`. On macOS 15, startup uses
 `sudo --non-interactive`; missing privilege setup fails promptly with the helper
 log included in the error. The helper creates the interface while privileged,
 then drops to the invoking user's identity before serving the socket. The VMM
