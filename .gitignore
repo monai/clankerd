@@ -1,4 +1,5 @@
 .scratch/
-memory/
+__pycache__/
 build/
+memory/
 target/
