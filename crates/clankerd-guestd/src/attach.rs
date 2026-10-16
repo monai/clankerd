@@ -51,7 +51,7 @@ struct State {
 
 impl Attach {
     pub fn wanted(w: &Workload) -> bool {
-        w.tty || w.open_stdin
+        w.tty || w.open_stdin || w.expect_attach
     }
 
     /// Spawns the workload on a PTY or pipes. Call instead of a plain spawn

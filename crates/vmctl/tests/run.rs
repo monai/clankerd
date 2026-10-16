@@ -66,7 +66,7 @@ fn logs_show_workload_output() {
     let out = v(&["logs", "talker"]);
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).contains("from-guest"));
-    assert_eq!(v(&["logs", "nope"]).status.code(), Some(125));
+    assert_eq!(v(&["logs", "nope"]).status.code(), Some(1));
 }
 
 #[test]
@@ -152,7 +152,7 @@ fn a_missing_helper_binary_is_reported_by_path() {
         .env("CLANKERD_GUESTD", guestd())
         .output()
         .unwrap();
-    assert_eq!(out.status.code(), Some(125));
+    assert_eq!(out.status.code(), Some(1));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("/no/such/clankerd-vmspawn"), "{err}");
 }
@@ -179,49 +179,52 @@ fn cpus_and_memory_are_recorded_in_the_machine_config() {
 }
 
 #[test]
-fn shared_network_cli_options_are_persisted_and_invalid_subnets_are_rejected() {
-    let dir = tempfile::Builder::new().prefix("vm").tempdir().unwrap();
+fn virtual_network_creation_owns_subnet_validation() {
+    let dir = tempfile::tempdir().unwrap();
     let guestd = guestd();
-    let _cleanup = common::cleanup_on_drop(dir.path(), &guestd);
-    let output = vmctl(
-        dir.path(),
-        &guestd,
-        &[
+    let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
+    assert!(
+        v(&[
+            "network",
             "create",
-            "--name",
-            "shared-config",
-            "--shared-network",
+            "--subnet",
             "192.168.109.0/24",
-            "--isolate-peers",
-            "img",
-            "true",
-        ],
+            "selected"
+        ])
+        .status
+        .success()
     );
     assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        v(&[
+            "create",
+            "--name",
+            "member",
+            "--network",
+            "selected",
+            "img",
+            "true"
+        ])
+        .status
+        .success()
     );
-    let output = vmctl(dir.path(), &guestd, &["inspect", "shared-config"]);
+    let output = v(&["inspect", "member"]);
     let info: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         info[0]["host_config"]["shared_network"],
-        serde_json::json!({"address":"192.168.64.0","prefix_len":24})
+        serde_json::json!({"address":"192.168.109.0","prefix_len":24})
     );
-    assert_eq!(info[0]["host_config"]["shared_peer_participation"], true);
-    let invalid = vmctl(
-        dir.path(),
-        &guestd,
-        &[
+    assert_eq!(
+        v(&[
+            "network",
             "create",
-            "--shared-network",
+            "--subnet",
             "192.168.109.3/24",
-            "img",
-            "true",
-        ],
+            "invalid"
+        ])
+        .status
+        .code(),
+        Some(2)
     );
-    assert!(!invalid.status.success());
-    assert!(String::from_utf8_lossy(&invalid.stderr).contains("aligned RFC1918"));
 }
 
 #[test]
@@ -229,6 +232,15 @@ fn host_only_cli_persists_membership_and_a_distinct_default_subnet() {
     let dir = tempfile::tempdir().unwrap();
     let guestd = guestd();
     let _cleanup = common::cleanup_on_drop(dir.path(), &guestd);
+    assert!(
+        vmctl(
+            dir.path(),
+            &guestd,
+            &["network", "create", "--mode", "host-only", "local"]
+        )
+        .status
+        .success()
+    );
     let created = vmctl(
         dir.path(),
         &guestd,
@@ -236,8 +248,8 @@ fn host_only_cli_persists_membership_and_a_distinct_default_subnet() {
             "create",
             "--name",
             "host-only",
-            "--network-mode",
-            "host-only",
+            "--network",
+            "local",
             "img",
             "true",
         ],
@@ -250,9 +262,5 @@ fn host_only_cli_persists_membership_and_a_distinct_default_subnet() {
     let inspected = vmctl(dir.path(), &guestd, &["inspect", "host-only"]);
     let info: serde_json::Value = serde_json::from_slice(&inspected.stdout).unwrap();
     assert_eq!(info[0]["host_config"]["network_mode"], "host-only");
-    assert_eq!(info[0]["host_config"]["shared_peer_participation"], true);
-    assert_eq!(
-        info[0]["host_config"]["shared_network"],
-        serde_json::json!({"address":"192.168.128.0","prefix_len":24})
-    );
+    assert_eq!(info[0]["host_config"]["virtual_network"], "local");
 }

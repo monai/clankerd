@@ -1,4 +1,4 @@
-//! CLI: `-v` volumes and bind mounts, `--volume-size`, `rm -v` and the
+//! CLI: typed and shorthand mounts, explicit volume sizing/removal and the
 //! `volume` subcommands. The VMM is the local-process stand-in, so these check
 //! what the CLI hands the library and what lands on the host.
 
@@ -62,17 +62,8 @@ impl Cli {
 #[test]
 fn a_named_volume_is_created_sparse_with_the_requested_size_and_survives_rm() {
     let cli = Cli::new();
-    cli.ok(&[
-        "run",
-        "--name",
-        "a",
-        "-v",
-        "data:/storage",
-        "--volume-size",
-        "8M",
-        "img",
-        "true",
-    ]);
+    cli.ok(&["volume", "create", "--size", "8M", "data"]);
+    cli.ok(&["run", "--name", "a", "-v", "data:/storage", "img", "true"]);
     assert_eq!(
         std::fs::metadata(cli.volume_file("data")).unwrap().len(),
         8 * MIB
@@ -88,24 +79,18 @@ fn a_named_volume_is_created_sparse_with_the_requested_size_and_survives_rm() {
     let v: serde_json::Value = serde_json::from_str(&inspect).unwrap();
     assert_eq!(v[0]["size"], 8 * MIB);
 
-    // A new machine reuses it, and a bigger size grows it.
-    cli.ok(&[
-        "run",
-        "--name",
-        "b",
-        "-v",
-        "data:/storage:size=24M",
-        "img",
-        "true",
-    ]);
+    // A new machine reuses the existing volume without resizing it.
+    cli.ok(&["run", "--name", "b", "-v", "data:/storage", "img", "true"]);
     assert_eq!(
         std::fs::metadata(cli.volume_file("data")).unwrap().len(),
-        24 * MIB
+        8 * MIB
     );
 
-    // rm -v deletes it.
+    // Explicit volume removal deletes it after the machine is removed.
     cli.ok(&["stop", "b"]);
-    cli.ok(&["rm", "-v", "b"]);
+    cli.ok(&["rm", "b"]);
+    assert!(cli.volume_file("data").exists());
+    cli.ok(&["volume", "rm", "data"]);
     assert!(!cli.volume_file("data").exists());
 }
 

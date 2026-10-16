@@ -99,7 +99,7 @@ fn stop_kills_after_the_timeout_when_the_workload_ignores_sigterm() {
 }
 
 #[test]
-fn kill_defaults_to_sigkill_and_accepts_a_signal() {
+fn kill_forcibly_terminates_the_machine_and_rejects_signal_selection() {
     let cli = Cli::new();
     let script = |name: &str| {
         format!(
@@ -127,7 +127,7 @@ fn kill_defaults_to_sigkill_and_accepts_a_signal() {
     assert!(cli.run(&["kill", "a"]).status.success());
     assert_eq!(cli.status_of("a"), "exited 137");
 
-    assert!(cli.run(&["kill", "-s", "USR1", "b"]).status.success());
+    assert_eq!(cli.run(&["kill", "-s", "USR1", "b"]).status.code(), Some(2));
     assert_eq!(cli.status_of("b"), "running 0");
     assert!(cli.run(&["exec", "b", "true"]).status.success());
     assert!(cli.run(&["stop", "b"]).status.success());
@@ -177,7 +177,7 @@ fn with_the_libkrun_backend_run_pulls_the_image_and_needs_the_guest_boot_directo
         .env("CLANKERD_GUESTD", boot.join("clankerd-guestd"))
         .output()
         .unwrap();
-    assert_eq!(out.status.code(), Some(125));
+    assert_eq!(out.status.code(), Some(1));
     let err = text(&out.stderr);
     assert!(err.contains("mke2fs") && err.contains("make rust"), "{err}");
     // The image was pulled on the way.
@@ -239,10 +239,7 @@ fn command_failure_leaves_the_machine_running_without_policy_restarts() {
     assert_eq!(v[0]["state"]["restart_count"], 0);
     assert_eq!(v[0]["state"]["status"], "running");
     assert!(cli.run(&["stop", "flaky"]).status.success());
-    assert_eq!(
-        v[0]["host_config"]["restart_policy"]["on-failure"]["max_retries"],
-        2
-    );
+    assert_eq!(v[0]["host_config"]["restart_policy"], "on-failure:2");
 }
 
 #[test]
@@ -258,7 +255,7 @@ fn invalid_restart_and_pull_policies_are_usage_errors() {
     let out = cli.run(&["create", "--pull", "sometimes", "img", "true"]);
     assert!(!out.status.success());
     assert!(
-        text(&out.stderr).contains("invalid pull policy"),
+        text(&out.stderr).contains("possible values: missing, always, never"),
         "{}",
         text(&out.stderr)
     );
@@ -272,7 +269,8 @@ fn named_user_signals_reach_the_linux_workload_without_ending_it() {
     let usr1 = cli.root().join("usr1");
     let usr2 = cli.root().join("usr2");
     let script = format!(
-        "trap 'echo received > {usr1}' USR1; trap 'echo received > {usr2}' USR2; touch {ready}; while :; do sleep 0.05; done",
+        "echo $$ > {pidfile}; trap 'echo received > {usr1}' USR1; trap 'echo received > {usr2}' USR2; touch {ready}; while :; do sleep 0.05; done",
+        pidfile = cli.root().join("workload.pid").display(),
         usr1 = usr1.display(),
         usr2 = usr2.display(),
         ready = ready.display(),
@@ -290,7 +288,16 @@ fn named_user_signals_reach_the_linux_workload_without_ending_it() {
     assert!(run.status.success(), "{}", text(&run.stderr));
     cli.wait_for("ready");
     for (signal, marker) in [("USR1", "usr1"), ("SIGUSR2", "usr2")] {
-        let delivered = cli.run(&["kill", "--signal", signal, "user-signals"]);
+        let pidfile = cli.root().join("workload.pid");
+        let pid = std::fs::read_to_string(&pidfile).unwrap();
+        let delivered = cli.run(&[
+            "exec",
+            "user-signals",
+            "/bin/kill",
+            "-s",
+            signal.trim_start_matches("SIG"),
+            pid.trim(),
+        ]);
         assert!(delivered.status.success(), "{}", text(&delivered.stderr));
         cli.wait_for(marker);
         assert_eq!(cli.status_of("user-signals"), "running 0");

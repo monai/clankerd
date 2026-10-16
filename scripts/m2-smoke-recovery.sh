@@ -131,7 +131,7 @@ management() {
   printf 'recovery-exec\n' | "$vmctl" exec -i "$name" python3 -c 'import sys;assert sys.stdin.read()=="recovery-exec\n";print("PASS exec stdin/output")'
   management_sample exec-stdin
   previous_signal=$("$vmctl" exec "$name" python3 -c 'from pathlib import Path;p=Path("/tmp/recovery-signal");print(p.read_text() if p.exists() else "none")')
-  "$vmctl" kill --signal USR1 "$name"
+  "$vmctl" exec "$name" kill -s USR1 "$workload_pid"
   delivered=0
   for attempt in $(seq 1 10); do
     current_signal=$("$vmctl" exec "$name" python3 -c 'from pathlib import Path;p=Path("/tmp/recovery-signal");print(p.read_text() if p.exists() else "none")')

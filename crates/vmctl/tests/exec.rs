@@ -81,13 +81,10 @@ fn exec_dash_i_pipes_stdin_through_to_eof() {
 #[test]
 fn exec_in_a_stopped_or_missing_machine_fails_cleanly() {
     let env = Env::new();
-    assert_eq!(
-        env.vmctl(&["exec", "nope", "true"]).status.code(),
-        Some(125)
-    );
+    assert_eq!(env.vmctl(&["exec", "nope", "true"]).status.code(), Some(1));
     assert!(env.vmctl(&["rm", "-f", "m"]).status.success());
     let out = env.vmctl(&["exec", "m", "true"]);
-    assert_eq!(out.status.code(), Some(125));
+    assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("Error"));
 }
 
@@ -257,7 +254,7 @@ fn exec_it_restores_the_terminal_when_killed_and_when_the_guest_disappears() {
 fn exec_dash_t_without_a_terminal_is_refused() {
     let env = Env::new();
     let out = env.vmctl(&["exec", "-t", "m", "true"]);
-    assert_eq!(out.status.code(), Some(125));
+    assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("not a TTY"));
 }
 
@@ -296,6 +293,6 @@ fn run_dash_i_pipes_stdin_to_the_main_process() {
 fn run_dash_t_without_a_terminal_is_refused() {
     let env = Env::empty();
     let out = env.vmctl(&["run", "-t", "img", "true"]);
-    assert_eq!(out.status.code(), Some(125));
+    assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("not a TTY"));
 }

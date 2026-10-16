@@ -53,8 +53,13 @@ host_pid=$!
 sleep 1
 kill -0 "$host_pid"
 for name in path-a path-c path-d; do
-  case "$name" in path-a) subnet=192.168.105.0/24; isolation=();; path-c) subnet=192.168.106.0/24; isolation=(--isolate-peers);; path-d) subnet=192.168.107.0/24; isolation=();; esac
-  "$vmctl" run -d --name "$name" --shared-network "$subnet" "${isolation[@]}" "${IMAGE:-python:3.13-alpine}" python3 -c "$server" server > "$work/$name-start.log"
+  case "$name" in path-a) subnet=192.168.105.0/24; singleton=0;; path-c) subnet=192.168.106.0/24; singleton=1;; path-d) subnet=192.168.107.0/24; singleton=0;; esac
+  network="network-${subnet//[.\/]/-}"
+  if [ "$singleton" = 1 ]; then network="singleton-$name"; fi
+  if ! "$vmctl" network inspect "$network" >/dev/null 2>&1; then
+    if [ "$singleton" = 1 ]; then "$vmctl" network create "$network"; else "$vmctl" network create --subnet "$subnet" "$network"; fi
+  fi
+  "$vmctl" run -d --name "$name" --network "$network" "${IMAGE:-python:3.13-alpine}" python3 -c "$server" server > "$work/$name-start.log"
   ready=0
   for attempt in $(seq 1 30); do
     "$vmctl" inspect "$name" > "$work/$name.json"

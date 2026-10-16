@@ -25,8 +25,10 @@ peer=$(cat "$root/scripts/fixtures/vmnet-shared-peers.py")
 image=${IMAGE:-python:3.13-alpine}
 "$vmctl" run -d --name shared-a "$image" python3 -c "$server" server
 "$vmctl" run -d --name shared-b "$image" python3 -c "$server" server
-"$vmctl" run -d --name shared-isolated --shared-network 192.168.105.0/24 --isolate-peers "$image" python3 -c "$server" server
-"$vmctl" run -d --name shared-separate --shared-network "${VMNET_SEPARATE_NETWORK:-192.168.112.0/24}" "$image" python3 -c "$server" server
+"$vmctl" network create singleton
+"$vmctl" network create --subnet "${VMNET_SEPARATE_NETWORK:-192.168.112.0/24}" separate
+"$vmctl" run -d --name shared-isolated --network singleton "$image" python3 -c "$server" server
+"$vmctl" run -d --name shared-separate --network separate "$image" python3 -c "$server" server
 inspect() { "$vmctl" inspect "$1" > "$work/$1.json"; }
 host_access() {
   local name=$1 passed=0

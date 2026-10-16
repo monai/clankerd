@@ -132,14 +132,8 @@ impl Machine {
 
     /// Starts and reserves the main attachment, including output from a command that exits immediately.
     pub fn start_attached(&self, size: Option<(u16, u16)>) -> Result<ExecStreams> {
-        let info = self.inspect()?;
-        if !info.config.tty && !info.config.open_stdin {
-            return Err(Error::invalid_parameter(
-                "attached start needs tty or open_stdin",
-            ));
-        }
         self.start_with(StartKind::RequestedAttached)?;
-        self.attach(size)
+        self.attach_streams(size, true)
     }
 
     /// A [`StartKind::PolicyRestart`] only proceeds while the machine is still
@@ -462,6 +456,10 @@ impl Machine {
     /// without stopping the machine; the status arrives when the process exits.
     /// `size` is the terminal size `(rows, cols)` for a machine with a tty.
     pub fn attach(&self, size: Option<(u16, u16)>) -> Result<ExecStreams> {
+        self.attach_streams(size, false)
+    }
+
+    fn attach_streams(&self, size: Option<(u16, u16)>, output_only: bool) -> Result<ExecStreams> {
         let (record, state) = self.inner.store.load(&self.id)?;
         if state.status != Status::Running {
             return Err(Error::conflict(format!(
@@ -469,7 +467,7 @@ impl Machine {
                 record.name
             )));
         }
-        if !record.config.tty && !record.config.open_stdin {
+        if !output_only && !record.config.tty && !record.config.open_stdin {
             return Err(Error::conflict(format!(
                 "machine {} was created without tty or open_stdin, so there is nothing to attach to",
                 record.name

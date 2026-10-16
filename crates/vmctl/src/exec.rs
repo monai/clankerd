@@ -5,29 +5,9 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use clap::Args;
 use libclankerd::{Engine, Error, ExecConfig, ExecStatus, ExecStreams};
 
-#[derive(Args)]
-pub struct ExecArgs {
-    /// Keep stdin open and forward it.
-    #[arg(short = 'i', long)]
-    interactive: bool,
-    /// Allocate a pseudo-terminal.
-    #[arg(short = 't', long)]
-    tty: bool,
-    #[arg(short = 'u', long)]
-    user: Option<String>,
-    #[arg(short = 'w', long)]
-    workdir: Option<String>,
-    /// Environment variable, KEY=value.
-    #[arg(short = 'e', long = "env")]
-    env: Vec<String>,
-    machine: String,
-    /// Command and arguments.
-    #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
-    cmd: Vec<String>,
-}
+use crate::contract::ExecArgs;
 
 pub fn run(engine: &Engine, args: ExecArgs) -> Result<u8, Error> {
     let stdin_is_tty = isatty(libc::STDIN_FILENO);

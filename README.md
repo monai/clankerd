@@ -41,11 +41,11 @@ complete build.
 
 ```sh
 vmctl=build/rust/darwin-arm64/vmctl
-"$vmctl" create --name sandbox debian:trixie
-"$vmctl" start sandbox
-"$vmctl" exec sandbox -it /bin/bash
-"$vmctl" stop sandbox
-"$vmctl" rm sandbox
+"$vmctl" machine create --name sandbox debian:trixie
+"$vmctl" machine start sandbox
+"$vmctl" machine exec -it sandbox /bin/bash
+"$vmctl" machine stop sandbox
+"$vmctl" machine rm sandbox
 ```
 
 Guestd is the machine's init process and stays running until `stop` or `kill`.
@@ -53,10 +53,14 @@ The image's ENTRYPOINT/CMD runs once per start; its exit does not stop the VM.
 `run` returns the command's exit code while leaving the machine running;
 `run -it` attaches to that command. `exec -it` opens a separate session even
 when the image command has already finished. Restart policies apply to machine
-failure, not to an image command exiting. Removing a machine keeps its named volumes unless `rm -v` is requested.
+failure, not to an image command exiting. Removing a machine retains named volumes; delete data explicitly with `vmctl volume rm NAME`.
 
 Run `vmctl --help` for lifecycle commands and `vmctl run --help` for image,
-resource, mount, port and environment flags. Application leases, mDNS and
+resource, mount, socket and environment flags.
+Global options precede the resource or shortcut; action options precede operands.
+Lists default to tables; use `--output json` before operands for structured
+results. `vmctl --describe-contract` exports deterministic command metadata and
+JSON schemas for the public result records. Application leases, mDNS and
 managed Chrome are outside the current runtime's API.
 
 ## Test

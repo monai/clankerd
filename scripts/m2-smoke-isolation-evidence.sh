@@ -70,11 +70,16 @@ for attempt in $(seq 1 50); do [ ! -e "$work/host-ready" ] || break; kill -0 "$h
 healthy=()
 for name in $names; do
   case "$name" in
-    evidence-a|evidence-b) subnet=192.168.105.0/24; isolation=();;
-    evidence-c|evidence-e) subnet=192.168.106.0/24; isolation=(--isolate-peers);;
-    evidence-d) subnet=192.168.107.0/24; isolation=();;
+    evidence-a|evidence-b) subnet=192.168.105.0/24; singleton=0;;
+    evidence-c|evidence-e) subnet=192.168.106.0/24; singleton=1;;
+    evidence-d) subnet=192.168.107.0/24; singleton=0;;
   esac
-  if ! "$vmctl" run -d --name "$name" --shared-network "$subnet" "${isolation[@]}" "$image" python3 -c "$server" server > "$work/$name-start.log" 2>&1; then
+  network="network-${subnet//[.\/]/-}"
+  if [ "$singleton" = 1 ]; then network="singleton-$name"; fi
+  if ! "$vmctl" network inspect "$network" >/dev/null 2>&1; then
+    if [ "$singleton" = 1 ]; then "$vmctl" network create "$network"; else "$vmctl" network create --subnet "$subnet" "$network"; fi
+  fi
+  if ! "$vmctl" run -d --name "$name" --network "$network" "$image" python3 -c "$server" server > "$work/$name-start.log" 2>&1; then
     echo "$name START FAILED (details retained)"; continue
   fi
   passed=0

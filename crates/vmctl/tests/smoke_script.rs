@@ -90,7 +90,7 @@ fn nftables_table_failure_is_reported_with_the_kata_fallback() {
         r.calls
     );
     assert!(
-        r.calls.contains("rm -f -v smoke"),
+        r.calls.contains("rm -f smoke"),
         "a failed run still cleans up:\n{}",
         r.calls
     );

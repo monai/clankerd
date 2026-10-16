@@ -70,7 +70,7 @@ host_pid=$!
 sleep 1
 kill -0 "$host_pid"
 for pair in tag-net-a,192.168.105.0/24 tag-net-c,192.168.106.0/24 tag-net-d,192.168.107.0/24; do
-  "$vmctl" network create "${pair%%,*}" --mode shared --subnet "${pair#*,}"
+  "$vmctl" network create --mode shared --subnet "${pair#*,}" "${pair%%,*}"
 done
 for name in path-a path-c path-d; do
   case "$name" in path-a) network=tag-net-a;; path-c) network=tag-net-c;; path-d) network=tag-net-d;; esac

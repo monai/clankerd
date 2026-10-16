@@ -25,7 +25,7 @@ trap 'kill "$refresh_pid" 2>/dev/null || true' EXIT
   /usr/bin/otool -L /opt/homebrew/lib/libkrun.1.dylib
   sysctl net.inet.ip.forwarding net.inet6.ip6.forwarding
 } > "$work/host-preflight.log" 2>&1 || true
-stages=(m2-smoke-other-vmm m2-smoke-host-only m2-smoke-native-prefixes m2-test-isolation-pf-state-matrix m2-smoke-vmnet m2-smoke-ipv6 m2-smoke-lifetimes m2-smoke-recovery m2-smoke-bridged m2-smoke-test)
+stages=(m2-smoke-command-system m2-smoke-other-vmm m2-smoke-host-only m2-smoke-native-prefixes m2-test-isolation-pf-state-matrix m2-smoke-vmnet m2-smoke-ipv6 m2-smoke-lifetimes m2-smoke-recovery m2-smoke-bridged m2-smoke-test)
 if [ "$#" -gt 0 ]; then
   for requested in "$@"; do
     found=0

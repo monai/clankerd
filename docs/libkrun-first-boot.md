@@ -203,8 +203,9 @@ guestd (`--boot`, PID 1) mounts `/dev/vda`, pivots into it, mounts
 controllers for children of the root cgroup, sets the clock from the host,
 writes `/.clankerdenv`, then runs ENTRYPOINT + CMD (image config merged with
 `--entrypoint`, trailing args, `-e`, `-u`, `-w`). The boot directory stays at
-`/run/clankerd/boot` (read-only). `vmctl stop` asks guestd to SIGTERM the
-workload; when it exits guestd SIGTERMs/SIGKILLs everything, syncs, unmounts,
+`/run/clankerd/boot` (read-only). The image command exits independently of guestd.
+`vmctl stop` initiates machine shutdown: it signals any running workload with
+the configured stop signal, then guestd terminates remaining processes, syncs, unmounts,
 remounts `/` read-only and powers off. After `-t` seconds (default 10) the
 helper is SIGKILLed instead (exit code 137).
 
@@ -297,7 +298,7 @@ shutdown steps (`stopping processes`, `syncing and unmounting`, `powering off`).
    escalation), as designed. Check `vmctl logs` for the teardown lines.
    The host waits for the VM helper to exit before reporting the machine
    exited, returning from `wait`/`stop`, stopping vmnet-helper or scheduling a
-   restart. The workload's `Exited` event arrives before guestd's cleanup;
+   restart. The workload's completion is separate from guestd's cleanup on explicit shutdown;
    ending the sidecar at that event can interrupt teardown. The stop timeout
    covers both workload termination and guest cleanup.
 8. **Orphan reaping.** guestd as PID 1 reaps adopted zombies every 100 ms with
@@ -321,18 +322,13 @@ Built and tested on Linux only (seam A with the local-process stand-in, plus
 unit tests of guestd's format/grow logic on regular files; the mount tests
 need root and run in CI's root step). Nothing below has run in a VM.
 
-What changed: `vmctl run/create -v data:/storage[:size=20G]` (or
-`--volume-size 20G`) gives a machine one named volume. The library creates
-`<state>/volumes/data/data.ext4` as a *sparse* file (default 16G); no ext4 work
-happens on the Mac. `clankerd-vmspawn` attaches it as the second virtio-blk
-device (`/dev/vdb`, after the root disk). guestd (`--boot`) formats it with the
-static `mke2fs` when its first 64 KiB are blank (anything else that is not
-ext4 is refused, never overwritten), mounts it at the target and, when the
-requested size exceeds the filesystem, grows it online with the static
-`resize2fs`. The host extends the sparse file at start when the size
-increased; volumes never shrink. `vmctl rm` keeps the volume; `vmctl rm -v`
-deletes it. `vmctl volume ls|create|inspect|rm` is the minimal management
-surface. A volume can be mounted by one running machine at a time.
+Create sized storage with `vmctl volume create --size 20G data`, then attach it with
+`vmctl machine run -v data:/storage IMAGE COMMAND`. Missing named volumes are
+created at the library's default 16G. The host file is sparse; guestd formats a
+blank volume with static mke2fs and mounts it as the second virtio-blk device.
+Machine removal and reimage retain this data. Use `vmctl volume rm data` only
+after detaching it from all machines. Volume resizing is not exposed by the CLI.
+A volume can be mounted by one running machine at a time.
 `-v ./dir:/path[:ro]` shares a host directory over virtio-fs (tag `bindN`),
 mounted by guestd with `mount -t virtiofs`. `mke2fs` and `resize2fs` are
 hard-linked from next to guestd into the machine's boot directory when a
@@ -360,16 +356,17 @@ export CLANKERD_GUESTD=$PWD/build/rust/linux-arm64/clankerd-guestd
 vmctl=build/rust/darwin-arm64/vmctl; img=ghcr.io/monai/clankers:slim
 vol="$HOME/Library/Application Support/clankerd/volumes/data/data.ext4"
 
-$vmctl run -d --name v1 -v data:/storage --volume-size 1G $img sleep infinity
+$vmctl volume create --size 1G data
+$vmctl run -d --name v1 -v data:/storage $img sleep infinity
 ls -ls "$vol"                                   # 1 GiB apparent, little allocated
 $vmctl exec -u root v1 sh -c 'grep storage /proc/mounts; df -h /storage; echo hi > /storage/f; sync'
 $vmctl logs v1 | grep 'formatted new volume'
 $vmctl stop v1; $vmctl start v1; $vmctl exec v1 cat /storage/f          # hi
 $vmctl stop v1; $vmctl rm v1; $vmctl volume ls                           # data still there
-$vmctl run -d --name v2 -v data:/storage:size=2G $img sleep infinity     # grows at start
+$vmctl run -d --name v2 -v data:/storage $img sleep infinity     # reuses existing capacity
 $vmctl exec v2 sh -c 'df -h /storage; cat /storage/f'                    # ~2G, hi
 $vmctl logs v2 | grep 'grew volume'
-$vmctl rm -f -v v2; $vmctl volume ls                                     # gone
+$vmctl rm -f v2; $vmctl volume rm data; $vmctl volume ls                                     # gone
 
 mkdir -p /tmp/shared; echo a > /tmp/shared/a
 $vmctl run -d --name b -v /tmp/shared:/shared $img sleep infinity
@@ -413,9 +410,9 @@ $vmctl rm -f b
 ### Ticket 09 checklist for you
 
 - [x] A new volume is created sparse, formatted in the guest, and mounted at the configured path (`scripts/m2-boot-check.sh volume`)
-- [x] Data written to the volume survives stop/start and `vmctl rm` (no `-v`) followed by a new machine using the same volume
-- [x] Increasing the size (`size=2G`) takes effect at the next start (`df` and the log line `grew volume`)
-- [x] `vmctl rm -v` deletes the volume
+- [x] Data written to the volume survives stop/start and `vmctl rm` followed by a new machine using the same volume
+- [ ] CLI volume resizing is outside the command-system scope.
+- [x] `vmctl volume rm data` deletes an unused volume
 - [x] A host directory bind mount is readable and writable from both sides
 - [ ] Items above confirmed or corrected
 
@@ -504,17 +501,11 @@ and [Apple shared-mode IPv6 introduction](https://developer.apple.com/videos/pla
 
 ## Selectable shared networks and peer isolation
 
-`vmctl create/run --shared-network 192.168.109.0/24` selects an aligned RFC1918
-IPv4 subnet. macOS15 vmnet joins attachments with matching start/end/mask
-configuration; the selection is distinct from each machine's stable interface
-UUID. IPv6 stays automatic on the selected attachment. The default remains
-192.168.105.0/24 with peer participation enabled.
-
-`--isolate-peers` enables vmnet's native per-interface isolation, blocking peers
-in both directions while keeping Mac access and shared NAT. Inspection exposes
-`host_config.shared_network` and `shared_peer_participation`. API updates use the
-existing stopped-machine contract: stop, update HostConfig, then start. A running
-attachment is never replaced, and selections are retained across restarts.
+Create a virtual network with `vmctl network create --subnet 192.168.109.0/24 team`,
+then select `--network team` when creating a machine. Mode and subnet belong to
+the virtual network; omit subnet for allocation. A singleton network provides
+individual isolation. Stopped membership edits use `vmctl machine update --network NAME MACHINE`.
+The library retains legacy persisted settings, without silently rewriting them.
 
 ```sh
 mise exec -- make rust && scripts/m2-smoke-shared.sh

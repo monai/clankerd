@@ -60,11 +60,11 @@ with socket.socket(family,socket.SOCK_STREAM) as s:
 print("PASS family-specific external TCP "+address+":443")' 
 export VMNET_TEST_FAMILY=dual
 # Configuration and unavailable attachment must fail before workload startup.
-if "$vmctl" create --network-mode bridged --name bridge-invalid "${IMAGE:-python:3.13-alpine}" true > "$work/missing-interface.log" 2>&1; then
-  echo 'Missing bridge interface unexpectedly accepted' >&2; exit 1
+if "$vmctl" create --network team --bridge-interface en0 --name bridge-invalid "${IMAGE:-python:3.13-alpine}" true > "$work/conflicting-attachment.log" 2>&1; then
+  echo 'Conflicting attachment selectors unexpectedly accepted' >&2; exit 1
 fi
-cat "$work/missing-interface.log"
-if "$vmctl" run -d --network-mode bridged --bridge-interface zzclanker0 --name bridge-unavailable "${IMAGE:-python:3.13-alpine}" python3 -c 'print("WORKLOAD-MUST-NOT-RUN")' > "$work/unavailable.log" 2>&1; then
+cat "$work/conflicting-attachment.log"
+if "$vmctl" run -d --bridge-interface zzclanker0 --name bridge-unavailable "${IMAGE:-python:3.13-alpine}" python3 -c 'print("WORKLOAD-MUST-NOT-RUN")' > "$work/unavailable.log" 2>&1; then
   echo 'Unavailable physical interface unexpectedly started' >&2; exit 1
 fi
 cat "$work/unavailable.log"
@@ -82,7 +82,7 @@ while IFS= read -r interface; do
       continue
     fi
     export VMNET_TEST_FAMILY=$family
-    "$vmctl" run -d --network-mode bridged --bridge-interface "$interface" --name bridge-smoke "${IMAGE:-python:3.13-alpine}" python3 -c "$services" server
+    "$vmctl" run -d --bridge-interface "$interface" --name bridge-smoke "${IMAGE:-python:3.13-alpine}" python3 -c "$services" server
     "$vmctl" exec bridge-smoke sh -c '! command -v nft'
     passed=0
     for attempt in $(seq 1 20); do

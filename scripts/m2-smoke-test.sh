@@ -45,7 +45,7 @@ export CLANKERD_RUNTIME_DIR=$state/run
 
 cleanup() {
   for m in smoke smoke-alt smoke2; do
-    "$vmctl" rm -f -v "$m" >/dev/null 2>&1 || true
+    "$vmctl" rm -f "$m" >/dev/null 2>&1 || true
   done
   "$vmctl" volume rm "$vol" >/dev/null 2>&1 || true
   rm -rf "$state"
@@ -122,7 +122,8 @@ step "pull $image and $alt_image"
 "$vmctl" pull "$alt_image"
 
 step "boot with a volume"
-"$vmctl" run -d --name smoke -v "$vol:/storage" --volume-size 20G "$image" sleep infinity
+"$vmctl" volume create --size 20G "$vol"
+"$vmctl" run -d --name smoke -v "$vol:/storage" "$image" sleep infinity
 retry "the machine to accept exec" exec_up smoke
 
 step "interactive exec: stdin reaches the guest and output returns"
@@ -230,13 +231,13 @@ retry "nginx at the guest IP after restart" nginx_up
 
 step "a changed image keeps the volume"
 "$vmctl" stop smoke
-"$vmctl" rm smoke
-"$vmctl" run -d --name smoke-alt -v "$vol:/storage" "$alt_image" sleep infinity
-retry "the alternate machine to accept exec" exec_up smoke-alt
+"$vmctl" reimage smoke "$alt_image"
+"$vmctl" start smoke
+retry "the reimaged machine to accept exec" exec_up smoke
 # shellcheck disable=SC2016 # expanded in the guest
-"$vmctl" exec smoke-alt sh -c '[ "$(cat /storage/marker)" = persisted ]' \
+"$vmctl" exec smoke sh -c '[ "$(cat /storage/marker)" = persisted ]' \
   || fail "volume marker (persisted) lost when the image changed"
-"$vmctl" rm -f smoke-alt
+"$vmctl" rm -f smoke
 
 step "a second machine from the cached image is created almost instantly"
 began=$(date +%s)

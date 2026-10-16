@@ -9,11 +9,11 @@ fn network_cli_creates_assigns_inspects_and_removes_resources() {
     let created = v(&[
         "network",
         "create",
-        "team",
         "--mode",
         "host-only",
         "--subnet",
         "192.168.123.0/24",
+        "team",
     ]);
     assert!(created.status.success(), "{}", text(&created.stderr));
     let created = v(&[
@@ -32,7 +32,7 @@ fn network_cli_creates_assigns_inspects_and_removes_resources() {
     assert_eq!(info[0]["host_config"]["network_mode"], "host-only");
     assert!(!v(&["network", "rm", "team"]).status.success());
     assert!(v(&["network", "inspect", "team"]).status.success());
-    assert!(v(&["network", "ls"]).status.success());
+    assert!(v(&["network", "ls", "--output", "json"]).status.success());
     assert!(
         !v(&[
             "create",
@@ -69,7 +69,7 @@ fn independent_cli_processes_allocate_unique_network_subnets() {
     for mut child in children {
         assert!(child.wait().unwrap().success());
     }
-    let output = vmctl(dir.path(), &guestd, &["network", "ls"]);
+    let output = vmctl(dir.path(), &guestd, &["network", "ls", "--output", "json"]);
     assert!(output.status.success(), "{}", text(&output.stderr));
     let networks: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let addresses: std::collections::HashSet<_> = networks
@@ -94,7 +94,7 @@ fn update_network_preserves_workload_resources_and_created_state() {
     let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
     for (name, mode) in [("first", "shared"), ("second", "host-only")] {
         assert!(
-            v(&["network", "create", name, "--mode", mode])
+            v(&["network", "create", "--mode", mode, name])
                 .status
                 .success()
         );
@@ -137,7 +137,6 @@ fn update_network_preserves_workload_resources_and_created_state() {
         "bridge_interface",
         "shared_network",
         "shared_ipv6_prefix",
-        "shared_peer_participation",
     ] {
         after["host_config"][field] = before["host_config"][field].clone();
     }
@@ -153,7 +152,7 @@ fn update_network_requires_stopped_membership_and_persists_across_starts() {
     let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
     for (name, mode) in [("first", "shared"), ("second", "host-only")] {
         assert!(
-            v(&["network", "create", name, "--mode", mode])
+            v(&["network", "create", "--mode", mode, name])
                 .status
                 .success()
         );
@@ -245,7 +244,7 @@ fn update_network_clears_the_previous_physical_attachment() {
     let guestd = guestd();
     let v = |args: &[&str]| vmctl(dir.path(), &guestd, args);
     assert!(
-        v(&["network", "create", "target", "--mode", "host-only"])
+        v(&["network", "create", "--mode", "host-only", "target"])
             .status
             .success()
     );
@@ -254,8 +253,6 @@ fn update_network_clears_the_previous_physical_attachment() {
             "create",
             "--name",
             "member",
-            "--network-mode",
-            "bridged",
             "--bridge-interface",
             "en0",
             "img",

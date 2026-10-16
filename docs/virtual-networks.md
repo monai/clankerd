@@ -4,12 +4,12 @@ Virtual network resources
 Create a persistent resource before assigning machines:
 
 ```
-vmctl network create team --mode shared --subnet 192.168.120.0/24
+vmctl network create --mode shared --subnet 192.168.120.0/24 team
 vmctl create --network team --name member IMAGE COMMAND
 vmctl network inspect team
 vmctl network ls
 vmctl stop member
-vmctl network create other-team --mode host-only
+vmctl network create --mode host-only other-team
 vmctl update --network other-team member
 vmctl start member
 vmctl network rm team
@@ -25,8 +25,7 @@ fallback to a different network after creation.
 The library exposes `create_network`, `networks`, `inspect_network` and
 `remove_network`. `HostConfig.virtual_network` selects membership; inspection
 also retains the selected mode and subnet. An assigned resource is authoritative
-for these values. The CLI rejects combining `--network` with legacy mode/subnet/
-isolation options. Bridged attachments cannot join a virtual network.
+for these values. Machines select `--network NAME` or `--bridge-interface INTERFACE`; these are mutually exclusive. Mode and subnet belong to the virtual network.
 
 `vmctl update --network NAME MACHINE...` replaces each stopped machine's single
 membership. It preserves the workload, volumes and resource settings, selects the
@@ -43,13 +42,7 @@ while any persisted machine belongs to it, including a stopped machine. Resource
 remain until explicitly removed; failed machine creation may leave an allocated
 resource for inspection/removal.
 
-Legacy mode/subnet options create or reuse a resource identified by that mode and
-subnet. `--isolate-peers` (and API `shared_peer_participation=false`) creates a
-singleton network with a separately allocated subnet; it no longer opts a member
-out of an existing network. Canonical records set the legacy participation field
-to true. Existing records without membership are not silently migrated while
-running. They need explicit stopped configuration updates before membership can
-serve as an enforced security identity.
+A singleton virtual network provides individual machine isolation. Existing persisted records remain readable; the CLI does not silently migrate or readdress them. Explicit stopped updates select canonical membership.
 
 Active native attachments register with the installed host PF controller before
 the workload starts. It marks packets by their incoming native bridge and blocks

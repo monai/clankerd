@@ -54,7 +54,7 @@ assert len(free)>=2,'Need two unused /24 ranges'
 (work/'networks.tsv').write_text(''.join(f'{name}\t192.168.{third}.0/24\n' for name,third in zip(('prefix-one','prefix-two'),free[:2])))
 PYCONFIG
 while IFS=$'\t' read -r network subnet prefix; do
-  "$vmctl" network create "$network" --mode shared --subnet "$subnet" > "$work/$network-create.txt"
+  "$vmctl" network create --mode shared --subnet "$subnet" "$network" > "$work/$network-create.txt"
 done < "$work/networks.tsv"
 "$vmctl" network inspect prefix-one prefix-two > "$work/networks.json"
 python3 - "$work/networks.json" > "$work/networks.tsv" <<'PYRESOURCES'

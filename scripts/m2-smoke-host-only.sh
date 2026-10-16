@@ -75,9 +75,9 @@ PYHOST
 host_pid=$!
 for attempt in $(seq 1 50); do [ ! -e "$work/host-ready" ] || break; kill -0 "$host_pid"; sleep 0.1; done
 [ -e "$work/host-ready" ]
-"$vmctl" network create shared --mode shared --subnet 192.168.105.0/24 > "$work/networks.log"
-"$vmctl" network create other --mode shared --subnet 192.168.107.0/24 >> "$work/networks.log"
-"$vmctl" network create local --mode host-only --subnet 192.168.128.0/24 >> "$work/networks.log"
+"$vmctl" network create --mode shared --subnet 192.168.105.0/24 shared > "$work/networks.log"
+"$vmctl" network create --mode shared --subnet 192.168.107.0/24 other >> "$work/networks.log"
+"$vmctl" network create --mode host-only --subnet 192.168.128.0/24 local >> "$work/networks.log"
 healthy=()
 for name in $names; do
   case "$name" in
@@ -224,7 +224,7 @@ done
 # Distinct resources in independent state roots must not merge on a native bridge.
 "$vmctl" network inspect local > "$work/host-only-network.json"
 subnet=$(python3 -c 'import json,sys;n=json.load(open(sys.argv[1]))[0]["subnet"];print(n["address"]+"/"+str(n["prefix_len"]))' "$work/host-only-network.json")
-secondary network create other --mode host-only --subnet "$subnet" > "$work/conflicting-network.json"
+secondary network create --mode host-only --subnet "$subnet" other > "$work/conflicting-network.json"
 if secondary run -d --name host-only-conflict --network other "$image" sh -c 'echo UNEXPECTED_WORKLOAD; sleep 60' > "$work/conflicting-start.log" 2>&1; then
   echo 'FAIL distinct host-only resources merged across state roots'
   exit 1

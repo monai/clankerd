@@ -3,7 +3,7 @@
 Create or run with an explicit supported physical interface:
 
 ```sh
-vmctl run -d --network-mode bridged --bridge-interface en0 --name lan python:3.13-alpine python3 -m http.server 8080
+vmctl run -d --bridge-interface en0 --name lan python:3.13-alpine python3 -m http.server 8080
 ```
 
 Find vmnet-supported physical interfaces with the installed helper:

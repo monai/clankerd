@@ -16,7 +16,7 @@
 #       exit codes, graceful stop, kill fallback and the cached second create.
 # volume (ticket 09): a named volume (sparse raw ext4, formatted by guestd on
 #       first use, mounted at /storage), persistence across stop/start and
-#       `rm` without -v, growth at the next start, `rm -v`, and a virtio-fs
+#       volume retention, explicit volume removal, and a virtio-fs
 #       bind mount that is readable and writable from both sides.
 # net: boots IMAGE with vmnet-helper and checks DHCP, DNS, HTTPS and cleanup.
 set -euo pipefail
@@ -174,10 +174,12 @@ image_check() {
   logs_have dev "syncing and unmounting"
   logs_have dev "powering off"
 
-  step "run IMAGE true exits with the workload"
+  step "run IMAGE true returns command status and leaves guestd running"
   "$vmctl" run --name second "$image" true && code=0 || code=$?
   [ "$code" -eq 0 ] || fail "vmctl run IMAGE true exited $code"
-  expect_status second "Exited (0)"
+  expect_status second "Up"
+  "$vmctl" exec second true
+  "$vmctl" stop second
 
   step "-e, -u and -w override the image"
   "$vmctl" run --name override -e FOO=bar -u root -w /tmp --entrypoint sh "$image" \
@@ -223,7 +225,8 @@ volume_check() {
   "$vmctl" pull "$image" >/dev/null
 
   step "new volume: sparse on the host, formatted and mounted by guestd"
-  "$vmctl" run -d --name vol1 -v data:/storage --volume-size 1G "$image" sleep infinity
+  "$vmctl" volume create --size 1G data
+  "$vmctl" run -d --name vol1 -v data:/storage "$image" sleep infinity
   wait_exec vol1
   volfile=$CLANKERD_STATE_DIR/volumes/data/data.ext4
   expect_volume_capacity vol1 1073741824
@@ -239,24 +242,21 @@ volume_check() {
   expect_volume_capacity vol1 1073741824
   [ "$("$vmctl" exec vol1 cat /storage/marker)" = persisted ] || fail "marker lost across stop/start"
 
-  step "the data survives rm without -v, and a new machine reuses the volume"
+  step "the data survives machine removal, and a new machine reuses the volume"
   "$vmctl" stop vol1
   "$vmctl" rm vol1
   "$vmctl" volume ls | grep -q '^data ' || fail "volume was removed by plain rm"
 
-  step "a larger size takes effect at the next start (resize2fs)"
-  "$vmctl" run -d --name vol2 -v data:/storage:size=2G "$image" sleep infinity
+  step "a new machine reuses the original volume capacity and data"
+  "$vmctl" run -d --name vol2 -v data:/storage "$image" sleep infinity
   wait_exec vol2
-  expect_volume_capacity vol2 2147483648
-  logs_have vol2 "grew volume"
-  total=$("$vmctl" exec vol2 sh -c 'stat -f -c "%b * %S" /storage' | bc)
-  echo "filesystem bytes: $total"
-  [ "$total" -gt 1900000000 ] || fail "filesystem did not grow (total $total)"
-  [ "$("$vmctl" exec vol2 cat /storage/marker)" = persisted ] || fail "marker lost after growing"
+  expect_volume_capacity vol2 1073741824
+  [ "$("$vmctl" exec vol2 cat /storage/marker)" = persisted ] || fail "marker lost after reattachment"
 
-  step "rm -v deletes the volume"
-  "$vmctl" rm -f -v vol2
-  [ ! -e "$volfile" ] || fail "volume file still exists after rm -v"
+  step "explicit volume removal deletes the detached data resource"
+  "$vmctl" rm -f vol2
+  "$vmctl" volume rm data
+  [ ! -e "$volfile" ] || fail "volume file still exists after volume rm"
 
   step "bind mount: readable and writable from both sides"
   hostdir=$state/shared
