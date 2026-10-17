@@ -495,6 +495,24 @@ fn metadata_declares_effective_defaults_separately_from_omitted_updates() {
     };
     assert_eq!(arg(create, "pull")["effective_default"]["value"], "missing");
     assert_eq!(arg(create, "restart")["effective_default"]["value"], "no");
+    for action in actions
+        .iter()
+        .filter(|a| matches!(a["name"].as_str(), Some("create" | "run" | "update")))
+    {
+        let mount = arg(
+            action,
+            if action["name"] == "update" {
+                "mount_add"
+            } else {
+                "mount"
+            },
+        );
+        assert_eq!(mount["input"]["semantics"]["default"], "simplified");
+        assert_eq!(
+            mount["input"]["semantics"]["values"],
+            serde_json::json!(["simplified", "complete"])
+        );
+    }
     assert_eq!(
         arg(create, "network")["effective_default"]["value"],
         "default-shared"

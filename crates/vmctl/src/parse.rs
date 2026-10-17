@@ -1,5 +1,5 @@
 //! Value normalization shared by command definitions.
-use libclankerd::{Mount, SocketBinding};
+use libclankerd::{BindSemantics, Mount, SocketBinding};
 use std::path::{Component, PathBuf};
 
 pub fn size(s: &str) -> Result<u64, String> {
@@ -37,6 +37,7 @@ fn mount(kind: &str, source: &str, target: &str, readonly: bool) -> Result<Mount
                 source,
                 target,
                 read_only: readonly,
+                semantics: Default::default(),
             })
         }
         "volume" if readonly => Err("read-only named-volume attachments are not supported".into()),
@@ -85,6 +86,14 @@ pub fn typed_mount(s: &str) -> Result<Mount, String> {
     let kind = f.remove("type").ok_or("mount requires type")?;
     let source = f.remove("source").ok_or("mount requires source")?;
     let target = f.remove("target").ok_or("mount requires target")?;
+    let semantics = match f.remove("semantics") {
+        Some(_) if kind != "bind" => {
+            return Err("semantics is only supported for bind mounts".into());
+        }
+        None | Some("simplified") => BindSemantics::Simplified,
+        Some("complete") => BindSemantics::Complete,
+        Some(_) => return Err("semantics must be simplified or complete".into()),
+    };
     let readonly = match f.remove("readonly") {
         None | Some("false") => false,
         Some("true") => true,
@@ -93,7 +102,7 @@ pub fn typed_mount(s: &str) -> Result<Mount, String> {
     if !f.is_empty() {
         return Err(format!("unknown mount fields: {:?}", f.keys()));
     }
-    mount(kind, source, target, readonly)
+    mount(kind, source, target, readonly).map(|m| m.with_semantics(semantics))
 }
 pub fn socket(s: &str) -> Result<SocketBinding, String> {
     let mut f = fields(s)?;

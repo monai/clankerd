@@ -61,6 +61,25 @@ Global options precede the resource or shortcut; action options precede operands
 Lists default to tables; use `--output json` before operands for structured
 results. `vmctl --describe-contract` exports deterministic command metadata and
 JSON schemas for the public result records.
+
+Mac bind mounts default to **simplified** permission semantics: files appear
+owned by the requesting guest user, `chown` does not persist ownership, and
+`chmod` changes the actual Mac permission bits. To preserve guest ownership and
+permissions in host extended attributes, select **complete** per attachment:
+
+```sh
+vmctl create --mount type=bind,source=./src,target=/src,semantics=complete IMAGE
+vmctl update --mount-remove /src --mount-add type=bind,source=./src,target=/src,semantics=complete MACHINE
+```
+
+In the library, use
+`Mount::bind(source, target).with_semantics(BindSemantics::Complete)`.
+Omitting `semantics`, including in saved configuration, always means simplified.
+The choice is independent of image `USER` and run/exec user overrides. It applies
+only to host bind mounts; machine disks and named volumes retain native Linux
+ownership. Read-only bind mounts are enforced by both libkrun and the guest mount.
+These semantics require libkrun 1.19.6 or newer in the 1.x API series.
+
 Stopped-machine `update --mount-remove TARGET` and `--socket-remove TARGET`
 ensure the attachment is absent, succeeding when it was already absent.
 Removal preserves stored data; missing or running machines still fail.

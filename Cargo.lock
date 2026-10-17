@@ -185,6 +185,7 @@ name = "clankerd-proto"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "schemars",
  "serde",
  "serde_json",
 ]
@@ -972,6 +973,7 @@ dependencies = [
 name = "libkrun-sys"
 version = "0.1.0"
 dependencies = [
+ "clankerd-proto",
  "libc",
 ]
 

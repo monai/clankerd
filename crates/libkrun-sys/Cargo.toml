@@ -12,4 +12,5 @@ build = "build.rs"
 test = false
 
 [dependencies]
+clankerd-proto.workspace = true
 libc = "0.2.190"

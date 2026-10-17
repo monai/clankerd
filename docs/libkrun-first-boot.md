@@ -40,7 +40,7 @@ reattached engine; the final Mac Docker smoke also passed forced removal.
 # Homebrew 6 asks you to trust third-party taps.
 brew tap slp/krun
 brew trust slp/krun
-brew install libkrun            # 1.19.x; pulls in libkrunfw (stock kernel)
+brew install libkrun            # 1.19.6+ (1.x API); pulls in libkrunfw (stock kernel)
 ls /opt/homebrew/lib/libkrun.1.dylib /opt/homebrew/lib/libkrunfw.5.dylib
 
 mise install                    # rust, zig, cargo-zigbuild, rcodesign (pinned)
@@ -341,9 +341,18 @@ volume is configured.
 New volumes are root-owned. The persistence marker is written with
 `vmctl exec -u root`; it remains readable by the image's user. Applications
 running as `agent` can use directories explicitly created and assigned to
-that user inside the volume. The bind-mount write probe also runs as root;
-it verifies the mount's write path, while matching the host and workload's
-numeric UIDs remains a separate ownership check.
+that user inside the volume. Host bind mounts default to simplified semantics:
+ownership is presented using the requesting guest's UID/GID, guest `chown` does
+not persist ownership, and guest `chmod` changes actual Mac permission bits.
+Use `--mount type=bind,source=./dir,target=/path,semantics=complete` for stable
+guest ownership and permission metadata stored in host extended attributes.
+The library equivalent is
+`Mount::bind(source, target).with_semantics(BindSemantics::Complete)`.
+Omitted semantics always means simplified, including in saved records. Image
+`USER` and run/exec user overrides select process credentials independently.
+Neither mode grants more host access than the Mac process running libkrun.
+The existing root write probe verifies the write path; it does not verify
+multi-user ownership presentation or attribute-cache behavior for either mode.
 
 ### Run it
 
@@ -380,12 +389,13 @@ $vmctl rm -f b
 
 ### Unverified (look here first if the boot fails)
 
-1. **`krun_add_virtiofs` signature.** Declared as `(ctx, tag, path)` in
-   `crates/libkrun-sys/src/ffi.rs`, from the header notes in
-   `memory/research-libkrun.md`, and `_krun_add_virtiofs` added to
-   `stubs/libkrun.tbd`. If linking or the call fails, compare with
-   `libkrun.h` (there are also `krun_add_virtiofs2/3/4` with shm size and
-   read-only flags; read-only is enforced by guestd's `MS_RDONLY` instead).
+1. **virtio-fs API.** Bind shares use `krun_add_virtiofs4(ctx, tag, path,
+   shm_size, read_only, semantics)`, from the
+   [libkrun 1.19.6 header](https://github.com/libkrun/libkrun/blob/v1.19.6/include/libkrun.h).
+   The linker stub requires `_krun_add_virtiofs4`; the host library must export
+   it. Semantics 1 is simplified, 0 is complete. The server enforces read-only
+   shares, in addition to guestd's `MS_RDONLY` mount flag. Native boot and
+   ownership checks with this API still need a Mac run.
 2. **Second disk is `/dev/vdb`.** Assumes virtio-blk devices are numbered in
    `krun_add_disk2` call order (root first, volume second). guestd waits up to
    10 s for the device; the error says the volume did not appear.
@@ -395,8 +405,10 @@ $vmctl rm -f b
    filesystem (the host extends the file before boot).
 4. **virtio-fs mount and ownership.** `mount -t virtiofs bind0 /target` needs
    virtiofs in the stock kernel (already used for the boot directory). File
-   ownership seen in the guest comes from the Mac user (probably 501): check
-   `ls -ln /shared` and whether the workload user can write.
+   ownership depends on the selected semantics: simplified reports requesting
+   guest IDs; complete uses guest extended-attribute overrides or host metadata.
+   Check two guest users, user overrides, `chown`, `chmod`, restarts, and read-only
+   enforcement. The earlier root write probe does not establish these behaviors.
 5. **Several virtio-fs devices.** libkrun already serves the root as one
    virtio-fs device; extra tags should coexist but are untested.
 6. **Sparse files on APFS.** `set_len` leaves holes; `du` should show little

@@ -74,6 +74,8 @@ impl Hypervisor for Libkrun {
             .map(|s| libkrun_sys::Share {
                 tag: s.tag.clone(),
                 path: s.path.clone(),
+                semantics: s.semantics,
+                read_only: s.read_only,
             })
             .collect();
         // Make init.krun exec guestd as PID 1 instead of forking it.

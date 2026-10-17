@@ -8,6 +8,7 @@
 //! when the guest powers off: call [`boot`] only from a dedicated helper
 //! process (clankerd-vmspawn).
 
+pub use clankerd_proto::spawn::BindSemantics;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -150,6 +151,8 @@ pub struct Share {
     /// What the guest passes to `mount -t virtiofs`.
     pub tag: String,
     pub path: PathBuf,
+    pub semantics: BindSemantics,
+    pub read_only: bool,
 }
 
 /// A virtio-net device whose backend listens on a unix datagram socket.
@@ -286,9 +289,13 @@ pub fn boot(config: &BootConfig) -> Result<std::convert::Infallible, Error> {
         for s in &config.shares {
             let tag = cstr(&s.tag, "share tag")?;
             let dir = path(&s.path, "share path")?;
+            let semantics = match s.semantics {
+                BindSemantics::Complete => 0,
+                BindSemantics::Simplified => 1,
+            };
             check(
-                "krun_add_virtiofs",
-                ffi::krun_add_virtiofs(ctx, tag.as_ptr(), dir.as_ptr()),
+                "krun_add_virtiofs4",
+                ffi::krun_add_virtiofs4(ctx, tag.as_ptr(), dir.as_ptr(), 0, s.read_only, semantics),
             )?;
         }
         for n in &config.nets {

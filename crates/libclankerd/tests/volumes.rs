@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use clankerd_proto::guest::GuestMount;
 use common::*;
 use libclankerd::vmm::{BootHandle, BootSpec, LocalProcessVmm};
-use libclankerd::{Engine, ErrorKind, HostConfig, Mount, Vmm};
+use libclankerd::{BindSemantics, Engine, ErrorKind, HostConfig, Mount, Vmm};
 
 const MIB: u64 = 1 << 20;
 
@@ -475,6 +475,7 @@ fn bind_mounts_reach_the_vmm_as_shares_and_the_guest_as_mounts() {
             source: src.clone(),
             target: "/ro".into(),
             read_only: true,
+            semantics: BindSemantics::Complete,
         },
     ];
     let m = engine
@@ -487,6 +488,10 @@ fn bind_mounts_reach_the_vmm_as_shares_and_the_guest_as_mounts() {
     let tags: Vec<_> = specs[0].shares.iter().map(|s| s.tag.clone()).collect();
     assert_eq!(tags, ["bind0", "bind1"]);
     assert!(specs[0].shares.iter().all(|s| s.path == src));
+    assert_eq!(specs[0].shares[0].semantics, BindSemantics::Simplified);
+    assert!(!specs[0].shares[0].read_only);
+    assert_eq!(specs[0].shares[1].semantics, BindSemantics::Complete);
+    assert!(specs[0].shares[1].read_only);
     assert_eq!(
         specs[0].workload.mounts,
         [
@@ -503,6 +508,35 @@ fn bind_mounts_reach_the_vmm_as_shares_and_the_guest_as_mounts() {
         ]
     );
     assert!(specs[0].volume_disks.is_empty());
+}
+
+#[test]
+fn omitted_bind_semantics_and_library_defaults_agree() {
+    let omitted: Mount = serde_json::from_value(serde_json::json!({
+        "type": "bind", "source": "/tmp", "target": "/shared"
+    }))
+    .unwrap();
+    assert_eq!(omitted, Mount::bind("/tmp", "/shared"));
+    assert_eq!(
+        serde_json::to_value(&omitted).unwrap()["semantics"],
+        "simplified"
+    );
+    let complete = Mount::bind("/tmp", "/shared").with_semantics(BindSemantics::Complete);
+    let saved = serde_json::to_value(&complete).unwrap();
+    assert_eq!(saved["semantics"], "complete");
+    assert_eq!(serde_json::from_value::<Mount>(saved).unwrap(), complete);
+    assert!(
+        serde_json::from_value::<Mount>(serde_json::json!({
+            "type": "bind", "source": "/tmp", "target": "/shared", "semantics": "unknown"
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::to_value(Mount::volume("data", "/data"))
+            .unwrap()
+            .get("semantics")
+            .is_none()
+    );
 }
 
 #[test]

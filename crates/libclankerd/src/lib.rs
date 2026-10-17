@@ -64,7 +64,7 @@ pub use exec::{Exec, ExecConfig, ExecInfo, ExecOutput, ExecStatus, ExecStdin, Ex
 pub use image_config::ImageConfig;
 pub use images::{ImageInfo, LayerInfo};
 pub use machine::{Machine, MachineInfo};
-pub use mount::{Mount, parse_size};
+pub use mount::{BindSemantics, Mount, parse_size};
 pub use rootdisk::{DiskPopulator, LocalGuestdPopulator};
 pub use signal::parse_signal;
 pub use state::{MachineState, Status, WaitResult};

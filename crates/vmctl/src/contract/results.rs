@@ -1,5 +1,7 @@
 //! Public result records; persistence records are mapped into these explicitly.
-use libclankerd::{Error, ImageInfo, MachineInfo, Mount, VirtualNetwork, VolumeInfo};
+use libclankerd::{
+    BindSemantics, Error, ImageInfo, MachineInfo, Mount, VirtualNetwork, VolumeInfo,
+};
 use schemars::JsonSchema;
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -63,6 +65,7 @@ pub enum MountRecord {
         source: String,
         target: String,
         read_only: bool,
+        semantics: BindSemantics,
     },
     Volume {
         name: String,
@@ -234,10 +237,12 @@ impl From<MachineInfo> for MachineRecord {
                             source,
                             target,
                             read_only,
+                            semantics,
                         } => MountRecord::Bind {
                             source: source.display().to_string(),
                             target: target.display().to_string(),
                             read_only,
+                            semantics,
                         },
                         Mount::Volume { name, target, .. } => MountRecord::Volume {
                             name,

@@ -215,10 +215,10 @@ pub struct CreateArgs {
     pub stop_signal: Option<String>,
     #[command(flatten)]
     pub host: HostArgs,
-    /// Typed mount: type=bind|volume,source=SOURCE,target=/GUEST[,readonly].
+    /// Typed mount: type=bind|volume,source=SOURCE,target=/GUEST[,readonly][,semantics=simplified|complete]. Bind semantics default to simplified (caller ownership; chmod changes host permissions); complete preserves guest metadata.
     #[arg(long, value_parser = parse::typed_mount)]
     pub mount: Vec<Mount>,
-    /// Mount SOURCE:/GUEST[:ro|rw]; repeat to accumulate mounts.
+    /// Mount SOURCE:/GUEST[:ro|rw]; bind semantics default to simplified. Use --mount for complete semantics; repeat to accumulate mounts.
     #[arg(short = 'v', long, value_parser = parse::parse_mount)]
     pub volume: Vec<Mount>,
     /// Persist a host Unix socket binding: host=/HOST,guest=/GUEST.
@@ -256,7 +256,7 @@ pub struct HostArgs {
 pub struct UpdateArgs {
     #[command(flatten)]
     pub host: HostArgs,
-    /// Add a typed mount: type=bind|volume,source=SOURCE,target=/GUEST[,readonly].
+    /// Add a typed mount: type=bind|volume,source=SOURCE,target=/GUEST[,readonly][,semantics=simplified|complete]. Bind semantics default to simplified; semantics and readonly are bind-only.
     #[arg(long, value_parser = parse::typed_mount)]
     pub mount_add: Vec<Mount>,
     /// Ensure the mount at this absolute guest target is detached; absent targets succeed; data is retained.
@@ -774,7 +774,7 @@ fn input_contract(arg: &clap::Arg) -> serde_json::Value {
         };
     }
     if t == TypeId::of::<Mount>() {
-        return json!({"type":"mount", "syntax": if arg.get_id() == "volume" {"SOURCE:/GUEST[:ro|rw]"} else {"type=bind|volume,source=SOURCE,target=/GUEST[,readonly[=true|false]]"},"target":"absolute non-root guest path without dot components", "bind_source":"host path; ~/ expands HOME; relative paths resolve against current directory", "readonly":"bind only", "shorthand_bind_prefixes":["/","./","../","~/"]});
+        return json!({"type":"mount", "syntax": if arg.get_id() == "volume" {"SOURCE:/GUEST[:ro|rw]"} else {"type=bind|volume,source=SOURCE,target=/GUEST[,readonly[=true|false]][,semantics=simplified|complete]"},"target":"absolute non-root guest path without dot components", "bind_source":"host path; ~/ expands HOME; relative paths resolve against current directory", "readonly":"bind only; enforced by host filesystem server and guest mount", "semantics":{"scope":"bind only", "values":["simplified","complete"], "default":"simplified", "simplified":"requesting guest ownership; chown does not persist ownership; chmod changes host permissions", "complete":"guest ownership and permissions stored in host extended attributes", "shorthand":"simplified; use --mount to select complete"}, "shorthand_bind_prefixes":["/","./","../","~/"]});
     }
     if t == TypeId::of::<SocketBinding>() {
         return json!({"type":"socket_binding", "syntax":"host=/HOST,guest=/GUEST", "endpoints":"absolute non-root paths"});

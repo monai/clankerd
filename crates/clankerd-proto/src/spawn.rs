@@ -6,6 +6,19 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Permission semantics for a host directory shared over virtio-fs.
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum BindSemantics {
+    /// Present the requesting guest's ownership; chmod changes host permissions.
+    #[default]
+    Simplified,
+    /// Preserve guest ownership and permissions in host extended attributes.
+    Complete,
+}
+
 /// vsock port clankerd-guestd listens on for `io.clankerd.Guest`.
 pub const GUEST_VSOCK_PORT: u32 = 1024;
 /// vsock port on the host that guestd dials for tunnels (the library's
@@ -78,6 +91,10 @@ pub struct ForwardingConfig {
 pub struct Share {
     pub tag: String,
     pub path: PathBuf,
+    #[serde(default)]
+    pub semantics: BindSemantics,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 /// One virtio-net device whose backend is a network sidecar listening on a

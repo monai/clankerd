@@ -92,7 +92,7 @@ fn mount_updates_remove_then_add_without_replacing_other_mounts() {
     assert_eq!(
         info["host_config"]["mounts"],
         json!([
-            {"type":"bind","source":std::fs::canonicalize("/tmp").unwrap().display().to_string(),"target":"/keep","read_only":true},
+            {"type":"bind","source":std::fs::canonicalize("/tmp").unwrap().display().to_string(),"target":"/keep","read_only":true,"semantics":"simplified"},
             {"type":"volume","name":"retained","target":"/retain"},
             {"type":"volume","name":"new","target":"/new"}
         ])

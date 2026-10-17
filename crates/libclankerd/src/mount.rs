@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use clankerd_proto::guest::GuestMount;
+pub use clankerd_proto::spawn::BindSemantics;
 use clankerd_proto::spawn::Share;
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +25,9 @@ pub enum Mount {
         target: PathBuf,
         #[serde(default)]
         read_only: bool,
+        /// Host-share permission semantics; independent of the workload's user.
+        #[serde(default)]
+        semantics: BindSemantics,
     },
     /// A named volume: a sparse raw ext4 file in the engine's state directory,
     /// formatted by the guest when blank. Created with the machine if missing.
@@ -46,7 +50,19 @@ impl Mount {
             source: source.into(),
             target: target.into(),
             read_only: false,
+            semantics: BindSemantics::default(),
         }
+    }
+
+    /// Sets a bind mount's permission semantics; no effect on a named volume.
+    pub fn with_semantics(mut self, semantics: BindSemantics) -> Self {
+        if let Mount::Bind {
+            semantics: current, ..
+        } = &mut self
+        {
+            *current = semantics;
+        }
+        self
     }
 
     pub fn volume(name: impl Into<String>, target: impl Into<PathBuf>) -> Self {
@@ -245,12 +261,15 @@ pub(crate) fn plan(
                 source,
                 target,
                 read_only,
+                semantics,
             } => {
                 check_bind_source(source)?;
                 let tag = format!("bind{}", plan.shares.len());
                 plan.shares.push(Share {
                     tag: tag.clone(),
                     path: source.clone(),
+                    semantics: *semantics,
+                    read_only: *read_only,
                 });
                 plan.guest.push(GuestMount::Bind {
                     tag,

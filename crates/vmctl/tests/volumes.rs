@@ -162,6 +162,7 @@ fn a_relative_host_directory_becomes_an_absolute_bind_mount() {
     assert_eq!(m["type"], "bind");
     assert_eq!(m["target"], "/workspace");
     assert_eq!(m["read_only"], true);
+    assert_eq!(m["semantics"], "simplified");
     let source = PathBuf::from(m["source"].as_str().unwrap());
     assert!(source.is_absolute());
     assert_eq!(
@@ -171,6 +172,48 @@ fn a_relative_host_directory_becomes_an_absolute_bind_mount() {
 
     let missing = cli.run(&["create", "-v", "./nope:/x", "img", "true"]);
     assert!(!missing.status.success());
+}
+
+#[test]
+fn bind_semantics_can_be_selected_per_mount_and_replaced_on_update() {
+    let cli = Cli::new();
+    std::fs::create_dir(cli.root().join("proj")).unwrap();
+    cli.ok(&[
+        "create",
+        "--name",
+        "policies",
+        "--mount",
+        "type=bind,source=./proj,target=/complete,semantics=complete",
+        "--mount",
+        "type=bind,source=./proj,target=/simple,semantics=simplified",
+        "img",
+        "true",
+    ]);
+    let inspect = || -> serde_json::Value {
+        serde_json::from_str(&cli.ok(&["inspect", "policies"])).unwrap()
+    };
+    let saved = inspect();
+    assert_eq!(
+        saved[0]["host_config"]["mounts"][0]["semantics"],
+        "complete"
+    );
+    assert_eq!(
+        saved[0]["host_config"]["mounts"][1]["semantics"],
+        "simplified"
+    );
+    cli.ok(&[
+        "update",
+        "--mount-remove",
+        "/complete",
+        "--mount-add",
+        "type=bind,source=./proj,target=/complete,readonly,semantics=simplified",
+        "policies",
+    ]);
+    let updated = inspect();
+    let mount = &updated[0]["host_config"]["mounts"][1];
+    assert_eq!(mount["target"], "/complete");
+    assert_eq!(mount["semantics"], "simplified");
+    assert_eq!(mount["read_only"], true);
 }
 
 #[test]
@@ -207,6 +250,12 @@ fn typed_mount_fields_require_values_and_have_unique_known_keys() {
         "type=volume,source=data,source=other,target=/storage",
         "type=volume,source=data,target=/storage,unknown=value",
         "type=bind,source=/tmp,target=/storage,readonly=maybe",
+        "type=bind,source=/tmp,target=/storage,semantics=unknown",
+        "type=bind,source=/tmp,target=/storage,semantics=",
+        "type=bind,source=/tmp,target=/storage,semantics",
+        "type=bind,source=/tmp,target=/storage,semantics=complete,semantics=simplified",
+        "type=volume,source=data,target=/storage,semantics=complete",
+        "type=volume,source=data,target=/storage,semantics=simplified",
     ] {
         let out = cli.run(&["create", "--mount", mount, "img", "true"]);
         assert_eq!(
@@ -268,7 +317,7 @@ fn bind_spellings_resolve_paths_and_access_to_the_same_attachment() {
                     serde_json::from_str(&cli.ok(&["inspect", &name])).unwrap();
                 assert_eq!(
                     info[0]["host_config"]["mounts"],
-                    serde_json::json!([{"type":"bind","source":absolute,"target":"/shared","read_only":readonly}])
+                    serde_json::json!([{"type":"bind","source":absolute,"target":"/shared","read_only":readonly,"semantics":"simplified"}])
                 );
             }
         }

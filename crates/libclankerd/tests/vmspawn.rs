@@ -247,6 +247,45 @@ fn a_machine_with_a_root_disk_hands_it_to_the_helper() {
 }
 
 #[test]
+fn the_helper_receives_per_bind_semantics_and_read_only_policy() {
+    use libclankerd::{BindSemantics, HostConfig, Mount};
+    let env = Env::new();
+    let engine = libclankerd::Engine::new(env.config(dev_vmm())).unwrap();
+    let machine = engine
+        .create(
+            Some("shares"),
+            sh("true"),
+            HostConfig {
+                mounts: vec![
+                    Mount::bind(env.root(), "/simple"),
+                    Mount::Bind {
+                        source: env.root().to_owned(),
+                        target: "/complete".into(),
+                        read_only: true,
+                        semantics: BindSemantics::Complete,
+                    },
+                ],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    machine.start().unwrap();
+    common::finish_workload_and_stop(&machine).unwrap();
+    let spec = spawn_spec(&env, machine.id());
+    assert_eq!(
+        spec["shares"],
+        serde_json::json!([
+            {"tag":"bind0", "path":env.root(), "semantics":"simplified", "read_only":false},
+            {"tag":"bind1", "path":env.root(), "semantics":"complete", "read_only":true},
+        ])
+    );
+    let decoded: clankerd_proto::spawn::SpawnSpec = serde_json::from_value(spec).unwrap();
+    assert_eq!(decoded.shares[0].semantics, BindSemantics::Simplified);
+    assert_eq!(decoded.shares[1].semantics, BindSemantics::Complete);
+    assert!(decoded.shares[1].read_only);
+}
+
+#[test]
 fn the_helper_receives_all_volume_disks_in_mount_order() {
     let env = Env::new();
     let tools = env.root().join("tools");
