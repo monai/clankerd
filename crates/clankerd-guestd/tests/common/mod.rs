@@ -158,7 +158,7 @@ impl Guestd {
 
 /// A boot directory containing the host's mke2fs, standing in for the shipped
 /// static binary (CI and developers have e2fsprogs; the static build is
-/// verified separately by scripts/rust-verify.sh).
+/// assembled separately by the production build).
 pub fn boot_dir_with_mke2fs() -> tempfile::TempDir {
     let dir = tempfile::Builder::new().prefix("boot").tempdir().unwrap();
     // CLANKERD_TEST_BOOT_DIR points at a real boot directory (e.g. the output of

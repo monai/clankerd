@@ -27,6 +27,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install Linux test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends e2fsprogs
+
       - run: mise exec -- make lint
 
       - run: mise exec -- make test
@@ -40,10 +45,9 @@ jobs:
         env:
           CLANKERD_TEST_NETWORK: "1"
         run: |
-          sudo apt-get install -y --no-install-recommends e2fsprogs
-          sudo -E env "PATH=$PATH" "HOME=$HOME" mise exec -- cargo test -p clankerd-guestd --test seam_b -- --nocapture 2>&1 | tee seam-b.log
-          sudo -E env "PATH=$PATH" "HOME=$HOME" mise exec -- cargo test -p clankerd-guestd --bin clankerd-guestd volume -- --nocapture 2>&1 | tee -a seam-b.log
-          sudo -E env "PATH=$PATH" "HOME=$HOME" mise exec -- cargo test -p libclankerd --test images --test seam_b_images -- --nocapture 2>&1 | tee -a seam-b.log
+          sudo -E env "PATH=$PATH" "HOME=$HOME" mise exec -- cargo test --locked -p clankerd-guestd --test seam_b -- --nocapture 2>&1 | tee seam-b.log
+          sudo -E env "PATH=$PATH" "HOME=$HOME" mise exec -- cargo test --locked -p clankerd-guestd --bin clankerd-guestd volume -- --nocapture 2>&1 | tee -a seam-b.log
+          sudo -E env "PATH=$PATH" "HOME=$HOME" mise exec -- cargo test --locked -p libclankerd --test images --test seam_b_images -- --nocapture 2>&1 | tee -a seam-b.log
           if grep -q '^SKIPPED' seam-b.log; then echo "seam B tests were skipped:"; grep '^SKIPPED' seam-b.log; exit 1; fi
 
       - name: Rust coverage (lines and branches)
@@ -55,7 +59,7 @@ jobs:
           path: build/coverage/**
 
       # Cross-links the darwin binaries, builds the static musl guest binary,
-      # signs clankerd-vmspawn and verifies the entitlement.
+      # signs and publishes the completed bundle.
       - run: mise exec -- make build
 
       - uses: actions/upload-artifact@v7
@@ -76,9 +80,25 @@ jobs:
           name: clankerd
           path: dist/*
 
+  native-mac:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v3
+        with:
+          cache: true
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native library
+        run: |
+          brew tap slp/krun
+          brew trust slp/krun
+          brew install libkrun
+      - run: mise exec -- make lint test build
+      # Real VM boot checks require a hardware-capable Mac and run separately.
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, native-mac]
     runs-on: ubuntu-latest
     permissions:
       contents: write

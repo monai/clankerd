@@ -1,14 +1,14 @@
 # Rust tests and coverage
 
 `mise exec -- make test lint` runs the workspace tests and lint checks
-with the pinned production compiler.
+with the pinned production compiler; the selected suite depends on the host.
 
 Run coverage on Linux. It uses [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov), pinned
 in `mise.toml`. It measures LLVM line, region, function and branch coverage.
 [LLVM continuous profiles](https://clang.llvm.org/docs/SourceBasedCodeCoverage.html)
 retain counters when tests kill helper processes;
 this is compiler instrumentation, with no profiling code in production sources.
-Branch instrumentation requires nightly Rust; `Makefile` pins a separate
+Branch instrumentation requires nightly Rust; `scripts/rust-test.py` pins a separate
 coverage toolchain without changing the production compiler.
 
 ```sh
@@ -34,8 +34,7 @@ Mac smoke tests.
 
 `vmctl/tests/native_bind_semantics.rs` contains opt-in tests of actual Mac
 virtio-fs ownership, permission side effects and host read-only enforcement.
-Build signed native helpers with `make rust`, then run
-`mise exec -- cargo test -p vmctl --test native_bind_semantics -- --ignored --test-threads=1`
+`mise exec -- make test-native` builds signed native helpers and runs these checks
 on Apple Silicon. These tests are ignored in the ordinary workspace suite;
 Linux compilation or schema/protocol tests do not establish native behavior.
 
@@ -44,3 +43,23 @@ population test uses `/dev/loop-control` to attach an image to `/dev/loopN`,
 then mounts its ext4 filesystem and unpacks the image. It requires root,
 loop devices and mount permissions; uid 0 alone is insufficient in a restricted
 container. [Linux loop-device documentation](https://man7.org/linux/man-pages/man4/loop.4.html).
+
+`make test` chooses tests for the execution host once. On Linux it prebuilds
+clankerd-guestd and clankerd-vmspawn, then runs the workspace suite. On macOS
+it runs host unit tests, protocol/libkrun integration tests, and CLI version
+and smoke-script checks. Guest integration tests execute a local Linux guest
+process and therefore require Linux; run `mise exec -- make test-linux` in a
+Linux context. The runner reports this distinction explicitly. Mac lint checks
+all host targets and excludes the Linux-only guest package.
+
+Orchestrated tests receive `CLANKERD_TEST_BINARIES`, a JSON map of helper names
+to Cargo-reported executable paths. Direct `cargo test` remains supported:
+the helper falls back to one cached, locked Cargo build per executable per test
+process. Coverage instruments the helper prebuild and the test run with the
+same llvm-cov environment, and preserves `CARGO_LLVM_COV_TARGET_DIR` across
+collection and every report.
+
+Linux tests require native e2fsprogs (`apt-get install e2fsprogs` on Debian/Ubuntu).
+The runner resolves these tools before compilation and reports missing prerequisites.
+`CLANKERD_TEST_BOOT_DIR` is authoritative when set; it must contain executable tools
+for the test machine, which may differ from the shipped ARM64 guest target.

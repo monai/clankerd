@@ -45,38 +45,46 @@ ls /opt/homebrew/lib/libkrun.1.dylib /opt/homebrew/lib/libkrunfw.5.dylib
 
 mise install                    # rust, zig, cargo-zigbuild, rcodesign (pinned)
 
-# ELF inspection for the Linux guest binaries (readelf or greadelf).
-brew install binutils
-export PATH="$(brew --prefix binutils)/bin:$PATH"
+# Python 3 and Xcode Command Line Tools must also be available.
 ```
 
-## 2. Build, sign, verify
+## 2. Build and sign
 
 ```sh
 mise exec -- make rust
 ```
 
-`make rust` cross-links with zig, ad-hoc signs `clankerd-vmspawn` with
-`crates/clankerd-vmspawn/entitlements.plist` (`com.apple.security.hypervisor`,
-`com.apple.security.cs.disable-library-validation`) and runs
-`scripts/rust-verify.sh`. Outputs: `build/rust/darwin-arm64/{vmctl,clankerd-vmspawn}`
-and `build/rust/linux-arm64/clankerd-guestd`.
+On Apple Silicon, the host executables build with Cargo and the installed Apple
+SDK. Linux builds use Zig with the checked-in framework stubs to cross-link the
+same Mac target. This is cross-compilation, not Linux host runtime support.
+The guest always targets ARM64 Linux musl. Its Rust executable uses `rust-lld`;
+Zig builds the static ext4 and DHCP tools.
 
-The Linux musl guest links with Rust's bundled `rust-lld` and musl libraries;
-Zig is used for the Darwin binaries and the guest filesystem tools.
+The build resolves its execution platform and prerequisites before compilation,
+assembles a private generation, signs it and publishes the complete bundle at
+`build/rust`. Host outputs are `darwin-arm64/{vmctl,clankerd-vmspawn}`;
+`linux-arm64/` holds guestd, ext4 utilities, dhcpcd and its license. Existing
+successful outputs remain available if compilation or signing fails. The first
+build upgrades a legacy real output directory to a retained generation and a
+symlink; later publications replace the symlink atomically.
 
-On macOS the build selects the installed Apple SDK with
-`xcrun --sdk macosx --show-sdk-path`; Xcode Command Line Tools must be installed
-(`xcode-select --install` if needed). The minimal SDK stubs under
-`scripts/macos-sdk-stubs` are used only for cross-linking on Linux. They cannot
-serve as the SDK for native macOS Rust build scripts: doing so causes
-`ld: library 'System' not found`.
+`clankerd-vmspawn` receives the hypervisor and disable-library-validation
+entitlements from `crates/clankerd-vmspawn/entitlements.plist`. `make rust-sign`
+re-signs an existing bundle through the same publication process. There is no
+routine binary-inspection step or binutils prerequisite.
 
-libkrun is linked against `crates/libkrun-sys/stubs/libkrun.tbd`, a text stub
-with install name `/opt/homebrew/lib/libkrun.1.dylib`. This is what lets zig
-link without a macOS SDK (the earlier xcrun/SDK problem); dyld loads the real
-Homebrew dylib at run time. If you add a libkrun function to
-`crates/libkrun-sys/src/ffi.rs`, add its `_symbol` to the stub too.
+Use `BUILD_JOBS` for one compiler jobs budget. Dependency downloads are verified
+and cached; completed dependencies are reused only when source, patches, toolchain
+and configuration match. Each compilation uses a private working directory.
+`CARGO_TARGET_DIR` and Cargo's target-directory configuration are honored through
+Cargo-reported executable paths. `RUST_OUT` selects a different bundle location.
+
+On macOS, install Xcode Command Line Tools (`xcode-select --install`) and Homebrew
+libkrun before building. Native Mac builds link that installed library. Linux
+cross-builds use `crates/libkrun-sys/stubs/libkrun.tbd`, with install name
+`/opt/homebrew/lib/libkrun.1.dylib`. Keep its symbols synchronized with
+`crates/libkrun-sys/src/ffi.rs`. The framework stubs under
+`scripts/macos-sdk-stubs` are only for Linux cross-linking, never native builds.
 
 ## 3. Run
 

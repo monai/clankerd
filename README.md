@@ -19,17 +19,24 @@ Compose inside the machine.
 
 ## Build
 
-Install the pinned tools with mise, then build, sign and verify the binaries:
+Install the pinned tools with mise, then build and sign the binaries:
 
 ```sh
 mise install
 mise exec -- make build
 ```
 
-The build runs on Linux or macOS. Outputs are:
+Python 3 and platform build tools are required. The build runs natively on Apple
+Silicon macOS or cross-builds the Mac artifacts on Linux. Outputs are:
 
 - `build/rust/darwin-arm64/{vmctl,clankerd-vmspawn}`: Mac host binaries.
 - `build/rust/linux-arm64/`: static guest daemon and ext4 utilities.
+
+A completed signed generation is published at `build/rust` only after every
+step succeeds. Previous successful generations stay under `build/.rust-generations`
+until `make clean`. No binutils installation or shell environment exports are needed.
+Set `BUILD_JOBS` to control compiler parallelism and `RUST_OUT` to choose the bundle
+location. Cargo determines intermediate artifact locations from its own configuration.
 
 The Mac needs Homebrew libkrun/libkrunfw and an installed vmnet-helper.
 On macOS 15, install its supported passwordless sudoers rule; the VM stays unprivileged.
