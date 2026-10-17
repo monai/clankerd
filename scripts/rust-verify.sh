@@ -11,8 +11,12 @@ if command -v readelf >/dev/null 2>&1; then
   elf_reader=readelf
 elif command -v greadelf >/dev/null 2>&1; then
   elf_reader=greadelf
+elif command -v brew >/dev/null 2>&1 &&
+     binutils_prefix=$(brew --prefix binutils 2>/dev/null) &&
+     [ -x "$binutils_prefix/bin/readelf" ]; then
+  elf_reader="$binutils_prefix/bin/readelf"
 else
-  echo "readelf missing: on macOS, install Homebrew binutils and add its bin directory to PATH" >&2
+  echo "readelf missing: install binutils (on macOS: brew install binutils)" >&2
   exit 1
 fi
 fail=0
