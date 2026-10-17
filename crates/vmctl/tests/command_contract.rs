@@ -234,6 +234,59 @@ fn exported_contract_is_deterministic_and_describes_public_resources() {
 }
 
 #[test]
+fn exported_bind_schema_requires_exactly_the_supported_semantics() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_vmctl"))
+        .arg("--describe-contract")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let contract: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let validator = jsonschema::validator_for(&contract["schemas"]["machine"]).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let guestd = guestd();
+    let created = vmctl(
+        dir.path(),
+        &guestd,
+        &[
+            "create",
+            "--name",
+            "example",
+            "-v",
+            "/tmp:/shared",
+            "img",
+            "true",
+        ],
+    );
+    assert!(created.status.success(), "{}", text(&created.stderr));
+    let inspected = vmctl(dir.path(), &guestd, &["inspect", "example"]);
+    assert!(inspected.status.success(), "{}", text(&inspected.stderr));
+    let records: serde_json::Value = serde_json::from_slice(&inspected.stdout).unwrap();
+    let mut record = records[0].clone();
+    for semantics in ["simplified", "complete"] {
+        record["host_config"]["mounts"][0]["semantics"] = serde_json::json!(semantics);
+        validator.validate(&record).unwrap();
+    }
+    for invalid in [
+        serde_json::json!("unknown"),
+        serde_json::json!(""),
+        serde_json::json!("Complete"),
+        serde_json::json!(1),
+        serde_json::Value::Null,
+    ] {
+        record["host_config"]["mounts"][0]["semantics"] = invalid;
+        assert!(!validator.is_valid(&record), "schema accepted {record}");
+    }
+    record["host_config"]["mounts"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("semantics");
+    assert!(
+        !validator.is_valid(&record),
+        "schema accepted missing semantics"
+    );
+}
+
+#[test]
 fn action_help_groups_options_and_excludes_global_flags() {
     for args in [
         vec!["machine", "create", "--help"],

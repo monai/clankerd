@@ -353,6 +353,20 @@ Omitted semantics always means simplified, including in saved records. Image
 Neither mode grants more host access than the Mac process running libkrun.
 The existing root write probe verifies the write path; it does not verify
 multi-user ownership presentation or attribute-cache behavior for either mode.
+The opt-in `native_bind_semantics` tests check those contracts against real Mac
+shares, including both modes, two guest users, persistent guest metadata, host
+permission changes, and read-only enforcement after a guest root remount attempt.
+They remain unverified until run on an Apple Silicon Mac:
+
+```sh
+make rust
+mise exec -- cargo test -p vmctl --test native_bind_semantics -- --ignored --test-threads=1
+```
+
+`OUT` selects signed helper artifacts (use an absolute path); `IMAGE` overrides
+the standard smoke-test image. The image must supply `sh`, `stat`, `chmod`,
+`chown`, `mount`, `touch` and `sleep`. The tests create isolated machine state
+and disposable host folders and remove their machines after each test.
 
 ### Run it
 

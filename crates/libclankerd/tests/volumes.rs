@@ -464,45 +464,61 @@ fn starting_checks_every_volume_in_both_machines_for_exclusive_use() {
 }
 
 #[test]
-fn bind_mounts_reach_the_vmm_as_shares_and_the_guest_as_mounts() {
+fn bind_mounts_preserve_semantics_and_access_independently() {
     let env = Env::new();
     let (engine, vmm) = recording(&env);
     let src = env.root().join("project");
     std::fs::create_dir(&src).unwrap();
-    let mounts = vec![
-        Mount::bind(&src, "/workspace"),
-        Mount::Bind {
-            source: src.clone(),
-            target: "/ro".into(),
-            read_only: true,
-            semantics: BindSemantics::Complete,
-        },
-    ];
+    let mounts = [
+        (BindSemantics::Simplified, false, "/simple-rw"),
+        (BindSemantics::Simplified, true, "/simple-ro"),
+        (BindSemantics::Complete, false, "/complete-rw"),
+        (BindSemantics::Complete, true, "/complete-ro"),
+    ]
+    .into_iter()
+    .map(|(semantics, read_only, target)| Mount::Bind {
+        source: src.clone(),
+        target: target.into(),
+        read_only,
+        semantics,
+    })
+    .collect();
     let m = engine
-        .create(Some("a"), sh("true"), with_mounts(mounts))
+        .create(Some("example"), sh("true"), with_mounts(mounts))
         .unwrap();
     m.start().unwrap();
     common::finish_workload_and_stop(&m).unwrap();
-
     let specs = vmm.specs.lock().unwrap();
-    let tags: Vec<_> = specs[0].shares.iter().map(|s| s.tag.clone()).collect();
-    assert_eq!(tags, ["bind0", "bind1"]);
-    assert!(specs[0].shares.iter().all(|s| s.path == src));
-    assert_eq!(specs[0].shares[0].semantics, BindSemantics::Simplified);
-    assert!(!specs[0].shares[0].read_only);
-    assert_eq!(specs[0].shares[1].semantics, BindSemantics::Complete);
-    assert!(specs[0].shares[1].read_only);
+    assert_eq!(
+        serde_json::to_value(&specs[0].shares).unwrap(),
+        serde_json::json!([
+            {"tag":"bind0", "path":src, "semantics":"simplified", "read_only":false},
+            {"tag":"bind1", "path":src, "semantics":"simplified", "read_only":true},
+            {"tag":"bind2", "path":src, "semantics":"complete", "read_only":false},
+            {"tag":"bind3", "path":src, "semantics":"complete", "read_only":true},
+        ])
+    );
     assert_eq!(
         specs[0].workload.mounts,
         [
             GuestMount::Bind {
                 tag: "bind0".into(),
-                target: "/workspace".into(),
+                target: "/simple-rw".into(),
                 read_only: false
             },
             GuestMount::Bind {
                 tag: "bind1".into(),
-                target: "/ro".into(),
+                target: "/simple-ro".into(),
+                read_only: true
+            },
+            GuestMount::Bind {
+                tag: "bind2".into(),
+                target: "/complete-rw".into(),
+                read_only: false
+            },
+            GuestMount::Bind {
+                tag: "bind3".into(),
+                target: "/complete-ro".into(),
                 read_only: true
             },
         ]
@@ -511,28 +527,77 @@ fn bind_mounts_reach_the_vmm_as_shares_and_the_guest_as_mounts() {
 }
 
 #[test]
-fn omitted_bind_semantics_and_library_defaults_agree() {
-    let omitted: Mount = serde_json::from_value(serde_json::json!({
-        "type": "bind", "source": "/tmp", "target": "/shared"
-    }))
-    .unwrap();
-    assert_eq!(omitted, Mount::bind("/tmp", "/shared"));
+fn bind_constructor_defaults_to_simplified_semantics() {
     assert_eq!(
-        serde_json::to_value(&omitted).unwrap()["semantics"],
+        serde_json::to_value(Mount::bind("/tmp", "/shared")).unwrap()["semantics"],
         "simplified"
     );
-    let complete = Mount::bind("/tmp", "/shared").with_semantics(BindSemantics::Complete);
-    let saved = serde_json::to_value(&complete).unwrap();
-    assert_eq!(saved["semantics"], "complete");
-    assert_eq!(serde_json::from_value::<Mount>(saved).unwrap(), complete);
-    assert!(
-        serde_json::from_value::<Mount>(serde_json::json!({
-            "type": "bind", "source": "/tmp", "target": "/shared", "semantics": "unknown"
-        }))
-        .is_err()
+}
+
+#[test]
+fn omitted_stored_bind_semantics_defaults_to_simplified() {
+    let mount: Mount = serde_json::from_value(serde_json::json!({
+        "type":"bind", "source":"/tmp", "target":"/shared"
+    }))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(mount).unwrap()["semantics"],
+        "simplified"
     );
+}
+
+#[test]
+fn bind_semantics_selection_replaces_the_previous_value() {
+    let mount = Mount::bind("/tmp", "/shared");
+    for (semantics, expected) in [
+        (BindSemantics::Complete, "complete"),
+        (BindSemantics::Simplified, "simplified"),
+    ] {
+        let selected = mount
+            .clone()
+            .with_semantics(BindSemantics::Complete)
+            .with_semantics(semantics);
+        assert_eq!(
+            serde_json::to_value(selected).unwrap()["semantics"],
+            expected
+        );
+    }
+}
+
+#[test]
+fn stored_bind_semantics_round_trip_without_changing_the_attachment() {
+    for semantics in ["simplified", "complete"] {
+        let saved = serde_json::json!({"type":"bind", "source":"/tmp", "target":"/shared", "read_only":true, "semantics":semantics});
+        let mount: Mount = serde_json::from_value(saved.clone()).unwrap();
+        assert_eq!(serde_json::to_value(mount).unwrap(), saved);
+    }
+}
+
+#[test]
+fn stored_bind_semantics_reject_invalid_values() {
+    for semantics in [
+        serde_json::json!("unknown"),
+        serde_json::json!(""),
+        serde_json::Value::Null,
+        serde_json::json!(1),
+    ] {
+        assert!(
+            serde_json::from_value::<Mount>(serde_json::json!({
+                "type":"bind", "source":"/tmp", "target":"/shared", "semantics":semantics
+            }))
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn bind_semantics_selection_leaves_named_volumes_unchanged() {
+    let volume = Mount::volume("example", "/data");
+    for semantics in [BindSemantics::Simplified, BindSemantics::Complete] {
+        assert_eq!(volume.clone().with_semantics(semantics), volume);
+    }
     assert!(
-        serde_json::to_value(Mount::volume("data", "/data"))
+        serde_json::to_value(volume)
             .unwrap()
             .get("semantics")
             .is_none()

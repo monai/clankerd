@@ -32,6 +32,13 @@ Uncovered Linux paths remain visible; macOS-only code is absent from this
 report. Coverage does not replace the existing privileged seam B checks or
 Mac smoke tests.
 
+`vmctl/tests/native_bind_semantics.rs` contains opt-in tests of actual Mac
+virtio-fs ownership, permission side effects and host read-only enforcement.
+Build signed native helpers with `make rust`, then run
+`mise exec -- cargo test -p vmctl --test native_bind_semantics -- --ignored --test-threads=1`
+on Apple Silicon. These tests are ignored in the ordinary workspace suite;
+Linux compilation or schema/protocol tests do not establish native behavior.
+
 A loop device presents a regular disk-image file as a Linux block device. The
 population test uses `/dev/loop-control` to attach an image to `/dev/loopN`,
 then mounts its ext4 filesystem and unpacks the image. It requires root,

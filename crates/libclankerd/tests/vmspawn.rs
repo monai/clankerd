@@ -247,24 +247,30 @@ fn a_machine_with_a_root_disk_hands_it_to_the_helper() {
 }
 
 #[test]
-fn the_helper_receives_per_bind_semantics_and_read_only_policy() {
+fn helper_protocol_preserves_semantics_and_access_independently() {
     use libclankerd::{BindSemantics, HostConfig, Mount};
     let env = Env::new();
     let engine = libclankerd::Engine::new(env.config(dev_vmm())).unwrap();
+    let mounts = [
+        (BindSemantics::Simplified, false, "/simple-rw"),
+        (BindSemantics::Simplified, true, "/simple-ro"),
+        (BindSemantics::Complete, false, "/complete-rw"),
+        (BindSemantics::Complete, true, "/complete-ro"),
+    ]
+    .into_iter()
+    .map(|(semantics, read_only, target)| Mount::Bind {
+        source: env.root().to_owned(),
+        target: target.into(),
+        read_only,
+        semantics,
+    })
+    .collect();
     let machine = engine
         .create(
-            Some("shares"),
+            Some("example"),
             sh("true"),
             HostConfig {
-                mounts: vec![
-                    Mount::bind(env.root(), "/simple"),
-                    Mount::Bind {
-                        source: env.root().to_owned(),
-                        target: "/complete".into(),
-                        read_only: true,
-                        semantics: BindSemantics::Complete,
-                    },
-                ],
+                mounts,
                 ..Default::default()
             },
         )
@@ -276,13 +282,16 @@ fn the_helper_receives_per_bind_semantics_and_read_only_policy() {
         spec["shares"],
         serde_json::json!([
             {"tag":"bind0", "path":env.root(), "semantics":"simplified", "read_only":false},
-            {"tag":"bind1", "path":env.root(), "semantics":"complete", "read_only":true},
+            {"tag":"bind1", "path":env.root(), "semantics":"simplified", "read_only":true},
+            {"tag":"bind2", "path":env.root(), "semantics":"complete", "read_only":false},
+            {"tag":"bind3", "path":env.root(), "semantics":"complete", "read_only":true},
         ])
     );
-    let decoded: clankerd_proto::spawn::SpawnSpec = serde_json::from_value(spec).unwrap();
-    assert_eq!(decoded.shares[0].semantics, BindSemantics::Simplified);
-    assert_eq!(decoded.shares[1].semantics, BindSemantics::Complete);
-    assert!(decoded.shares[1].read_only);
+    let decoded: clankerd_proto::spawn::SpawnSpec = serde_json::from_value(spec.clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(decoded.shares).unwrap(),
+        spec["shares"]
+    );
 }
 
 #[test]
