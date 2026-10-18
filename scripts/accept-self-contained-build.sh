@@ -34,6 +34,10 @@ trap finish EXIT
 sw_vers
 git rev-parse HEAD > "$evidence/commit.txt"
 git diff HEAD -- crates scripts Makefile build-support > "$evidence/worktree.diff"
+# Parse and link the stub with Apple's linker before the expensive Cargo build.
+printf 'extern int krun_create_ctx(void); int main(void) { return krun_create_ctx(); }\n' \
+  | xcrun clang -arch arm64 -x c - -L crates/libkrun-sys/stubs -lkrun \
+      -o "$evidence/libkrun-stub-check"
 python3 -m unittest scripts.tests.test_build_graph
 make -j"${BUILD_JOBS:-4}" build
 python3 scripts/artifact-tree.py check build/rust

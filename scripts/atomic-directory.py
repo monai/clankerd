@@ -35,7 +35,11 @@ with (output.parent / ('.' + output.name + '.lock')).open('a') as lock:
     link = generations / ('publish-' + str(os.getpid()))
     try:
         command = [arg.replace('{out}', str(stage)) for arg in sys.argv[separator+1:]]
-        subprocess.run(command, check=True)
+        environment = os.environ.copy()
+        # Python closes Make's jobserver descriptors; do not advertise them to Cargo.
+        for name in ('MAKEFLAGS', 'MFLAGS', 'CARGO_MAKEFLAGS'):
+            environment.pop(name, None)
+        subprocess.run(command, check=True, env=environment)
         (stage / '.complete').write_text(json.dumps({'recipe': sys.argv[separator+1:], 'files': tree.inventory(stage)}, sort_keys=True) + '\n')
         link.symlink_to(os.path.relpath(stage, output.parent))
         # Link is renamed into output.parent; its relative target is for there.

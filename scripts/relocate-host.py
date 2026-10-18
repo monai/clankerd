@@ -65,3 +65,12 @@ for path in lib.iterdir():
 for required in sys.argv[separator+1:]:
     if not (out / required).is_file():
         raise RuntimeError('missing required host runtime: ' + required)
+
+# Cargo's lzma-sys probes this package instead of the host's Homebrew install.
+if (lib / 'liblzma.5.dylib').exists():
+    (lib / 'liblzma.dylib').symlink_to('liblzma.5.dylib')
+    metadata = out / 'pkgconfig'
+    metadata.mkdir()
+    (metadata / 'liblzma.pc').write_text(
+        'libdir=${pcfiledir}/../lib\nName: liblzma\nDescription: pinned host liblzma\n'
+        'Version: 5.8.4\nLibs: -L${libdir} -llzma\n')

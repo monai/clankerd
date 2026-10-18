@@ -67,7 +67,7 @@ class ArtifactGraph(unittest.TestCase):
             'sbin/mke2fs': b'format', 'usr/sbin/resize2fs': b'grow', 'lib/ld-musl-aarch64.so.1': b'loader',
             'lib/apk/db/installed': b'fixture package database'})
         dylib = struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 6, 0, 0, 0, 0)
-        host = archive('host.tar.gz', {'libkrun/1.19.6/lib/libkrun.1.19.6.dylib': dylib})
+        host = archive('host.tar.gz', {'libkrun/1.19.6/lib/libkrun.1.19.6.dylib': dylib, 'xz/5.8.4/lib/liblzma.5.dylib': dylib})
         self.lock = self.root / 'inputs.mk'
         self.lock.write_text('INPUTS := base host\nGUEST_INPUTS := base\nHOST_INPUTS := host\n' +
             ''.join(f'{name}_URL := {path.as_uri()}\n{name}_SHA256 := {hashlib.sha256(path.read_bytes()).hexdigest()}\n'
@@ -81,6 +81,14 @@ from pathlib import Path
 args=sys.argv
 if '--version' in args: print('fixture cargo'); sys.exit(0)
 kind='guest' if 'aarch64-unknown-linux-musl' in args else 'host'
+assert not any(name in os.environ for name in ('MAKEFLAGS', 'MFLAGS', 'CARGO_MAKEFLAGS'))
+if kind=='host':
+ metadata=Path(os.environ['PKG_CONFIG_LIBDIR'])/'liblzma.pc'
+ assert metadata.is_file()
+ assert (metadata.parent.parent/'lib/liblzma.dylib').is_file()
+ assert os.environ['PKG_CONFIG_ALLOW_CROSS']=='1'
+ assert os.environ['PKG_CONFIG_PATH']==str(metadata.parent)
+ assert os.environ['PKG_CONFIG_SYSROOT_DIR']=='/'
 with open(os.environ['GRAPH_LOG'],'a') as stream: stream.write(kind+'\\n')
 if os.environ.get('FAIL_CARGO'): sys.exit(1)
 if os.environ.get('BLOCK_CARGO'):

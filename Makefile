@@ -59,8 +59,8 @@ $(WORK)/host-inputs.json: $(RUST_HOST_INPUTS) scripts/record-build-inputs.py FOR
 $(WORK)/guest-inputs.json: $(RUST_GUEST_INPUTS) scripts/record-build-inputs.py FORCE
 	@$(PYTHON) scripts/record-build-inputs.py $@ $(RUST_GUEST_INPUTS)
 
-$(WORK)/host-rust/.complete: $(WORK)/configuration.json $(WORK)/host-inputs.json $(RUST_HOST_INPUTS) $(PHASE_TOOLS) FORCE
-	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- sh -ec 'SDKROOT="$(HOST_SDK)" $(HOST_CARGO) --locked --release --target $(HOST_TARGET) -p vmctl -p clankerd-vmspawn -p clankerd-network; mkdir -p "$$1"; cp "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/vmctl" "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/clankerd-vmspawn" "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/clankerd-network" "$$1/"' sh '{out}'
+$(WORK)/host-rust/.complete: $(WORK)/host-libraries/.complete $(WORK)/configuration.json $(WORK)/host-inputs.json $(RUST_HOST_INPUTS) $(PHASE_TOOLS) FORCE
+	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- sh -ec 'PKG_CONFIG_PATH="$(abspath $(WORK)/host-libraries/pkgconfig)" PKG_CONFIG_LIBDIR="$(abspath $(WORK)/host-libraries/pkgconfig)" PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_SYSROOT_DIR=/ SDKROOT="$(HOST_SDK)" $(HOST_CARGO) --locked --release --target $(HOST_TARGET) -p vmctl -p clankerd-vmspawn -p clankerd-network; mkdir -p "$$1"; cp "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/vmctl" "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/clankerd-vmspawn" "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/clankerd-network" "$$1/"' sh '{out}'
 
 $(WORK)/guest-rust/.complete: $(WORK)/configuration.json $(WORK)/guest-inputs.json $(RUST_GUEST_INPUTS) $(PHASE_TOOLS) FORCE
 	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- sh -ec 'cargo build --locked --release --target $(GUEST_TARGET) --config target.$(GUEST_TARGET).linker=\"rust-lld\" -p clankerd-guestd; mkdir -p "$$1"; cp "$(CARGO_TARGET_DIR)/$(GUEST_TARGET)/release/clankerd-guestd" "$$1/"' sh '{out}'

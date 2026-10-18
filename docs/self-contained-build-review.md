@@ -83,3 +83,21 @@ Concurrent tests collect both subprocess results before asserting, preventing
 unreaped processes and open-pipe warnings when a build fails. An actual Python
 3.15 binary was unavailable in the Linux download catalog; Mac execution remains
 pending a rerun of the same consolidated acceptance command.
+
+## Native linker follow-up
+
+The macOS 15 run passed all eight graph tests under Python 3.15, then Apple's
+TAPI parser rejected the plural `compatibility-versions` key in the libkrun
+stub. It now uses the TAPI v4 singular `compatibility-version`. The native
+acceptance entrypoint links a minimal caller against the stub before Cargo.
+
+The same log showed Cargo selecting Homebrew's liblzma. Host Rust compilation
+now depends on the relocated pinned libraries and supplies isolated liblzma
+pkg-config metadata; vmctl also searches its bundled library directory. Phase
+subprocesses clear Make jobserver variables because Python closes those file
+descriptors. The graph fixture checks those compilation environment boundaries.
+Actual Apple linker and VM acceptance still require the native script run.
+
+Validation: all 31 Python tests, shell syntax, Rust formatting, and the signed
+ARM64 cross-build/import audit passed. Both vmctl and clankerd-vmspawn import
+`@rpath/liblzma.5.dylib` from the pinned bundle.
