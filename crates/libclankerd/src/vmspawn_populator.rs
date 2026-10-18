@@ -64,6 +64,9 @@ impl VmspawnPopulator {
 
     fn prepare_boot_dir(&self, boot: &Path) -> Result<()> {
         fs::create_dir_all(boot)?;
+        if !self.dev_local {
+            return crate::guest_environment::place(&self.guest_dir, boot);
+        }
         for name in REQUIRED {
             if !self.guest_dir.join(name).exists() {
                 return Err(Error::unavailable(format!(

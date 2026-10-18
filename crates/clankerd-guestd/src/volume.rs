@@ -34,14 +34,23 @@ pub fn setup_all(tools: &Path, mounts: &[GuestMount]) -> Result<(), String> {
                 device,
                 target,
                 size,
-            } => setup_volume(tools, Path::new(device), Path::new(target), *size)
-                .map_err(|e| format!("volume at {target}: {e}"))?,
+            } => setup_volume(
+                tools,
+                Path::new(device),
+                &crate::workload_root::workload_path(target).map_err(|e| e.to_string())?,
+                *size,
+            )
+            .map_err(|e| format!("volume at {target}: {e}"))?,
             GuestMount::Bind {
                 tag,
                 target,
                 read_only,
-            } => mount_bind(tag, Path::new(target), *read_only)
-                .map_err(|e| format!("bind mount {tag} at {target}: {e}"))?,
+            } => mount_bind(
+                tag,
+                &crate::workload_root::workload_path(target).map_err(|e| e.to_string())?,
+                *read_only,
+            )
+            .map_err(|e| format!("bind mount {tag} at {target}: {e}"))?,
         }
     }
     Ok(())
@@ -175,6 +184,10 @@ mod tests {
     const MIB: u64 = 1 << 20;
 
     fn host_tool(name: &str) -> Option<PathBuf> {
+        if let Some(dir) = std::env::var_os("CLANKERD_TEST_BOOT_DIR") {
+            let path = Path::new(&dir).join(name);
+            return path.exists().then_some(path);
+        }
         ["/usr/sbin", "/sbin", "/usr/bin"]
             .iter()
             .map(|d| Path::new(d).join(name))

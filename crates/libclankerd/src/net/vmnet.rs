@@ -9,11 +9,11 @@ use crate::NetworkMode;
 use crate::error::{Error, Result};
 
 const PID_FILE: &str = "net.pid";
-const LOG_FILE: &str = "vmnet-helper.log";
+const LOG_FILE: &str = "clankerd-network.log";
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 const STOP_GRACE: Duration = Duration::from_secs(3);
 
-/// Native vmnet sidecar; installed separately using vmnet-helper's installer.
+/// Bundled clankerd-owned native vmnet sidecar.
 pub struct VmnetBackend {
     binary: PathBuf,
 }
@@ -26,12 +26,13 @@ impl VmnetBackend {
 }
 impl Default for VmnetBackend {
     fn default() -> Self {
-        let bundled = Path::new("/opt/clankerd/libexec/vmnet-helper");
-        Self::new(if bundled.is_file() {
-            bundled
-        } else {
-            Path::new("/opt/vmnet-helper/bin/vmnet-helper")
-        })
+        let executable = std::env::current_exe().unwrap_or_default();
+        Self::new(
+            executable
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join("clankerd-network"),
+        )
     }
 }
 
@@ -40,6 +41,14 @@ impl NetBackend for VmnetBackend {
         crate::config::validate_bridge_config(&spec.host_config)?;
         super::validate_host_config(&spec.host_config)?;
         let binary = &self.binary;
+        // Interactive authorization is a separate step; a person entering
+        // their password must not consume the native startup timeout.
+        if cfg!(target_os = "macos") {
+            let status = Command::new(binary).arg("authorize").status()?;
+            if !status.success() {
+                return Err(Error::unavailable("native networking authorization failed"));
+            }
+        }
         // A leftover sidecar of an earlier run would hold the socket.
         self.stop_helper(spec);
         if let NetworkMode::Bridged = spec.host_config.network_mode {
@@ -54,13 +63,10 @@ impl NetBackend for VmnetBackend {
             .write(true)
             .truncate(true)
             .open(&log_path)?;
-        let mut command = if cfg!(target_os = "macos") {
-            let mut command = Command::new("sudo");
-            command.args(["--non-interactive", "--"]).arg(binary);
-            command
-        } else {
-            Command::new(binary)
-        };
+        let mut command = Command::new(binary);
+        if cfg!(target_os = "macos") {
+            command.arg("launch");
+        }
         let identity = interface_identity(&spec.machine_id);
         command
             .arg("--socket")
@@ -107,7 +113,7 @@ impl NetBackend for VmnetBackend {
             .spawn()
             .map_err(|e| {
                 Error::unavailable(format!(
-                    "cannot start vmnet-helper ({}): {e}",
+                    "cannot start clankerd-network ({}): {e}",
                     binary.display()
                 ))
             })?;
@@ -122,13 +128,13 @@ impl NetBackend for VmnetBackend {
         loop {
             let failure = match child.try_wait() {
                 Ok(Some(status)) => Some(format!(
-                    "vmnet-helper exited ({status}) before it was ready"
+                    "clankerd-network exited ({status}) before it was ready"
                 )),
                 Ok(None) if Instant::now() >= deadline => Some(format!(
-                    "vmnet-helper not ready after {READY_TIMEOUT:?} (waiting for native interface metadata and socket)"
+                    "clankerd-network not ready after {READY_TIMEOUT:?} (waiting for native interface metadata and socket)"
                 )),
                 Ok(None) => None,
-                Err(e) => Some(format!("waiting for vmnet-helper: {e}")),
+                Err(e) => Some(format!("waiting for clankerd-network: {e}")),
             };
             if let Some(failure) = failure {
                 self.stop_helper(spec);
@@ -149,7 +155,7 @@ impl NetBackend for VmnetBackend {
                         self.stop_helper(spec);
                         let _ = child.wait();
                         return Err(Error::unavailable(format!(
-                            "vmnet-helper exited ({status}) before attachment: {}",
+                            "clankerd-network exited ({status}) before attachment: {}",
                             log_tail(&log_path)
                         )));
                     }
@@ -157,7 +163,7 @@ impl NetBackend for VmnetBackend {
                         self.stop_helper(spec);
                         let _ = child.wait();
                         return Err(Error::unavailable(format!(
-                            "waiting for vmnet-helper: {error}"
+                            "waiting for clankerd-network: {error}"
                         )));
                     }
                 }
@@ -170,7 +176,7 @@ impl NetBackend for VmnetBackend {
         if cfg!(target_os = "macos") {
             let pid = helper_pid(&spec.socket).ok_or_else(|| {
                 self.stop_helper(spec);
-                Error::unavailable("cannot identify the unprivileged vmnet-helper process")
+                Error::unavailable("cannot identify the unprivileged clankerd-network process")
             })?;
             if let Err(error) = fs::write(spec.dir.join(PID_FILE), pid.to_string()) {
                 self.stop_helper(spec);
@@ -268,7 +274,7 @@ fn process_exists(pid: i32) -> bool {
 }
 
 /// Guards against a stale pid file (after a host reboot the pid may belong to
-/// anything): only signal a process whose command line mentions vmnet-helper. If
+/// anything): only signal a process whose command line mentions clankerd-network. If
 /// `ps` cannot be run, no signal is sent.
 fn is_helper(pid: i32, socket: &Path) -> bool {
     if !process_exists(pid) {
@@ -280,7 +286,8 @@ fn is_helper(pid: i32, socket: &Path) -> bool {
     {
         Ok(out) if out.status.success() || !out.stdout.is_empty() => {
             let command = String::from_utf8_lossy(&out.stdout);
-            command.contains("vmnet-helper") && command.contains(socket.to_string_lossy().as_ref())
+            command.contains("clankerd-network")
+                && command.contains(socket.to_string_lossy().as_ref())
         }
         Ok(_) => false,
         Err(_) => false,
@@ -292,7 +299,7 @@ fn log_tail(path: &Path) -> String {
     let lines: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
     let tail = &lines[lines.len().saturating_sub(5)..];
     if tail.is_empty() {
-        "it printed nothing (see vmnet-helper.log in the machine directory)".into()
+        "it printed nothing (see clankerd-network.log in the machine directory)".into()
     } else {
         tail.join(" | ")
     }
@@ -341,10 +348,13 @@ fn helper_pid(socket: &Path) -> Option<i32> {
         let uid: u32 = fields.next()?.parse().ok()?;
         let program = fields.next()?;
         // SAFETY: geteuid simply reads the process identity.
-        if uid != unsafe { libc::geteuid() } || !program.ends_with("/vmnet-helper") {
+        if uid != unsafe { libc::geteuid() } || !program.ends_with("/clankerd-network") {
             return None;
         }
         let args: Vec<_> = fields.collect();
+        if args.first() == Some(&"launch") {
+            return None;
+        }
         if args
             .windows(2)
             .any(|pair| pair[0] == "--socket" && pair[1] == socket.to_string_lossy())

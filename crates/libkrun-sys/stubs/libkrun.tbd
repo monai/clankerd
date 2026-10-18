@@ -4,7 +4,7 @@ targets:         [ arm64-macos ]
 uuids:
   - target:          arm64-macos
     value:           6c6b7275-6e2d-7379-732d-737475620001
-install-name:    '/opt/homebrew/lib/libkrun.1.dylib'
+install-name:    '@rpath/libkrun.1.dylib'
 current-version: 1.19
 compatibility-versions:
   - version:         1

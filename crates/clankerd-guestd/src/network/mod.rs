@@ -9,6 +9,7 @@ mod snapshot;
 use clankerd_proto::guest::{NetworkConfig, NetworkStatus};
 use std::ffi::CString;
 use std::fs;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -55,18 +56,19 @@ pub fn setup(config: &NetworkConfig) -> Result<(), String> {
     fs::write("/run/clankerd/network/dhcpcd.conf",
         "duid ll\nnoipv4ll\nnosyslog\ntimeout 0\noption domain_name_servers, domain_search\noption dhcp6_name_servers, dhcp6_domain_search\n")
         .map_err(|error|error.to_string())?;
-    let mut command = Command::new("/run/clankerd/boot/dhcpcd");
+    let mut command = Command::new("/sbin/dhcpcd");
     command
         .args([
             "-B",
             "-f",
             "/run/clankerd/network/dhcpcd.conf",
             "-c",
-            "/run/clankerd/boot/clankerd-guestd-network-hook",
+            "/usr/lib/clankerd/network-hook",
             &config.interface,
         ])
+        .process_group(0)
         .env_clear()
-        .env("PATH", "/run/clankerd/boot")
+        .env("PATH", "/sbin:/bin:/usr/sbin:/usr/bin")
         .stdin(Stdio::null());
     let mut child = crate::power::spawn_owned(&mut command)
         .map_err(|error| format!("starting bundled dhcpcd: {error}"))?;
@@ -121,6 +123,11 @@ pub fn setup(config: &NetworkConfig) -> Result<(), String> {
         loop {
             let started = Instant::now();
             let result = child.wait();
+            // -B keeps the packaged privilege-separated family in this group.
+            // Reap adopted descendants before accepting fresh lease evidence.
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGKILL);
+            }
             CLIENT_RUNNING.store(false, Ordering::Relaxed);
             IPV6_PEER.store(false, Ordering::Relaxed);
             probe::invalidate();
@@ -189,11 +196,14 @@ fn stop_failed(child: &mut std::process::Child, message: String) -> Result<(), S
     // SIGTERM lets dhcpcd withdraw addresses, routes and resolver contributions.
     // SAFETY: child PID is live and owned by this process.
     unsafe {
-        libc::kill(child.id() as i32, libc::SIGTERM);
+        libc::kill(-(child.id() as i32), libc::SIGTERM);
     }
     let deadline = Instant::now() + Duration::from_secs(2);
     while child.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
+    }
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
     }
     let _ = child.kill();
     let _ = child.wait();

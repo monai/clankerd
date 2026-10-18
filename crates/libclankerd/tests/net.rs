@@ -37,7 +37,7 @@ while :; do sleep 0.1; done
 const FAILING_VMNET: &str = "#!/bin/sh\necho 'cannot listen: address in use' >&2\nexit 3\n";
 
 fn script(dir: &Path, body: &str) -> PathBuf {
-    let path = dir.join("vmnet-helper");
+    let path = dir.join("clankerd-network");
     std::fs::write(&path, body).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     path

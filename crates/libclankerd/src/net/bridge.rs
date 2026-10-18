@@ -5,13 +5,10 @@ use crate::error::{Error, Result};
 
 /// vmnet's own list is the authority for supported physical attachments.
 pub(super) fn validate_interface(binary: &Path, interface: &str) -> Result<()> {
-    let mut command = if cfg!(target_os = "macos") {
-        let mut command = Command::new("sudo");
-        command.args(["--non-interactive", "--"]).arg(binary);
-        command
-    } else {
-        Command::new(binary)
-    };
+    let mut command = Command::new(binary);
+    if cfg!(target_os = "macos") {
+        command.arg("launch");
+    }
     let output = command
         .arg("--list-shared-interfaces")
         .output()

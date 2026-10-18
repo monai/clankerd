@@ -107,9 +107,14 @@ if __name__ == '__main__':
             assert exact(connection, len(b'recovery-unix')) == b'recovery-unix'
         print('PASS host Unix binding while Ethernet is unavailable')
     elif action == 'kill-client':
-        clients = [int(entry.name) for entry in Path('/proc').iterdir()
-                   if entry.name.isdigit() and (entry / 'comm').exists()
-                   and (entry / 'comm').read_text().strip() == 'dhcpcd']
+        clients = []
+        for entry in Path('/proc').iterdir():
+            try:
+                if (entry.name.isdigit() and (entry / 'comm').read_text().strip() == 'dhcpcd'
+                        and any(line.split() == ['PPid:', '1'] for line in (entry / 'status').read_text().splitlines())):
+                    clients.append(int(entry.name))
+            except FileNotFoundError:
+                continue
         assert len(clients) == 1, clients
         os.kill(clients[0], signal.SIGKILL)
         print('Killed configuration client', clients[0])

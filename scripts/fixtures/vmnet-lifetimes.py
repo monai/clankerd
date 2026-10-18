@@ -248,7 +248,6 @@ def main():
     original = Path(args[args.index('--spec') + 1])
     spec = json.loads(original.read_text())
     binary = os.environ['VMNET_TEST_REAL_VMSPAWN']
-    os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = os.environ.get('VMNET_TEST_LIBRARY_PATH', '/opt/homebrew/lib:/usr/local/lib:/usr/lib')
     if not spec.get('net'):
         os.execv(binary, [binary, *args])
     with tempfile.TemporaryDirectory(prefix='vmnet-lifetime-', dir='/tmp') as directory:

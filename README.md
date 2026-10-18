@@ -12,7 +12,7 @@ Silicon Macs, using libkrun and the stock libkrunfw kernel.
 | `clankerd-proto` | Shared host/guest protocol and stream codecs |
 | `libkrun-sys` | libkrun FFI |
 
-Machines boot the image as their root filesystem. Named volumes persist across
+Workloads use the image as their root filesystem, independently of guest management. Named volumes persist across
 restarts and image changes, host directories are shared through virtio-fs, and
 host Unix sockets can be exposed through management relays. Images with Docker and nftables can run containers and
 Compose inside the machine.
@@ -26,23 +26,36 @@ mise install
 mise exec -- make build
 ```
 
-Python 3 and platform build tools are required. The build runs natively on Apple
-Silicon macOS or cross-builds the Mac artifacts on Linux. Outputs are:
+Python 3.12+ and platform build tools are required. The build runs natively on
+Apple Silicon macOS or cross-builds on Linux (ARM64 or x86_64). On macOS, install
+Apple's command-line SDK. No Homebrew runtime dependencies are required.
 
-- `build/rust/darwin-arm64/{vmctl,clankerd-vmspawn}`: Mac host binaries.
-- `build/rust/linux-arm64/`: static guest daemon and ext4 utilities.
+`Makefile` exposes verified downloads, package extraction, management assembly,
+Cargo compilation, host library relocation, artifact assembly and signing.
+Exact binary versions, URLs, SHA256 hashes, architectures and licenses are
+locked in `build-support/inputs.mk`; builds never resolve latest versions.
 
-A completed signed generation is published at `build/rust` only after every
-step succeeds. Previous successful generations stay under `build/.rust-generations`
-until `make clean`. No binutils installation or shell environment exports are needed.
-Set `BUILD_JOBS` to control compiler parallelism and `RUST_OUT` to choose the bundle
-location. Cargo determines intermediate artifact locations from its own configuration.
+The relocatable signed artifact at `build/rust` contains Mac host executables
+and libraries under `darwin-arm64`, and guestd plus its complete management
+filesystem under `linux-arm64`. Package metadata and license texts accompany it.
+Publication switches to a completed generation only after signing succeeds.
+Warm builds validate content and reuse unchanged outputs. `RUST_OUT` selects the
+publication path, `BUILD_ROOT` selects isolated phase outputs/caches, and
+`CARGO_TARGET_DIR` selects Cargo intermediates. `make rust` aliases `make build`.
 
-The Mac needs Homebrew libkrun/libkrunfw and an installed vmnet-helper.
-On macOS 15, install its supported passwordless sudoers rule; the VM stays unprivileged.
-See [Mac setup and validation](docs/libkrun-first-boot.md) for prerequisites,
-SDK setup, signing and hardware checks. `make rust` remains an alias for the
-complete build.
+Host networking uses bundled clankerd-owned Apple vmnet and PF code.
+Administrator authorization uses ordinary sudo authentication. The VM and
+Ethernet transport remain unprivileged; no helper installation, sudoers edits,
+or persistent configuration changes are needed.
+
+Run all Mac build/artifact checks and native gates with:
+
+```sh
+mise exec -- bash scripts/accept-self-contained-build.sh
+```
+
+See [self-contained build](docs/self-contained-build.md) for graph checks,
+artifacts and native evidence requirements.
 
 ## Run a machine
 

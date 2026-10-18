@@ -1,11 +1,9 @@
-//! Privileged PF ownership is isolated in the installed controller.
+//! Privileged PF ownership is isolated in the bundled network executable.
 use std::io::Write;
 use std::process::{Command, Stdio};
 
 use super::NetSpec;
 use crate::{Error, NetworkMode, Result};
-
-const CONTROLLER: &str = "/opt/clankerd/libexec/clankerd-network-pf";
 
 fn enabled(spec: &NetSpec) -> bool {
     cfg!(target_os = "macos")
@@ -36,8 +34,13 @@ pub(super) fn remove(spec: &NetSpec) {
 }
 
 fn invoke(request: serde_json::Value) -> Result<()> {
-    let mut child = Command::new("sudo")
-        .args(["--non-interactive", "--", CONTROLLER])
+    let executable = std::env::current_exe()?;
+    let controller = executable
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("clankerd-network");
+    let mut child = Command::new(controller)
+        .args(["launch", "pf"])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -52,7 +55,7 @@ fn invoke(request: serde_json::Value) -> Result<()> {
     written?;
     if !output.status.success() {
         return Err(Error::unavailable(format!(
-            "cannot install native network policy; run scripts/m2-install-and-run-network-gates.sh: {}",
+            "cannot apply native network policy: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }

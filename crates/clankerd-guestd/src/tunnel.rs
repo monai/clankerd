@@ -95,18 +95,20 @@ impl Tunnels {
             );
         };
         match target {
-            Target::Unix { path } => match UnixStream::connect(&path) {
-                Ok(sock) => {
-                    reply(&mut out, json!({}), None)?;
-                    pump(input, out, sock);
-                    Ok(())
+            Target::Unix { path } => {
+                match UnixStream::connect(crate::workload_root::filesystem_path(&path)?) {
+                    Ok(sock) => {
+                        reply(&mut out, json!({}), None)?;
+                        pump(input, out, sock);
+                        Ok(())
+                    }
+                    Err(e) => reply(
+                        &mut out,
+                        json!({"message": e.to_string()}),
+                        Some(ERROR_CONNECT_FAILED),
+                    ),
                 }
-                Err(e) => reply(
-                    &mut out,
-                    json!({"message": e.to_string()}),
-                    Some(ERROR_CONNECT_FAILED),
-                ),
-            },
+            }
         }
     }
 
@@ -153,11 +155,12 @@ impl Tunnels {
     ) -> std::io::Result<std::thread::JoinHandle<()>> {
         match listen {
             Target::Unix { path } => {
+                let path = crate::workload_root::filesystem_path(path)?;
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                let _ = std::fs::remove_file(path);
-                let l = UnixListener::bind(path)?;
+                let _ = std::fs::remove_file(&path);
+                let l = UnixListener::bind(&path)?;
                 l.set_nonblocking(true)?;
                 let path = path.clone();
                 Ok(std::thread::spawn(move || {

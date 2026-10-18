@@ -149,6 +149,7 @@ fn a_missing_helper_binary_is_reported_by_path() {
         .env("CLANKERD_RUNTIME_DIR", dir.path().join("run"))
         .env("CLANKERD_BOOT_DIR_ROOT", "true")
         .env("CLANKERD_VMSPAWN", "/no/such/clankerd-vmspawn")
+        .env("CLANKERD_VMSPAWN_DEV_LOCAL", "1")
         .env("CLANKERD_GUESTD", guestd())
         .output()
         .unwrap();

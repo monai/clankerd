@@ -162,7 +162,7 @@ fn with_the_libkrun_backend_run_pulls_the_image_and_needs_the_guest_boot_directo
     let reg = registry::Registry::start();
     reg.push("test/app", "v1", &[registry::layer(&[("hello", b"hi")])]);
     // No dev stand-in: vmctl is configured for the real helper. The directory
-    // holding guestd lacks mke2fs, so the base disk cannot be built, which is
+    // holding guestd lacks the management environment, so the base disk cannot be built, which is
     // exactly what a half-built `make rust` output looks like.
     let boot = cli.root().join("linux-arm64");
     std::fs::create_dir(&boot).unwrap();
@@ -179,7 +179,10 @@ fn with_the_libkrun_backend_run_pulls_the_image_and_needs_the_guest_boot_directo
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let err = text(&out.stderr);
-    assert!(err.contains("mke2fs") && err.contains("make rust"), "{err}");
+    assert!(
+        err.contains("guest management environment") && err.contains("make build"),
+        "{err}"
+    );
     // The image was pulled on the way.
     let cached = std::fs::read_dir(cli.root().join("cache/images"))
         .unwrap()

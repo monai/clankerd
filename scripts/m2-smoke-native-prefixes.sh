@@ -8,7 +8,6 @@ vmctl=$out/darwin-arm64/vmctl
 work=$(mktemp -d /tmp/clankerd-prefix-guests.XXXXXX)
 export CLANKERD_STATE_DIR=$work/state CLANKERD_RUNTIME_DIR=$work/run
 export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
-export DYLD_FALLBACK_LIBRARY_PATH=${DYLD_FALLBACK_LIBRARY_PATH:-/opt/homebrew/lib:/usr/local/lib:/usr/lib}
 cleanup() {
   if [ -n "${forward4:-}" ]; then sudo -n sysctl -w net.inet.ip.forwarding="$forward4" > "$work/forwarding-cleanup.log" 2>&1 || true; fi
   if [ -n "${forward6:-}" ]; then sudo -n sysctl -w net.inet6.ip6.forwarding="$forward6" >> "$work/forwarding-cleanup.log" 2>&1 || true; fi
@@ -28,19 +27,7 @@ PYRETAIN
 trap cleanup EXIT
 echo "Evidence directory: $work"
 sudo -n true
-if [ -z "${CLANKERD_VMNET_HELPER:-}" ]; then
-  "$root/scripts/build-vmnet-helper.sh" "$work/helper-build" > "$work/helper-build.log" 2>&1 || { tail -40 "$work/helper-build.log"; exit 1; }
-  export CLANKERD_VMNET_HELPER=$work/helper-build/vmnet-helper
-fi
-# Verify invalid prefix/mode combinations fail during parsing, without root.
-python3 - "$CLANKERD_VMNET_HELPER" <<'PYVALIDATE'
-import subprocess,sys
-helper=sys.argv[1]
-for args in (['--nat66-prefix','2001:db8::'],['--nat66-prefix','fd42::1'],['--nat66-prefix','fd42::','--operation-mode','host']):
-    result=subprocess.run([helper,*args,'--socket','/tmp/clankerd-prefix-argument-rejection.sock'],capture_output=True,text=True,timeout=3)
-    assert result.returncode!=0 and '--nat66-prefix requires' in result.stderr,result
-print('PASS prefix argument/mode validation before native startup')
-PYVALIDATE
+export CLANKERD_NETWORK=$out/darwin-arm64/clankerd-network
 ifconfig -a > "$work/interfaces-before.txt"
 python3 - "$work" <<'PYCONFIG'
 from pathlib import Path

@@ -28,7 +28,7 @@ impl Vmm for GuestEndpoint {
 fn inspection_converts_guest_probe_seconds_to_utc_milliseconds() {
     let env = domain::Env::new();
     let guestd = domain::guestd_path();
-    let helper = env.root().join("vmnet-helper");
+    let helper = env.root().join("clankerd-network");
     std::fs::write(
         &helper,
         r#"#!/bin/sh

@@ -247,7 +247,8 @@ fn refresh_locked() -> io::Result<()> {
             }
         }
     }
-    let result = super::files::write_resolv_conf(Path::new("/"), &servers, &search);
+    let result =
+        super::files::write_resolv_conf(Path::new("/run/clankerd-resolver"), &servers, &search);
     match &result {
         Ok(()) => {
             fs::write(state.join("resolver-ready"), b"")?;

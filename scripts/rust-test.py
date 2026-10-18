@@ -135,9 +135,10 @@ def main(operation, system=None):
         if not bundle.is_absolute():
             bundle = ROOT / bundle
         env["RUST_OUT"] = str(bundle)
-        subprocess.run([sys.executable, str(ROOT / "scripts/rust-build.py"), "build"],
+        subprocess.run(["make", "build"],
                        cwd=ROOT, env=env, check=True)
         env["OUT"] = env["RUST_OUT"]
+        env["DYLD_LIBRARY_PATH"] = str(bundle / "darwin-arm64/lib")
         cargo("test", "--locked", "-p", "vmctl", "--test", "native_bind_semantics",
               "--", "--ignored", "--test-threads=1", env=env)
     elif operation == "lint":
@@ -151,6 +152,8 @@ def main(operation, system=None):
             with linux_test_environment(env) as test_env:
                 cargo("test", "--locked", "--workspace", env=prebuild(test_env))
         else:
+            bundle = Path(env.get("RUST_OUT", str(ROOT / "build/rust"))).resolve()
+            env = dict(env, DYLD_LIBRARY_PATH=str(bundle / "darwin-arm64/lib"))
             print("Running native Mac unit and host-only integration checks; Linux guest suite: make test-linux.", flush=True)
             cargo("test", "--locked", "--workspace", "--exclude", "clankerd-guestd", "--lib", "--bins", env=env)
             for package, tests in (("clankerd-proto", ["spawn"]), ("libkrun-sys", ["errors"]),

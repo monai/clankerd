@@ -14,8 +14,6 @@ use crate::error::{Error, Result};
 const SPEC_FILE: &str = "vmspawn.json";
 const LOG_FILE: &str = "vmspawn.log";
 const STATUS_FILE: &str = "vmspawn-exit";
-/// Static binaries guestd needs for a volume, next to guestd.
-const VOLUME_TOOLS: [&str; 2] = ["mke2fs", "resize2fs"];
 const DEFAULT_CPUS: u32 = 2;
 const DEFAULT_MEMORY: u64 = 1024 * 1024 * 1024;
 
@@ -64,62 +62,13 @@ impl VmspawnVmm {
                 ))
             })?;
         }
-        if spec.net.is_some() && !self.dev_local {
-            self.place_network_tools(boot)?;
-        }
-        if !spec.volume_disks.is_empty() {
-            self.place_volume_tools(boot)?;
+        if !self.dev_local {
+            crate::guest_environment::place(self.guestd.parent().unwrap_or(Path::new(".")), boot)?;
         }
         fs::write(
             boot.join(BOOT_WORKLOAD),
             serde_json::to_vec(&spec.workload)?,
         )?;
-        Ok(())
-    }
-
-    fn place_network_tools(&self, boot: &Path) -> Result<()> {
-        let dir = self.guestd.parent().unwrap_or(Path::new("."));
-        for name in ["dhcpcd", "dhcpcd.LICENSE"] {
-            let src = dir.join(name);
-            let dst = boot.join(name);
-            let _ = fs::remove_file(&dst);
-            if fs::hard_link(&src, &dst).is_err() {
-                fs::copy(&src, &dst).map_err(|e| {
-                    Error::unavailable(format!(
-                        "cannot place {name} in the boot directory: {e}; run `make rust` to build the network client"
-                    ))
-                })?;
-            }
-        }
-        let hook = boot.join("clankerd-guestd-network-hook");
-        let _ = fs::remove_file(&hook);
-        if fs::hard_link(&self.guestd, &hook).is_err() {
-            fs::copy(&self.guestd, &hook)?;
-        }
-        Ok(())
-    }
-
-    /// guestd formats and grows the volume with the static e2fsprogs that ship
-    /// next to it; they must be in the boot directory it keeps at
-    /// `/run/clankerd/boot`.
-    fn place_volume_tools(&self, boot: &Path) -> Result<()> {
-        let dir = self.guestd.parent().unwrap_or(Path::new("."));
-        for name in VOLUME_TOOLS {
-            let src = dir.join(name);
-            if !src.exists() {
-                return Err(Error::unavailable(format!(
-                    "{name} not found in {} (volumes need it; run `make rust`, it builds e2fsprogs)",
-                    dir.display()
-                )));
-            }
-            let dst = boot.join(name);
-            let _ = fs::remove_file(&dst);
-            if fs::hard_link(&src, &dst).is_err() {
-                fs::copy(&src, &dst).map_err(|e| {
-                    Error::unavailable(format!("cannot place {name} in the boot directory: {e}"))
-                })?;
-            }
-        }
         Ok(())
     }
 }
@@ -246,12 +195,6 @@ pub(crate) fn spawn_helper(
         .open(log_path)?;
     let mut cmd = Command::new(vmspawn);
     cmd.arg("--spec").arg(spec_file);
-    #[cfg(target_os = "macos")]
-    cmd.env(
-        "DYLD_FALLBACK_LIBRARY_PATH",
-        std::env::var_os("DYLD_FALLBACK_LIBRARY_PATH")
-            .unwrap_or_else(|| "/opt/homebrew/lib:/usr/local/lib:/usr/lib".into()),
-    );
     if dev_local {
         cmd.arg("--dev-local");
     }
@@ -283,18 +226,9 @@ pub(crate) fn spawn_helper(
 /// Turns the helper's captured stderr into what the developer should read.
 pub(crate) fn explain_exit(log: &str) -> Error {
     if log.contains("Library not loaded") {
-        if log.contains("libkrunfw") {
-            return Error::unavailable(
-                "libkrunfw (the guest kernel library) is not installed; \
-                 run `brew install libkrunfw`",
-            );
-        }
-        if log.contains("libkrun") {
-            return Error::unavailable(
-                "libkrun is not installed; run `brew tap slp/krun && brew install libkrun` \
-                 (libkrun 1.19.x, expected at /opt/homebrew/lib/libkrun.1.dylib)",
-            );
-        }
+        return Error::unavailable(
+            "bundled host library could not be loaded; rebuild the complete artifact (see vmspawn.log)",
+        );
     }
     let tail: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
     let tail = &tail[tail.len().saturating_sub(5)..];

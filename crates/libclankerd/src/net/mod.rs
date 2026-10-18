@@ -1,5 +1,5 @@
 //! The `NetBackend` extension point: whatever gives a machine's virtio NIC
-//! its network through vmnet-helper.
+//! its network through the clankerd-owned native attachment.
 //!
 //! A backend runs one sidecar per machine. It is started before the VMM, ends
 //! with the machine, and must not die with the library process (machines

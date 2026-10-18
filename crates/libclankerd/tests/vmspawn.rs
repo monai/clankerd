@@ -73,13 +73,13 @@ fn the_helper_outlives_the_library_process() {
 }
 
 #[test]
-fn missing_libkrun_fails_fast_with_install_instructions() {
+fn missing_bundled_libkrun_fails_fast_with_rebuild_instructions() {
     let env = Env::new();
     let fake = script(
         env.root(),
-        "echo 'dyld[42]: Library not loaded: /opt/homebrew/lib/libkrun.1.dylib' >&2; exit 1",
+        "echo 'dyld[42]: Library not loaded: @rpath/libkrun.1.dylib' >&2; exit 1",
     );
-    let vmm = Arc::new(VmspawnVmm::new(fake, guestd_path()));
+    let vmm = Arc::new(VmspawnVmm::new(fake, guestd_path()).dev_local());
     let mut cfg = env.config(vmm);
     cfg.start_timeout = Duration::from_secs(20);
     let engine = libclankerd::Engine::new(cfg).unwrap();
@@ -92,8 +92,11 @@ fn missing_libkrun_fails_fast_with_install_instructions() {
         "should not wait for the start timeout"
     );
     assert_eq!(err.kind(), ErrorKind::Unavailable);
-    assert!(err.message().contains("libkrun is not installed"), "{err}");
-    assert!(err.message().contains("brew"), "{err}");
+    assert!(err.message().contains("bundled host library"), "{err}");
+    assert!(
+        err.message().contains("rebuild the complete artifact"),
+        "{err}"
+    );
     assert_eq!(m.inspect().unwrap().state.status, Status::Created);
 }
 
@@ -104,9 +107,10 @@ fn helper_failure_text_reaches_the_caller() {
         env.root(),
         "echo 'clankerd-vmspawn: the hypervisor entitlement is missing: sign it' >&2; exit 1",
     );
-    let engine =
-        libclankerd::Engine::new(env.config(Arc::new(VmspawnVmm::new(fake, guestd_path()))))
-            .unwrap();
+    let engine = libclankerd::Engine::new(
+        env.config(Arc::new(VmspawnVmm::new(fake, guestd_path()).dev_local())),
+    )
+    .unwrap();
     let m = create(&engine, "noent", "exit 0");
     let err = m.start().unwrap_err();
     assert_eq!(err.kind(), ErrorKind::Unavailable);
@@ -120,9 +124,10 @@ fn helper_failure_text_reaches_the_caller() {
 fn a_silent_workload_helper_crash_preserves_its_signal() {
     let env = Env::new();
     let fake = script(env.root(), "kill -TERM $$");
-    let engine =
-        libclankerd::Engine::new(env.config(Arc::new(VmspawnVmm::new(fake, guestd_path()))))
-            .unwrap();
+    let engine = libclankerd::Engine::new(
+        env.config(Arc::new(VmspawnVmm::new(fake, guestd_path()).dev_local())),
+    )
+    .unwrap();
     let m = create(&engine, "silent", "exit 0");
     let err = m.start().unwrap_err();
     assert!(err.message().contains("workload boot:"), "{err}");
@@ -152,9 +157,10 @@ fn guest_console_errors_explain_a_helper_that_exits_successfully() {
         env.root(),
         "echo 'clankerd-guestd: mount ext4 /dev/vda: Invalid argument' > \"$(dirname \"$2\")/console.log\"; exit 0",
     );
-    let engine =
-        libclankerd::Engine::new(env.config(Arc::new(VmspawnVmm::new(fake, guestd_path()))))
-            .unwrap();
+    let engine = libclankerd::Engine::new(
+        env.config(Arc::new(VmspawnVmm::new(fake, guestd_path()).dev_local())),
+    )
+    .unwrap();
     let m = create(&engine, "guest-failed", "exit 0");
     let err = m.start().unwrap_err();
     assert!(
@@ -169,9 +175,10 @@ fn guest_console_errors_explain_a_helper_that_exits_successfully() {
 fn stale_libkrun_listener_is_removed_before_the_next_helper_starts() {
     let env = Env::new();
     let fake = script(env.root(), "exit 1");
-    let engine =
-        libclankerd::Engine::new(env.config(Arc::new(VmspawnVmm::new(&fake, guestd_path()))))
-            .unwrap();
+    let engine = libclankerd::Engine::new(
+        env.config(Arc::new(VmspawnVmm::new(&fake, guestd_path()).dev_local())),
+    )
+    .unwrap();
     let machine = create(&engine, "restart", "sleep 60");
     let socket = env
         .root()
@@ -193,7 +200,16 @@ fn stale_libkrun_listener_is_removed_before_the_next_helper_starts() {
 #[test]
 fn the_real_helper_off_macos_explains_it_cannot_boot() {
     let env = Env::new();
-    let vmm = Arc::new(VmspawnVmm::new(vmspawn_path(), guestd_path()));
+    let guest = env.root().join("guest");
+    std::fs::create_dir_all(guest.join("management/sbin")).unwrap();
+    for tool in ["mke2fs", "dhcpcd"] {
+        std::fs::write(guest.join("management/sbin").join(tool), "fixture").unwrap();
+    }
+    std::fs::copy(guestd_path(), guest.join("clankerd-guestd")).unwrap();
+    let vmm = Arc::new(VmspawnVmm::new(
+        vmspawn_path(),
+        guest.join("clankerd-guestd"),
+    ));
     let engine = libclankerd::Engine::new(env.config(vmm)).unwrap();
     let m = create(&engine, "linux", "exit 0");
     let err = m.start().unwrap_err();

@@ -9,8 +9,6 @@ vmctl=$out/darwin-arm64/vmctl
 export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn
 export CLANKERD_NET_DIAGNOSTICS=1
 export CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
-export CLANKERD_VMNET_HELPER=${CLANKERD_VMNET_HELPER:-/opt/vmnet-helper/bin/vmnet-helper}
-export DYLD_FALLBACK_LIBRARY_PATH=${DYLD_FALLBACK_LIBRARY_PATH:-/opt/homebrew/lib:/usr/local/lib:/usr/lib}
 work=$(mktemp -d /tmp/clankerd-recovery.XXXXXX)
 export CLANKERD_STATE_DIR=$work/state CLANKERD_RUNTIME_DIR=$work/run
 name=vmnet-recovery

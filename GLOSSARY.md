@@ -53,3 +53,12 @@ _Avoid_: Shared network when referring to a physical LAN attachment.
 **Gateway**:
 The network endpoint through which a guest sends traffic destined beyond its local subnet.
 _Avoid_: Physical router when the endpoint belongs to the host's virtual networking.
+
+**Guest management environment**:
+The privileged filesystem and execution context inside a machine, independent of the workload's files and configuration.
+
+**Guest control plane**:
+The management software running inside the guest management environment.
+
+**Guest control plane dependencies**:
+The third-party binaries, libraries and supporting files required by the guest control plane.

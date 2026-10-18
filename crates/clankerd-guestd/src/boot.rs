@@ -1,34 +1,36 @@
-//! Guest init when guestd is PID 1 on a root disk (`--boot`): mount the root
-//! disk and pivot into it, mount the pseudo filesystems, delegate cgroup v2
-//! controllers, set the clock from the host and write the `/.clankerdenv`
-//! marker.
-//!
-//! The Linux stand-in used by tests skips all of this: it needs root and a
-//! block device, and would change the host. The parts with no such need
-//! ([`delegate_controllers`], [`write_marker`]) take a root path and are unit
-//! tested; the mount and pivot sequence is verified on the M2 only.
+//! Guest boot: guestd remains in the packaged management root.
+//! The OCI disk and its configured mounts are prepared under /workload;
+//! workload_root owns the separate namespace and child-only root switch.
 
 use std::ffi::CString;
 use std::fs;
 use std::io;
-use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use clankerd_proto::guest::{Clock, Workload};
-use clankerd_proto::spawn::{GUEST_BOOT_MOUNT, ROOT_DEVICE};
+use clankerd_proto::spawn::ROOT_DEVICE;
 
 use crate::poll::poll_until;
 
 /// Marker file image authors test for (like Docker's `/.dockerenv`).
 pub const MARKER: &str = ".clankerdenv";
-const NEW_ROOT: &str = "/newroot";
 const DEVICE_WAIT: Duration = Duration::from_secs(10);
 
-/// Runs the whole boot sequence. After it returns, `/` is the image's root.
+/// Initializes management services and the independent workload namespace.
 pub fn init(workload: &Workload) -> Result<(), String> {
-    mount_root_and_pivot().map_err(|e| format!("switching to the root disk: {e}"))?;
-    mount_pseudo_filesystems().map_err(|e| format!("mounting /proc, /sys and /dev: {e}"))?;
+    mount_pseudo_filesystems().map_err(|e| format!("management mounts: {e}"))?;
+    mount("", "/", "", libc::MS_REC | libc::MS_PRIVATE, "").map_err(|e| e.to_string())?;
+    wait_for_device(Path::new(ROOT_DEVICE), "workload root").map_err(|e| e.to_string())?;
+    fs::create_dir_all("/workload").map_err(|e| e.to_string())?;
+    mount(ROOT_DEVICE, "/workload", "ext4", libc::MS_NOATIME, "").map_err(|e| e.to_string())?;
+    fs::create_dir_all("/run/clankerd-resolver/etc").map_err(|e| e.to_string())?;
+    let resolver = Path::new("/etc/resolv.conf");
+    if fs::symlink_metadata(resolver).is_ok() {
+        fs::remove_file(resolver).map_err(|e| e.to_string())?;
+    }
+    std::os::unix::fs::symlink("/run/clankerd-resolver/etc/resolv.conf", resolver)
+        .map_err(|e| e.to_string())?;
     // The rest is best effort: a failure is logged, the workload still runs.
     match delegate_controllers(Path::new("/sys/fs/cgroup")) {
         Ok(enabled) if enabled.is_empty() => {
@@ -50,10 +52,15 @@ pub fn init(workload: &Workload) -> Result<(), String> {
     {
         eprintln!("clankerd-guestd: setting the clock: {e}");
     }
-    write_marker(Path::new("/")).map_err(|e| format!("writing /{MARKER}: {e}"))?;
+    write_marker(Path::new("/workload")).map_err(|e| format!("writing /{MARKER}: {e}"))?;
     // Volume and bind mounts; a failure here must not hand the workload a
     // missing data directory, so it fails the boot.
-    crate::volume::setup_all(Path::new(GUEST_BOOT_MOUNT), &workload.mounts)?;
+    crate::volume::setup_all(Path::new("/"), &workload.mounts)?;
+    fs::create_dir_all("/run/clankerd-resolver").map_err(|e| e.to_string())?;
+    if !Path::new("/run/clankerd-resolver/etc/resolv.conf").exists() {
+        fs::write("/run/clankerd-resolver/etc/resolv.conf", "").map_err(|e| e.to_string())?;
+    }
+    crate::workload_root::start()?;
     crate::power::start_reaper();
     Ok(())
 }
@@ -93,10 +100,6 @@ pub fn set_clock(clock: &Clock) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
-}
-
-fn cstr(p: &Path) -> io::Result<CString> {
-    CString::new(p.as_os_str().as_bytes()).map_err(io::Error::other)
 }
 
 pub(crate) fn mount(
@@ -147,60 +150,6 @@ fn kernel_log_tail() -> Option<String> {
     Some(lines[lines.len().saturating_sub(16)..].join("\n"))
 }
 
-/// Mounts the root disk, keeps the boot directory reachable at
-/// [`GUEST_BOOT_MOUNT`] (read-only) and pivots into the disk.
-fn mount_root_and_pivot() -> io::Result<()> {
-    wait_for_device(Path::new(ROOT_DEVICE), "root disk")?;
-    fs::create_dir_all(NEW_ROOT)?;
-    mount(ROOT_DEVICE, NEW_ROOT, "ext4", libc::MS_NOATIME, "")?;
-
-    let run = format!("{NEW_ROOT}/run");
-    fs::create_dir_all(&run)?;
-    mount(
-        "tmpfs",
-        &run,
-        "tmpfs",
-        libc::MS_NOSUID | libc::MS_NODEV,
-        "mode=0755",
-    )?;
-    let boot = format!("{NEW_ROOT}{GUEST_BOOT_MOUNT}");
-    let old = format!("{NEW_ROOT}/run/clankerd/old");
-    fs::create_dir_all(&boot)?;
-    fs::create_dir_all(&old)?;
-    // pivot_root refuses shared mounts.
-    mount("", "/", "", libc::MS_REC | libc::MS_PRIVATE, "")?;
-    mount("/", &boot, "", libc::MS_BIND, "")?;
-    mount(
-        "",
-        &boot,
-        "",
-        libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY,
-        "",
-    )?;
-
-    let (new_c, old_c) = (cstr(Path::new(NEW_ROOT))?, cstr(Path::new(&old))?);
-    // SAFETY: pivot_root(2) takes two NUL-terminated paths.
-    if unsafe { libc::syscall(libc::SYS_pivot_root, new_c.as_ptr(), old_c.as_ptr()) } < 0 {
-        return Err(io::Error::other(format!(
-            "pivot_root: {}",
-            io::Error::last_os_error()
-        )));
-    }
-    std::env::set_current_dir("/")?;
-    let old_in_new = c"/run/clankerd/old";
-    // SAFETY: valid NUL-terminated path. The old root stays reachable through
-    // the bind mount above; guestd's own binary lives there, which the detached
-    // mount keeps alive until it exits.
-    if unsafe { libc::umount2(old_in_new.as_ptr(), libc::MNT_DETACH) } < 0 {
-        return Err(io::Error::other(format!(
-            "detaching the old root: {}",
-            io::Error::last_os_error()
-        )));
-    }
-    let _ = fs::remove_dir("/run/clankerd/old");
-    Ok(())
-}
-
 /// virtio-blk devices appear a moment after boot; `/dev` may also still need
 /// mounting if libkrun's init has not.
 /// Waits for a block device node to appear, mounting devtmpfs on /dev if the
@@ -233,7 +182,9 @@ pub fn wait_for_device(device: &Path, what: &str) -> io::Result<()> {
 /// mount point directories.
 fn mount_pseudo_filesystems() -> io::Result<()> {
     let nodev = libc::MS_NOSUID | libc::MS_NODEV;
-    let table: [(&str, &str, &str, libc::c_ulong, &str); 6] = [
+    let table: [(&str, &str, &str, libc::c_ulong, &str); 8] = [
+        ("tmpfs", "/run", "tmpfs", nodev, "mode=0755"),
+        ("tmpfs", "/tmp", "tmpfs", nodev, "mode=1777"),
         ("proc", "/proc", "proc", nodev | libc::MS_NOEXEC, ""),
         ("sysfs", "/sys", "sysfs", nodev | libc::MS_NOEXEC, ""),
         ("devtmpfs", "/dev", "devtmpfs", libc::MS_NOSUID, "mode=0755"),
@@ -255,7 +206,14 @@ fn mount_pseudo_filesystems() -> io::Result<()> {
     ];
     for (src, target, fstype, flags, data) in table {
         fs::create_dir_all(target)?;
-        mount(src, target, fstype, flags, data)?;
+        let inherited = fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+        if pseudo_mount_present(&inherited, target, fstype)? {
+            eprintln!("clankerd-guestd: reusing inherited {fstype} mount at {target}");
+        } else {
+            mount(src, target, fstype, flags, data).map_err(|error| {
+                io::Error::new(error.kind(), format!("{error}\nmountinfo:\n{inherited}"))
+            })?;
+        }
     }
     for (link, dest) in [
         ("/dev/ptmx", "pts/ptmx"),
@@ -270,9 +228,39 @@ fn mount_pseudo_filesystems() -> io::Result<()> {
     Ok(())
 }
 
+fn pseudo_mount_present(mountinfo: &str, target: &str, expected: &str) -> io::Result<bool> {
+    for line in mountinfo.lines().rev() {
+        let Some((left, right)) = line.split_once(" - ") else {
+            continue;
+        };
+        if left.split_whitespace().nth(4) != Some(target) {
+            continue;
+        }
+        let actual = right.split_whitespace().next().unwrap_or("");
+        if actual != expected {
+            return Err(io::Error::other(format!(
+                "inherited mount at {target} is {actual}, expected {expected}: {line}"
+            )));
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inherited_pseudo_mounts_are_reused_only_at_the_expected_type_and_path() {
+        let info = "20 1 0:3 / /sys rw,nosuid,nodev,noexec - sysfs sysfs rw\n21 1 0:4 / /dev rw - devtmpfs devtmpfs rw\n22 20 0:5 / /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n";
+        assert!(pseudo_mount_present(info, "/sys", "sysfs").unwrap());
+        assert!(pseudo_mount_present(info, "/dev", "devtmpfs").unwrap());
+        assert!(pseudo_mount_present(info, "/sys/fs/cgroup", "cgroup2").unwrap());
+        assert!(!pseudo_mount_present(info, "/proc", "proc").unwrap());
+        assert!(pseudo_mount_present(info, "/sys", "tmpfs").is_err());
+        assert!(!pseudo_mount_present(info, "/sys/fs", "sysfs").unwrap());
+    }
 
     #[test]
     fn every_available_controller_is_enabled_for_children() {

@@ -81,18 +81,10 @@ impl NativeShare {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_vmctl"))
+        Command::new(self.out.join("darwin-arm64/vmctl"))
             .args(args)
             .env("CLANKERD_STATE_DIR", self.dir.path().join("state"))
             .env("CLANKERD_RUNTIME_DIR", self.dir.path().join("run"))
-            .env(
-                "CLANKERD_VMSPAWN",
-                self.out.join("darwin-arm64/clankerd-vmspawn"),
-            )
-            .env(
-                "CLANKERD_GUESTD",
-                self.out.join("linux-arm64/clankerd-guestd"),
-            )
             .env_remove("CLANKERD_DEV_GUESTD")
             .env_remove("CLANKERD_VMSPAWN_DEV_LOCAL")
             .env_remove("CLANKERD_BOOT_DIR_ROOT")

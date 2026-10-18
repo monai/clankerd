@@ -1,6 +1,6 @@
 //! clankerd-guestd: guest-side agent. In this tracer bullet it runs the workload
 //! and serves `io.clankerd.Guest.Events` on a socket inherited via `LISTEN_FDS`
-//! (a unix socket standing in for vsock). Boot-level setup (pivot, mounts) comes later.
+//! (a unix socket standing in for vsock). Real VM boot uses the packaged guest management environment.
 //!
 //! Usage: `clankerd-guestd --config WORKLOAD.json [--exit-file PATH]
 //! [--vsock-port N] [--host-socket PATH | --host-vsock-port N]`
@@ -24,8 +24,8 @@
 //! An explicit Shutdown request ends the machine after delivering its result: it signals
 //! and reaps every process, syncs, unmounts and powers off (`power`).
 //!
-//! With `--boot` guestd first mounts the root disk (`/dev/vda`), pivots into
-//! it, mounts /proc, /sys, /dev and cgroup2, delegates cgroup controllers,
+//! With `--boot` guestd mounts the workload disk (`/dev/vda`), prepares a private
+//! workload root, mounts /proc, /sys, /dev and cgroup2, delegates cgroup controllers,
 //! sets the clock from the host and writes `/.clankerdenv` (`boot`).
 
 mod attach;
@@ -37,6 +37,7 @@ mod rootdisk;
 mod tunnel;
 mod unpack;
 mod vsock;
+mod workload_root;
 
 use std::io::BufReader;
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -89,15 +90,20 @@ struct Inner {
 }
 
 fn main() {
-    if std::env::args_os().next().is_some_and(|name| {
-        std::path::Path::new(&name)
-            .file_name()
-            .is_some_and(|name| name == "clankerd-guestd-network-hook")
-    }) {
-        if let Err(error) = network::hook::run() {
-            die(&format!("network hook: {error}"));
+    match std::env::args().nth(1).as_deref() {
+        Some("network-hook") => {
+            if let Err(error) = network::hook::run() {
+                die(&format!("network hook: {error}"));
+            }
+            return;
         }
-        return;
+        Some("namespace-keeper") => {
+            if let Err(error) = workload_root::keeper() {
+                die(&format!("namespace keeper: {error}"));
+            }
+            return;
+        }
+        _ => {}
     }
     let mut config = None;
     let mut exit_file = None;
@@ -139,15 +145,14 @@ fn main() {
 
     BOOTED.store(boot_root, std::sync::atomic::Ordering::Relaxed);
     if boot_root {
-        // Mount the root disk and pivot into it; from here on `/` is the
-        // image. The boot directory stays reachable at its guest mount point.
+        // Keep PID1 in management and prepare the workload's private root.
         if let Err(e) = boot::init(workload.as_ref().unwrap_or(&Workload::default())) {
             die(&e);
         }
     }
     let boot_dir = boot_dir.unwrap_or_else(|| {
         if boot_root {
-            PathBuf::from(clankerd_proto::spawn::GUEST_BOOT_MOUNT)
+            PathBuf::from("/")
         } else {
             std::env::current_exe()
                 .ok()
@@ -289,9 +294,10 @@ fn spawn_workload(w: &Workload, attach: &Arc<attach::Attach>) -> Result<std::pro
             cmd.env(k, v);
         }
     }
-    if !w.working_dir.is_empty() {
-        cmd.current_dir(&w.working_dir);
-    }
+    workload_root::configure(&mut cmd, &w.working_dir).map_err(|e| {
+        eprintln!("workload namespace: {e}");
+        126
+    })?;
     if let Some(user) = &user {
         user::drop_privileges(&mut cmd, user);
     }

@@ -106,14 +106,20 @@ pub fn lookup(spec: &str) -> Result<Option<Resolved>, String> {
     if spec.is_empty() {
         return Ok(None);
     }
-    let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
-    let group = std::fs::read_to_string("/etc/group").unwrap_or_default();
+    let passwd = crate::workload_root::account_path("passwd")
+        .and_then(std::fs::read_to_string)
+        .unwrap_or_default();
+    let group = crate::workload_root::account_path("group")
+        .and_then(std::fs::read_to_string)
+        .unwrap_or_default();
     resolve(spec, &passwd, &group).map(Some)
 }
 
 /// The home directory of root, for processes that run without a `-u`.
 pub fn root_home() -> Option<String> {
-    let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
+    let passwd = crate::workload_root::account_path("passwd")
+        .and_then(std::fs::read_to_string)
+        .unwrap_or_default();
     passwd_entries(&passwd)
         .find(|p| p.uid == 0)
         .map(|p| p.home.to_owned())

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 #[test]
 fn a_stable_attachment_recovers_helper_failure_without_changing_network_policy() {
     let directory = tempfile::tempdir().unwrap();
-    let helper = directory.path().join("vmnet-helper");
+    let helper = directory.path().join("clankerd-network");
     std::fs::write(&helper, r#"#!/usr/bin/env python3
 import json,os,socket,sys
 from pathlib import Path
@@ -123,7 +123,7 @@ while True:
 #[test]
 fn automatic_native_prefix_bounds_the_relay() {
     let directory = tempfile::tempdir().unwrap();
-    let helper = directory.path().join("vmnet-helper");
+    let helper = directory.path().join("clankerd-network");
     std::fs::write(&helper, r#"#!/usr/bin/env python3
 import socket,sys
 path=sys.argv[sys.argv.index('--socket')+1]

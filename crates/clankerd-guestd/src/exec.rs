@@ -337,9 +337,8 @@ impl ExecHandle {
         } else {
             &spec.working_dir
         };
-        if !cwd.is_empty() {
-            cmd.current_dir(cwd);
-        }
+        crate::workload_root::configure(&mut cmd, cwd)
+            .map_err(|e| (126, format!("workload namespace: {e}")))?;
 
         let tty = spec.tty;
         // SAFETY: only async-signal-safe libc calls between fork and exec.

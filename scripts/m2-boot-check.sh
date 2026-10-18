@@ -18,10 +18,9 @@
 #       first use, mounted at /storage), persistence across stop/start and
 #       volume retention, explicit volume removal, and a virtio-fs
 #       bind mount that is readable and writable from both sides.
-# net: boots IMAGE with vmnet-helper and checks DHCP, DNS, HTTPS and cleanup.
+# net: boots IMAGE with clankerd-network and checks DHCP, DNS, HTTPS and cleanup.
 set -euo pipefail
 
-export DYLD_FALLBACK_LIBRARY_PATH=${DYLD_FALLBACK_LIBRARY_PATH:-/opt/homebrew/lib:/usr/local/lib:/usr/lib}
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 mode=${1:-all}
@@ -41,7 +40,7 @@ cleanup() {
     done
     for machine_dir in "$CLANKERD_STATE_DIR"/machines/*; do
       [ -d "$machine_dir" ] || continue
-      for log_name in vmspawn-exit vmspawn.log console.log vmnet-helper.log; do
+      for log_name in vmspawn-exit vmspawn.log console.log clankerd-network.log; do
         [ -f "$machine_dir/$log_name" ] || continue
         printf '\n== %s\n' "$machine_dir/$log_name" >&2
         tail -n 60 "$machine_dir/$log_name" >&2
@@ -65,8 +64,8 @@ case "$mode" in boot | image | volume | net | all) ;; *) fail "usage: $0 [boot|i
 
 step "prerequisites"
 [ "$(uname -sm)" = "Darwin arm64" ] || fail "run this on the Apple Silicon Mac"
-for f in /opt/homebrew/lib/libkrun.1.dylib /opt/homebrew/lib/libkrunfw.5.dylib; do
-  [ -e "$f" ] || fail "$f missing: brew tap slp/krun && brew install libkrun (pulls in libkrunfw)"
+for f in "$out/darwin-arm64/lib/libkrun.1.dylib" "$out/darwin-arm64/lib/libkrunfw.5.dylib"; do
+  [ -e "$f" ] || fail "$f missing: run make build"
 done
 for f in "$vmctl" "$CLANKERD_VMSPAWN" "$CLANKERD_GUESTD"; do
   [ -x "$f" ] || fail "$f missing: run make rust"
@@ -134,7 +133,7 @@ wait_exec() { # name: until exec works (the machine is booted and guestd serves)
 seconds() { date +%s; }
 
 image_check() {
-  [ -x "$out/linux-arm64/mke2fs" ] || fail "$out/linux-arm64/mke2fs missing: run make rust (it builds e2fsprogs)"
+  [ -x "$out/linux-arm64/management/mke2fs" ] || fail "$out/linux-arm64/management/mke2fs missing: run make rust (it assembles the guest management environment)"
 
   step "pull $image"
   "$vmctl" pull "$image"
@@ -219,8 +218,8 @@ expect_volume_capacity() {
 }
 
 volume_check() {
-  [ -x "$out/linux-arm64/mke2fs" ] && [ -x "$out/linux-arm64/resize2fs" ] \
-    || fail "mke2fs/resize2fs missing in $out/linux-arm64: run make rust (it builds e2fsprogs)"
+  [ -x "$out/linux-arm64/management/mke2fs" ] && [ -x "$out/linux-arm64/management/resize2fs" ] \
+    || fail "mke2fs/resize2fs missing in $out/linux-arm64: run make rust (it assembles the guest management environment)"
 
   "$vmctl" pull "$image" >/dev/null
 
@@ -274,9 +273,16 @@ volume_check() {
 }
 
 net_check() {
-  step "net: boot IMAGE with a vmnet-helper sidecar"
+  step "net: boot IMAGE with a clankerd-network sidecar"
   "$vmctl" run -d --name net --entrypoint sleep "$image" infinity
   wait_exec net
+  # A usable IPv6 link can precede the independent DHCPv4/DNS negotiation.
+  acquired=0
+  for attempt in $(seq 1 30); do
+    if "$vmctl" exec net sh -c 'grep -q "^nameserver " /etc/resolv.conf && (ip -4 addr show eth0 || ifconfig eth0) | grep -Eq "inet (addr:)?[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+"' >/dev/null 2>&1; then acquired=1; break; fi
+    sleep 1
+  done
+  [ "$acquired" = 1 ] || fail "DHCPv4 and shared resolver were not available within 30s"
 
   step "net: eth0 got an IPv4 address by DHCP"
   "$vmctl" exec net sh -c 'ip -4 addr show eth0 || ifconfig eth0' | tee /dev/stderr | grep -Eq "inet (addr:)?[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" \
@@ -304,10 +310,10 @@ net_check() {
   step "net: forwarding sysctls are set"
   [ "$("$vmctl" exec net cat /proc/sys/net/ipv4/ip_forward)" = 1 ] || fail "net.ipv4.ip_forward is not 1"
 
-  step "net: vmnet-helper stops with the machine"
-  pgrep -f "vmnet-helper.*$state" >/dev/null || fail "no vmnet-helper sidecar is running"
+  step "net: clankerd-network stops with the machine"
+  pgrep -f "clankerd-network.*$state" >/dev/null || fail "no clankerd-network sidecar is running"
   "$vmctl" rm -f net >/dev/null
-  ! pgrep -f "vmnet-helper.*$state" >/dev/null || fail "vmnet-helper outlived its machine"
+  ! pgrep -f "clankerd-network.*$state" >/dev/null || fail "clankerd-network outlived its machine"
 }
 
 case "$mode" in

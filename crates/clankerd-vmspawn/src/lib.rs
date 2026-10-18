@@ -48,7 +48,7 @@ impl Hypervisor for Libkrun {
                 HOST_VSOCK_PORT.to_string(),
             ];
             if spec.root_disk.is_some() {
-                // Mount the root disk, pivot into it, then run the workload.
+                // Prepare the workload disk/root independently of guest management.
                 argv.push("--boot".into());
             }
             argv

@@ -1,6 +1,6 @@
 //! libkrun 1.19.x bindings and a single safe entry point, [`boot`].
 //!
-//! On macOS the crate links Homebrew's `libkrun` (see `build.rs`). Everywhere
+//! On macOS the crate links the artifact's bundled `libkrun` (see `build.rs`). Everywhere
 //! else [`boot`] fails with [`ErrorKind::Unsupported`], so the workspace builds
 //! and its tests run on Linux.
 //!
@@ -83,8 +83,8 @@ impl Error {
             return Error {
                 kind: ErrorKind::KernelLibraryMissing,
                 message: "libkrunfw (the guest kernel library) could not be loaded; \
-                          install it with `brew install libkrunfw`; if already installed, \
-                          check that DYLD_FALLBACK_LIBRARY_PATH includes /opt/homebrew/lib"
+                          rebuild the complete artifact with `make build` and keep its \
+                          darwin-arm64/lib directory beside clankerd-vmspawn"
                     .to_owned(),
             };
         }

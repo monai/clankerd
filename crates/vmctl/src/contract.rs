@@ -42,8 +42,8 @@ pub struct Cli {
     /// Guest init executable.
     #[arg(long, env = "CLANKERD_GUESTD", value_name = "PATH")]
     pub guestd: Option<PathBuf>,
-    /// Host networking helper executable.
-    #[arg(long, env = "CLANKERD_VMNET_HELPER", value_name = "PATH")]
+    /// Clankerd native networking executable.
+    #[arg(long, env = "CLANKERD_NETWORK", value_name = "PATH")]
     pub vmnet_helper: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Command,

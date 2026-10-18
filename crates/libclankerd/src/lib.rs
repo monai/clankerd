@@ -74,3 +74,5 @@ pub use vmspawn_populator::VmspawnPopulator;
 pub use volumes::{DEFAULT_SIZE as DEFAULT_VOLUME_SIZE, VolumeInfo};
 
 pub use networks::{NetworkKind, VirtualNetwork};
+
+mod guest_environment;

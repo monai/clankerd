@@ -34,6 +34,13 @@ fn tar_of(files: &[(&str, &[u8], u32)]) -> Vec<u8> {
 /// The directory the populator ships into the guest: guestd and mke2fs.
 fn guest_dir() -> tempfile::TempDir {
     let boot = boot_dir_with_mke2fs();
+    std::fs::create_dir_all(boot.path().join("management/sbin")).unwrap();
+    std::fs::copy(
+        common::tool("mke2fs"),
+        boot.path().join("management/sbin/mke2fs"),
+    )
+    .unwrap();
+    std::fs::write(boot.path().join("management/sbin/dhcpcd"), "fixture").unwrap();
     std::os::unix::fs::symlink(guestd_path(), boot.path().join("clankerd-guestd")).unwrap();
     boot
 }

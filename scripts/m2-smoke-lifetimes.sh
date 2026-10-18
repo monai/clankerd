@@ -9,12 +9,9 @@ work=$(mktemp -d /tmp/clankerd-lifetimes.XXXXXX)
 export CLANKERD_STATE_DIR=$work/state CLANKERD_RUNTIME_DIR=$work/run
 export VMNET_LIFETIME_CONTROL=$work
 export VMNET_TEST_REAL_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn
-export VMNET_TEST_LIBRARY_PATH=${DYLD_FALLBACK_LIBRARY_PATH:-/opt/homebrew/lib:/usr/local/lib:/usr/lib}
 export CLANKERD_VMSPAWN=$root/scripts/fixtures/vmnet-lifetimes.py
 export CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
-export CLANKERD_VMNET_HELPER=${CLANKERD_VMNET_HELPER:-/opt/vmnet-helper/bin/vmnet-helper}
 echo "Mac inherited open-file limits soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
-brew list --versions libkrun libkrunfw || true
 name=vmnet-lifetimes
 failed=0
 cleanup() {

@@ -109,7 +109,7 @@ diagnose() {
 step "prerequisites"
 if [ -z "${VMCTL:-}" ]; then
   [ "$(uname -sm)" = "Darwin arm64" ] || fail "run this on the Apple Silicon Mac"
-  for f in "$vmctl" "$CLANKERD_VMSPAWN" "$CLANKERD_GUESTD" "$out/linux-arm64/mke2fs"; do
+  for f in "$vmctl" "$CLANKERD_VMSPAWN" "$CLANKERD_GUESTD" "$out/linux-arm64/management/mke2fs"; do
     [ -x "$f" ] || fail "$f missing: run make rust"
   done
 fi
@@ -120,6 +120,7 @@ echo ok
 step "pull $image and $alt_image"
 "$vmctl" pull "$image"
 "$vmctl" pull "$alt_image"
+"$vmctl" image inspect "$image" "$alt_image"
 
 step "boot with a volume"
 "$vmctl" volume create --size 20G "$vol"
