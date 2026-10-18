@@ -13,8 +13,12 @@ variables = ('RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'MACOSX_DEPLOYMENT_TARGET',
 configuration = {name: os.environ.get(name) for name in variables}
 configuration.update({key: value for key, value in os.environ.items() if key.startswith(('CARGO_PROFILE_', 'CARGO_TARGET_'))})
 configuration['arguments'] = sys.argv[2:]
+environment = os.environ.copy()
+# These descriptors are closed by Python before the version probes execute.
+for name in ('MAKEFLAGS', 'MFLAGS', 'CARGO_MAKEFLAGS'):
+    environment.pop(name, None)
 for tool in ['rustc', 'cargo', 'zig', 'rcodesign']:
-    configuration[tool] = [shutil.which(tool), subprocess.check_output([tool, '--version' if tool != 'zig' else 'version'], text=True).strip()]
+    configuration[tool] = [shutil.which(tool), subprocess.check_output([tool, '--version' if tool != 'zig' else 'version'], text=True, env=environment).strip()]
 content = json.dumps(configuration, sort_keys=True) + '\n'
 path.parent.mkdir(parents=True, exist_ok=True)
 if not path.exists() or path.read_text() != content:

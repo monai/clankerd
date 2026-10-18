@@ -55,15 +55,10 @@ def observe(machine, path):
     assert '\nCapEff:\t0000000000000000' not in value['status'], value['status']
     (evidence / f'{machine}-observation.json').write_text(json.dumps(value, indent=2) + '\n')
     # The actual VMM must remain owned by this user, with bundled libraries.
-    processes = subprocess.check_output(['/bin/ps', '-axo', 'pid=,uid=,command='], text=True)
-    vms = [line.split(None, 2) for line in processes.splitlines()
-           if str(bundle / 'darwin-arm64/clankerd-vmspawn') + ' --spec ' in line]
-    assert vms and all(int(row[1]) == os.getuid() != 0 for row in vms), vms
-    for pid, _, _ in vms:
-        mappings = subprocess.check_output(['/usr/bin/vmmap', '-w', pid], text=True, stderr=subprocess.STDOUT)
-        (evidence / f'vmmap-{pid}.log').write_text(mappings)
-        assert '/opt/homebrew/' not in mappings and '/usr/local/Cellar/' not in mappings, mappings
-        assert str(bundle / 'darwin-arm64/lib/libkrun') in mappings, mappings
+    machine_info = json.loads(vm('inspect', machine))[0]
+    (evidence / f'{machine}-inspect.json').write_text(json.dumps(machine_info, indent=2) + '\n')
+    subprocess.run([sys.executable, str(root / 'accept-vm-process.py'),
+                    str(machine_info['state']['pid']), str(bundle), str(evidence)], check=True)
     return value
 
 try:

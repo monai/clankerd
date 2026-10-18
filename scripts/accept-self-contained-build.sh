@@ -38,7 +38,7 @@ git diff HEAD -- crates scripts Makefile build-support > "$evidence/worktree.dif
 printf 'extern int krun_create_ctx(void); int main(void) { return krun_create_ctx(); }\n' \
   | xcrun clang -arch arm64 -x c - -L crates/libkrun-sys/stubs -lkrun \
       -o "$evidence/libkrun-stub-check"
-python3 -m unittest scripts.tests.test_build_graph
+python3 -m unittest scripts.tests.test_build_graph scripts.tests.test_accept_vm_process
 make -j"${BUILD_JOBS:-4}" build
 python3 scripts/artifact-tree.py check build/rust
 cp -R build/rust/. "$evidence/bundle"

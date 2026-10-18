@@ -79,7 +79,9 @@ class ArtifactGraph(unittest.TestCase):
 import os,sys,struct
 from pathlib import Path
 args=sys.argv
-if '--version' in args: print('fixture cargo'); sys.exit(0)
+if '--version' in args:
+ assert not any(name in os.environ for name in ('MAKEFLAGS', 'MFLAGS', 'CARGO_MAKEFLAGS'))
+ print('fixture cargo'); sys.exit(0)
 kind='guest' if 'aarch64-unknown-linux-musl' in args else 'host'
 assert not any(name in os.environ for name in ('MAKEFLAGS', 'MFLAGS', 'CARGO_MAKEFLAGS'))
 if kind=='host':

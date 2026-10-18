@@ -101,3 +101,20 @@ Actual Apple linker and VM acceptance still require the native script run.
 Validation: all 31 Python tests, shell syntax, Rust formatting, and the signed
 ARM64 cross-build/import audit passed. Both vmctl and clankerd-vmspawn import
 `@rpath/liblzma.5.dylib` from the pinned bundle.
+
+## Management process evidence follow-up
+
+The next macOS 15 acceptance run passed native stub linking, all eight graph
+checks, compilation, signing, import closure, vmctl execution, and the guest
+management namespace/DHCP checks. The host process check then found no command
+matching the long bundle path in `ps` output. That check depended on unbounded
+command text without requesting wide output; the captured failure did not
+include the process listing needed to confirm truncation.
+
+Acceptance now selects the VMM PID from `vmctl inspect`, checks that exact PID's
+numeric owner, and verifies its executable and bundled libraries with `vmmap`.
+It preserves inspect, owner, and mapping evidence before assertions. Regression
+checks cover a long bundle path, root ownership rejection, and Homebrew import
+rejection, and run in the same Mac entrypoint. Tool version probes also clear
+stale Make jobserver variables; the graph fixture reproduces that environment
+failure before the fix. Full native acceptance still requires a Mac run.
