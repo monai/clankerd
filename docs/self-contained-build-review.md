@@ -23,7 +23,7 @@ concurrent edit. Later bundle replacement cannot alter that authorized session.
 | Finding | Resolution |
 | --- | --- |
 | Password entry consumed the attachment's ten-second readiness deadline | Authorization completes synchronously before native startup timing begins. The Mac runner exercises first use without warming sudo credentials, and replacement after revoking those credentials. |
-| Native execution cannot be established on the Linux host | Kept explicitly pending; the consolidated Mac runner builds, relocates and exercises the production artifact, without the experiment's management overlay or installed helper. |
+| Native execution cannot be established on the Linux host | Resolved by the consolidated native PASS recorded below; the Mac runner builds, relocates and exercises the production artifact without the experiment's management overlay or installed helper. |
 
 No remaining concrete implementation defect was reported in the reviewed
 changes. This does not substitute for native acceptance.
@@ -39,7 +39,7 @@ and unrelated untracked image files were retained.
 - Full `make test`: 356 Rust tests pass (7 native tests ignored), including the updated VMM/population/CLI
   fixtures; native-only tests remain ignored on Linux. Privilege-gated paths
   do not establish actual VM observations.
-- Python suite: 31 tests pass. Make graph behavior, controller prior-art contracts and Rust
+- Python suite: 43 tests pass after the acceptance follow-ups. Make graph behavior, controller prior-art contracts and Rust
   runner tests pass. The graph suite covers legacy publication, source additions/
   removals, changed binary declarations, corrupt/bad hashes, missing outputs,
   failed signing, interruption and concurrent invocations.
@@ -61,9 +61,19 @@ mise exec -- bash scripts/accept-self-contained-build.sh
 
 The runner retains `result.json`, management observations, loaded-library maps,
 input/image identities and gate logs beneath `build/acceptance-<UTC timestamp>`.
-Networking/PF, authorization, actual guest privilege and mount behavior, storage,
-Docker/Compose and relocation are **pending native execution**. Sleep/wake and
-external IPv6 remain unverified unless observed separately.
+The user supplied a consolidated **PASS (exit 0)** on macOS 15.8.1 (24H32),
+Apple Silicon, for `build/acceptance-20261018T164230Z`. The full evidence is
+retained on the Mac at:
+
+`/Users/juozas/projects/agent/clankerd/build/acceptance-20261018T164230Z`
+
+All preparation checks, management, native bind semantics, boot, command-system,
+native-prefix/PF lifecycle, lifetimes, recovery, and Docker smoke passed in that
+single run. This records the user's terminal evidence; the agent did not read
+the Mac's evidence files directly. Earlier pending notes below describe the
+chronological debugging history and are superseded by this consolidated result.
+Sleep/wake, independent LAN-peer coverage, and external IPv6 remain unverified
+unless observed separately.
 
 ## Separate findings
 

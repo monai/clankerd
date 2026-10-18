@@ -99,10 +99,11 @@ Cargo, the SDK and diagnostic tools are build/test prerequisites, not runtime
 artifact dependencies.
 
 Linux cross-builds establish assembly, linking and signing, not Apple API
-behavior. Native authorization, packet transport, VM boot and the integrated
-acceptance matrix remain unverified until this script runs on the Mac. Existing
-experiment evidence is not acceptance of this implementation. Host sleep/wake
-and external IPv6 remain unverified unless actually exercised.
+behavior. The complete native matrix passed on Apple Silicon macOS 15.8.1 in
+`build/acceptance-20261018T164230Z`, as reported by the user. See
+[self-contained-build-review.md](self-contained-build-review.md) for the retained
+Mac evidence location and covered gates. Host sleep/wake, independent LAN-peer
+coverage, and external IPv6 remain unverified unless actually exercised.
 
 Native gate output is saved in each gate's log. The terminal shows compact
 numbered progress and gate results; `ACCEPTANCE_VERBOSE=1` also streams full output.
