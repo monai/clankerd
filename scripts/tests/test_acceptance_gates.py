@@ -15,7 +15,7 @@ class BootGate(unittest.TestCase):
             tools.mkdir()
             out = work / 'bundle'
             for name in ['darwin-arm64/lib/libkrun.1.dylib', 'darwin-arm64/lib/libkrunfw.5.dylib',
-                         'darwin-arm64/clankerd-vmspawn', 'linux-arm64/clankerd-guestd']:
+                         'darwin-arm64/clankerd-vmspawn', 'linux-arm64/management/usr/sbin/clankerd-guestd']:
                 path = out / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.touch()
@@ -108,41 +108,32 @@ class ScriptSnapshot(unittest.TestCase):
                         process.communicate()
 
 
-class NetworkGate(unittest.TestCase):
-    def test_removal_checks_only_the_removed_machines_recorded_sidecar(self):
-        source = (ROOT / 'scripts/m2-boot-check.sh').read_text()
-        start = source.index('  step "net: clankerd-network stops with the machine"')
-        end = source.index('\n}', start)
-        with tempfile.TemporaryDirectory() as directory:
-            work = Path(directory)
-            (work / 'state/machines/target').mkdir(parents=True)
-            # Keep a real unrelated process alive, as other boot gate machines are.
-            with subprocess.Popen(['sleep', '10']) as helper, subprocess.Popen(['sleep', '10']) as unrelated:
-                try:
-                    (work / 'state/machines/target/net.pid').write_text(str(helper.pid))
-                    vmctl = work / 'vmctl'
-                    vmctl.write_text('''#!/bin/sh
-case "$1" in
- inspect) echo '[{"id":"target"}]';;
- rm) kill "$TARGET_PID";;
-esac
-''')
-                    vmctl.chmod(0o755)
-                    tools = work / 'tools'
-                    tools.mkdir()
-                    # The old broad pgrep also finds unrelated machines in this state directory.
-                    (tools / 'pgrep').write_text('#!/bin/sh\nexit 0\n')
-                    (tools / 'pgrep').chmod(0o755)
-                    snippet = 'set -euo pipefail\nstep() { :; }\nfail() { echo "$*"; exit 1; }\n' + 'net_check() {\n' + source[start:end] + '\n}\nnet_check\n'
-                    result = subprocess.run(['bash', '-c', snippet],
-                        env=dict(os.environ, vmctl=str(vmctl), state=str(work),
-                                 CLANKERD_STATE_DIR=str(work / 'state'), TARGET_PID=str(helper.pid),
-                                 PATH=str(tools)+os.pathsep+os.environ['PATH']),
-                        text=True, capture_output=True, timeout=10)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertIsNone(unrelated.poll())
-                finally:
-                    helper.terminate()
-                    helper.wait()
-                    unrelated.terminate()
-                    unrelated.wait()
+class NetworkProcessLifecycle(unittest.TestCase):
+    def test_only_the_recorded_pid_lifecycle_controls_completion(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('network_stopped', ROOT / 'scripts/check-network-stopped.py')
+        checker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        with subprocess.Popen(['sleep', '10']) as target, subprocess.Popen(['sleep', '10']) as unrelated:
+            try:
+                with self.assertRaisesRegex(RuntimeError, 'outlived'):
+                    checker.verify(target.pid, timeout=0)
+                target.terminate()
+                checker.verify(target.pid, timeout=2)
+                target.wait()
+                checker.verify(target.pid, timeout=0)
+                self.assertIsNone(unrelated.poll())
+            finally:
+                target.terminate()
+                target.wait()
+                unrelated.terminate()
+                unrelated.wait()
+
+    def test_missing_or_system_pid_cannot_authorize_the_check(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('network_stopped', ROOT / 'scripts/check-network-stopped.py')
+        checker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        for pid in [-1, 0, 1]:
+            with self.subTest(pid=pid), self.assertRaises(ValueError):
+                checker.verify(pid)

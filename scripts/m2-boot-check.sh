@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Real boots on the M2 (tickets 03, 05 and 09). Run on the Mac after `make rust`.
+# Real boots on the M2 (tickets 03, 05 and 09). Run on the Mac after `make build`.
 # See docs/libkrun-first-boot.md. Exits non-zero on the first failed check.
 #
 #   scripts/m2-boot-check.sh [boot|image|volume|net|all]   (default: all)
@@ -28,7 +28,7 @@ out=${OUT:-$root/build/rust}
 image=${IMAGE:-ghcr.io/monai/clankers:slim}
 vmctl=$out/darwin-arm64/vmctl
 export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn
-export CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
+export CLANKERD_GUEST_ROOT=$out/linux-arm64/management
 state=$(mktemp -d /tmp/clankerd-boot-check.XXXXXX)
 export CLANKERD_STATE_DIR=$state/state
 export CLANKERD_RUNTIME_DIR=$state/run
@@ -67,17 +67,17 @@ step "prerequisites"
 for f in "$out/darwin-arm64/lib/libkrun.1.dylib" "$out/darwin-arm64/lib/libkrunfw.5.dylib"; do
   [ -e "$f" ] || fail "$f missing: run make build"
 done
-for f in "$vmctl" "$CLANKERD_VMSPAWN" "$CLANKERD_GUESTD"; do
-  [ -x "$f" ] || fail "$f missing: run make rust"
+for f in "$vmctl" "$CLANKERD_VMSPAWN" "$CLANKERD_GUEST_ROOT/usr/sbin/clankerd-guestd"; do
+  [ -x "$f" ] || fail "$f missing: run make build"
 done
 codesign -d --entitlements - "$CLANKERD_VMSPAWN" 2>&1 | grep -q com.apple.security.hypervisor \
-  || fail "clankerd-vmspawn lacks the hypervisor entitlement: run make rust-sign"
+  || fail "clankerd-vmspawn lacks the hypervisor entitlement: run make build"
 echo ok
 
 boot_check() {
   step "boot: exit code 2 must round-trip from the guest (boot directory as root)"
   set +e
-  CLANKERD_BOOT_DIR_ROOT=true "$vmctl" run --name boot-check boot-dir /clankerd-guestd --nope
+  CLANKERD_BOOT_DIR_ROOT=true "$vmctl" run --name boot-check boot-dir /usr/sbin/clankerd-guestd --nope
   local code=$?
   set -e
   echo "vmctl exit code: $code"
@@ -135,7 +135,7 @@ wait_exec() { # name: until exec works (the machine is booted and guestd serves)
 seconds() { date +%s; }
 
 image_check() {
-  [ -x "$out/linux-arm64/management/mke2fs" ] || fail "$out/linux-arm64/management/mke2fs missing: run make rust (it assembles the guest management environment)"
+  [ -x "$out/linux-arm64/management/sbin/mke2fs" ] || fail "$out/linux-arm64/management/sbin/mke2fs missing: run make build (it assembles the guest management environment)"
 
   step "pull $image"
   "$vmctl" pull "$image"
@@ -220,8 +220,8 @@ expect_volume_capacity() {
 }
 
 volume_check() {
-  [ -x "$out/linux-arm64/management/mke2fs" ] && [ -x "$out/linux-arm64/management/resize2fs" ] \
-    || fail "mke2fs/resize2fs missing in $out/linux-arm64: run make rust (it assembles the guest management environment)"
+  [ -x "$out/linux-arm64/management/sbin/mke2fs" ] && [ -x "$out/linux-arm64/management/usr/sbin/resize2fs" ] \
+    || fail "mke2fs/resize2fs missing in $out/linux-arm64: run make build (it assembles the guest management environment)"
 
   "$vmctl" pull "$image" >/dev/null
 
@@ -319,22 +319,7 @@ net_check() {
   kill -0 "$helper_pid" 2>/dev/null || fail "recorded clankerd-network sidecar is not running"
   "$vmctl" rm -f net >/dev/null
   # Other machines in this gate retain their own sidecars. Check only net's PID.
-  python3 - "$helper_pid" <<'PYSTOPPED'
-import subprocess, sys, time
-pid = sys.argv[1]
-deadline = time.monotonic() + 5
-while True:
-    process = subprocess.run(['/bin/ps', '-ww', '-p', pid, '-o', 'pid=,uid=,stat=,command='],
-                             text=True, capture_output=True)
-    rows = [line.split(None, 3) for line in process.stdout.splitlines() if line.strip()]
-    if not rows or all(row[2].startswith('Z') for row in rows):
-        print('PASS removed machine network sidecar stopped (PID ' + pid + ')')
-        break
-    if time.monotonic() >= deadline:
-        print('FAIL: removed machine network sidecar outlived its machine: ' + process.stdout.strip(), file=sys.stderr)
-        sys.exit(1)
-    time.sleep(.1)
-PYSTOPPED
+  python3 "$root/scripts/check-network-stopped.py" "$helper_pid"
 }
 
 case "$mode" in

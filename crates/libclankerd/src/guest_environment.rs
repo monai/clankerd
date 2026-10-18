@@ -1,15 +1,29 @@
 //! Place the complete guest management environment in each virtio-fs boot root.
 use crate::{Error, Result};
+use std::os::unix::fs::PermissionsExt;
 use std::{fs, path::Path};
 pub(crate) fn place(source: &Path, target: &Path) -> Result<()> {
-    let management = source.join("management");
-    if !management.join("sbin/dhcpcd").is_file() || !management.join("sbin/mke2fs").is_file() {
-        return Err(Error::unavailable(format!(
-            "guest management environment missing in {}; run make build",
-            source.display()
-        )));
+    let management = source;
+    for required in [
+        "sbin/mke2fs",
+        "sbin/dhcpcd",
+        "usr/sbin/resize2fs",
+        "usr/sbin/clankerd-guestd",
+    ] {
+        if !management.join(required).is_file()
+            || fs::metadata(management.join(required))?
+                .permissions()
+                .mode()
+                & 0o111
+                == 0
+        {
+            return Err(Error::unavailable(format!(
+                "management filesystem missing {required} in {}; run make build",
+                management.display()
+            )));
+        }
     }
-    copy_tree(&management, target)
+    copy_tree(management, target)
 }
 fn copy_tree(source: &Path, target: &Path) -> Result<()> {
     fs::create_dir_all(target)?;

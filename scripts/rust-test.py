@@ -51,7 +51,7 @@ def linux_required(system):
 @contextmanager
 def linux_test_environment(env):
     names = ("mke2fs", "e2fsck", "resize2fs", "debugfs")
-    explicit = env.get("CLANKERD_TEST_BOOT_DIR")
+    explicit = env.get("CLANKERD_TEST_TOOLS")
     paths = {}
     for name in names:
         if explicit:
@@ -64,19 +64,19 @@ def linux_test_environment(env):
         path = next((path.absolute() for path in candidates
                      if path.is_file() and os.access(path, os.X_OK)), None)
         if path is None:
-            location = f" in CLANKERD_TEST_BOOT_DIR={explicit}" if explicit else " on this host"
+            location = f" in CLANKERD_TEST_TOOLS={explicit}" if explicit else " on this host"
             raise RuntimeError(f"Linux tests require executable {name}{location}. "
-                               "Install native e2fsprogs or set CLANKERD_TEST_BOOT_DIR "
+                               "Install native e2fsprogs or set CLANKERD_TEST_TOOLS "
                                "to a directory containing mke2fs, e2fsck, resize2fs and debugfs.")
         paths[name] = path
     directories = {path.parent for path in paths.values()}
     if len(directories) == 1:
-        yield dict(env, CLANKERD_TEST_BOOT_DIR=str(directories.pop()))
+        yield dict(env, CLANKERD_TEST_TOOLS=str(directories.pop()))
     else:
         with tempfile.TemporaryDirectory(prefix="clankerd-test-tools-") as directory:
             for name, path in paths.items():
                 (Path(directory) / name).symlink_to(path)
-            yield dict(env, CLANKERD_TEST_BOOT_DIR=directory)
+            yield dict(env, CLANKERD_TEST_TOOLS=directory)
 
 
 def coverage(env):
@@ -130,7 +130,7 @@ def main(operation, system=None):
             coverage(test_env)
     elif operation == "test-native":
         if system != "Darwin":
-            raise RuntimeError("Native VM tests require Apple Silicon macOS and signed helpers from make rust")
+            raise RuntimeError("Native VM tests require Apple Silicon macOS and signed helpers from make build")
         bundle = Path(env.get("OUT", env.get("RUST_OUT", str(ROOT / "build/rust"))))
         if not bundle.is_absolute():
             bundle = ROOT / bundle
@@ -138,7 +138,6 @@ def main(operation, system=None):
         subprocess.run(["make", "build"],
                        cwd=ROOT, env=env, check=True)
         env["OUT"] = env["RUST_OUT"]
-        env["DYLD_LIBRARY_PATH"] = str(bundle / "darwin-arm64/lib")
         cargo("test", "--locked", "-p", "vmctl", "--test", "native_bind_semantics",
               "--", "--ignored", "--test-threads=1", env=env)
     elif operation == "lint":
@@ -153,7 +152,7 @@ def main(operation, system=None):
                 cargo("test", "--locked", "--workspace", env=prebuild(test_env))
         else:
             bundle = Path(env.get("RUST_OUT", str(ROOT / "build/rust"))).resolve()
-            env = dict(env, DYLD_LIBRARY_PATH=str(bundle / "darwin-arm64/lib"))
+            env = dict(env, OUT=str(bundle))
             print("Running native Mac unit and host-only integration checks; Linux guest suite: make test-linux.", flush=True)
             cargo("test", "--locked", "--workspace", "--exclude", "clankerd-guestd", "--lib", "--bins", env=env)
             for package, tests in (("clankerd-proto", ["spawn"]), ("libkrun-sys", ["errors"]),

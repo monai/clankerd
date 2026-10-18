@@ -163,7 +163,7 @@ fn with_the_libkrun_backend_run_pulls_the_image_and_needs_the_guest_boot_directo
     reg.push("test/app", "v1", &[registry::layer(&[("hello", b"hi")])]);
     // No dev stand-in: vmctl is configured for the real helper. The directory
     // holding guestd lacks the management environment, so the base disk cannot be built, which is
-    // exactly what a half-built `make rust` output looks like.
+    // exactly what a half-built `make build` output looks like.
     let boot = cli.root().join("linux-arm64");
     std::fs::create_dir(&boot).unwrap();
     std::fs::copy(&cli.guestd, boot.join("clankerd-guestd")).unwrap();
@@ -174,13 +174,13 @@ fn with_the_libkrun_backend_run_pulls_the_image_and_needs_the_guest_boot_directo
         .env("CLANKERD_CACHE_DIR", cli.root().join("cache"))
         .env("CLANKERD_INSECURE_REGISTRIES", &reg.addr)
         .env("CLANKERD_VMSPAWN", "/no/such/clankerd-vmspawn")
-        .env("CLANKERD_GUESTD", boot.join("clankerd-guestd"))
+        .env("CLANKERD_GUEST_ROOT", &boot)
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let err = text(&out.stderr);
     assert!(
-        err.contains("guest management environment") && err.contains("make build"),
+        err.contains("management filesystem") && err.contains("make build"),
         "{err}"
     );
     // The image was pulled on the way.

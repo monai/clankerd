@@ -2,7 +2,7 @@
 //! pivoted into the root disk (`--boot`).
 //!
 //! A volume is a sparse raw ext4 file the host attached as a block device. It
-//! is formatted here when blank (static `mke2fs` from the boot directory, so no
+//! is formatted here when blank (packaged `sbin/mke2fs` from the management filesystem, so no
 //! ext4 tools are needed on the Mac), grown with `resize2fs` when the host's
 //! desired size exceeds the filesystem, and mounted where the configuration
 //! says. Bind mounts are virtio-fs shares mounted by tag.
@@ -97,7 +97,7 @@ pub fn format_if_blank(tools: &Path, device: &Path) -> Result<bool, String> {
         ));
     }
     let ctx = Ctx {
-        boot_dir: tools.to_path_buf(),
+        management_root: Some(tools.to_path_buf()),
         populate_mode: false,
         populated: Default::default(),
         lenient: false,
@@ -122,10 +122,10 @@ pub fn grow_if_needed(tools: &Path, device: &Path, want: u64) -> Result<bool, St
             device.display()
         ));
     }
-    let resize2fs = tools.join("resize2fs");
+    let resize2fs = tools.join("usr/sbin/resize2fs");
     if !resize2fs.exists() {
         return Err(format!(
-            "{} not found (the boot directory must ship resize2fs)",
+            "{} not found (the management filesystem must contain usr/sbin/resize2fs)",
             resize2fs.display()
         ));
     }
@@ -184,7 +184,7 @@ mod tests {
     const MIB: u64 = 1 << 20;
 
     fn host_tool(name: &str) -> Option<PathBuf> {
-        if let Some(dir) = std::env::var_os("CLANKERD_TEST_BOOT_DIR") {
+        if let Some(dir) = std::env::var_os("CLANKERD_TEST_TOOLS") {
             let path = Path::new(&dir).join(name);
             return path.exists().then_some(path);
         }
@@ -203,7 +203,14 @@ mod tests {
                 eprintln!("\nSKIPPED {test}: {name} (e2fsprogs) is not installed");
                 return None;
             };
-            symlink(src, dir.path().join(name)).unwrap();
+            let relative = if name == "mke2fs" {
+                "sbin/mke2fs"
+            } else {
+                "usr/sbin/resize2fs"
+            };
+            let destination = dir.path().join(relative);
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            symlink(src, destination).unwrap();
         }
         Some(dir)
     }

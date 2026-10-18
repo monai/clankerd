@@ -7,7 +7,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 out=${OUT:-$root/build/rust}
 vmctl=$out/darwin-arm64/vmctl
 export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn
-export CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
+export CLANKERD_GUEST_ROOT=$out/linux-arm64/management
 work=$(mktemp -d /tmp/clankerd-shared.XXXXXX)
 export CLANKERD_STATE_DIR=$work/state
 export CLANKERD_RUNTIME_DIR=$work/run
@@ -69,8 +69,7 @@ peer_access shared-isolated shared-a blocked
 python3 - "$work/shared-isolated.json" <<'PY'
 import json,sys
 config=json.load(open(sys.argv[1]))[0]['host_config']
-assert config['shared_peer_participation'] is False
-assert config['shared_network']=={'address':'192.168.105.0','prefix_len':24}
+assert config['virtual_network']=='singleton'
 print('PASS persisted selected network and isolation after restart')
 PY
 for name in shared-a shared-b shared-isolated shared-separate; do "$vmctl" stop "$name"; done

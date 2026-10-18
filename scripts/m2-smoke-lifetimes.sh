@@ -10,7 +10,7 @@ export CLANKERD_STATE_DIR=$work/state CLANKERD_RUNTIME_DIR=$work/run
 export VMNET_LIFETIME_CONTROL=$work
 export VMNET_TEST_REAL_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn
 export CLANKERD_VMSPAWN=$root/scripts/fixtures/vmnet-lifetimes.py
-export CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
+export CLANKERD_GUEST_ROOT=$out/linux-arm64/management
 echo "Mac inherited open-file limits soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
 name=vmnet-lifetimes
 failed=0

@@ -76,7 +76,7 @@ impl<R: Read> Read for TarStreamReader<R> {
     }
 }
 
-/// `FormatExt4 { device, size?, label? }` -> `{}`. Runs the static mke2fs from the boot directory.
+/// `FormatExt4 { device, size?, label? }` -> `{}`. Runs packaged sbin/mke2fs from the management filesystem.
 pub const METHOD_FORMAT_EXT4: &str = "io.clankerd.Guest.FormatExt4";
 /// `UnpackTar { target }` + tar stream -> `UnpackSummary`. Unpacks into an existing directory.
 pub const METHOD_UNPACK_TAR: &str = "io.clankerd.Guest.UnpackTar";

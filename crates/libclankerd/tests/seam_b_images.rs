@@ -36,7 +36,7 @@ fn guestd_unpack(tar: &Path, target: &Path, lenient: bool) -> UnpackSummary {
     let listener = UnixListener::bind(&socket).unwrap();
     let fd = listener.as_raw_fd();
     let mut cmd = Command::new(guestd_path());
-    cmd.args(["--populate", "--boot-dir", "/nonexistent"])
+    cmd.args(["--populate", "--management-root", "/nonexistent"])
         .env("LISTEN_FDS", "1")
         .stdin(Stdio::null());
     if lenient {

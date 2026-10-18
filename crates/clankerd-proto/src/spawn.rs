@@ -26,16 +26,13 @@ pub const GUEST_VSOCK_PORT: u32 = 1024;
 pub const HOST_VSOCK_PORT: u32 = 1025;
 
 /// Files in the boot directory (the guest's root over virtio-fs).
-pub const BOOT_GUESTD: &str = "clankerd-guestd";
-pub const BOOT_WORKLOAD: &str = "workload.json";
+pub const BOOT_GUESTD: &str = "usr/sbin/clankerd-guestd";
+pub const BOOT_WORKLOAD: &str = "etc/clankerd/workload.json";
 
 /// Where the root disk shows up in the guest: the first virtio-blk device.
 pub const ROOT_DEVICE: &str = "/dev/vda";
-/// Where guestd keeps the boot directory inside the machine after it pivoted
-/// into the root disk (it holds the static e2fsprogs binaries).
-pub const GUEST_BOOT_MOUNT: &str = "/run/clankerd/boot";
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpawnSpec {
     /// Host directory served as the guest root; holds guestd and its workload.
     pub boot_dir: PathBuf,
@@ -54,7 +51,7 @@ pub struct SpawnSpec {
     pub memory_mib: u32,
     /// Raw ext4 image attached as the guest's first block device
     /// ([`ROOT_DEVICE`]). With `populate` it is the blank disk to fill;
-    /// otherwise guestd mounts it and pivots into it.
+    /// otherwise guestd mounts it for the workload's private root.
     #[serde(default)]
     pub root_disk: Option<PathBuf>,
     /// Population boot: guestd runs without a workload and serves only the
@@ -62,11 +59,7 @@ pub struct SpawnSpec {
     #[serde(default)]
     pub populate: bool,
     /// Raw ext4 volumes in attachment order, following the optional root disk.
-    #[serde(
-        default,
-        alias = "volume_disk",
-        deserialize_with = "deserialize_volume_disks"
-    )]
+    #[serde(default)]
     pub volume_disks: Vec<PathBuf>,
     /// Host directories shared into the guest over virtio-fs.
     #[serde(default)]
@@ -107,20 +100,4 @@ pub struct NetDevice {
     pub features: u32,
     /// Send the vfkit magic when connecting (gvproxy `-listen-vfkit`).
     pub vfkit: bool,
-}
-
-// Accept specs written before volumes became a collection.
-fn deserialize_volume_disks<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Vec<PathBuf>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Disks {
-        Many(Vec<PathBuf>),
-        One(Option<PathBuf>),
-    }
-    Ok(match Disks::deserialize(deserializer)? {
-        Disks::Many(disks) => disks,
-        Disks::One(disk) => disk.into_iter().collect(),
-    })
 }

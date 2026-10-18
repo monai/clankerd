@@ -13,7 +13,7 @@ struct vmpktdesc { size_t vm_pkt_size; struct iovec *vm_pkt_iov; uint32_t vm_pkt
 #define VMNET_BRIDGED_MODE 1002
 extern const char *vmnet_operation_mode_key, *vmnet_interface_id_key, *vmnet_start_address_key,
     *vmnet_end_address_key, *vmnet_subnet_mask_key, *vmnet_nat66_prefix_key,
-    *vmnet_shared_interface_name_key, *vmnet_enable_isolation_key,
+    *vmnet_shared_interface_name_key,
     *vmnet_mac_address_key, *vmnet_mtu_key, *vmnet_max_packet_size_key;
 interface_ref vmnet_start_interface(xpc_object_t, dispatch_queue_t, void (^)(vmnet_return_t, xpc_object_t));
 vmnet_return_t vmnet_stop_interface(interface_ref, dispatch_queue_t, void (^)(vmnet_return_t));

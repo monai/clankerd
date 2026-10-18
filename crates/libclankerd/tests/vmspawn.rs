@@ -17,7 +17,7 @@ use libclankerd::vmm::VmspawnVmm;
 use libclankerd::{ErrorKind, Status};
 
 fn dev_vmm() -> Arc<VmspawnVmm> {
-    Arc::new(VmspawnVmm::new(vmspawn_path(), guestd_path()).dev_local())
+    Arc::new(VmspawnVmm::new(vmspawn_path(), guest_root()).dev_local())
 }
 
 fn script(dir: &Path, body: &str) -> PathBuf {
@@ -79,7 +79,7 @@ fn missing_bundled_libkrun_fails_fast_with_rebuild_instructions() {
         env.root(),
         "echo 'dyld[42]: Library not loaded: @rpath/libkrun.1.dylib' >&2; exit 1",
     );
-    let vmm = Arc::new(VmspawnVmm::new(fake, guestd_path()).dev_local());
+    let vmm = Arc::new(VmspawnVmm::new(fake, guest_root()).dev_local());
     let mut cfg = env.config(vmm);
     cfg.start_timeout = Duration::from_secs(20);
     let engine = libclankerd::Engine::new(cfg).unwrap();
@@ -108,7 +108,7 @@ fn helper_failure_text_reaches_the_caller() {
         "echo 'clankerd-vmspawn: the hypervisor entitlement is missing: sign it' >&2; exit 1",
     );
     let engine = libclankerd::Engine::new(
-        env.config(Arc::new(VmspawnVmm::new(fake, guestd_path()).dev_local())),
+        env.config(Arc::new(VmspawnVmm::new(fake, guest_root()).dev_local())),
     )
     .unwrap();
     let m = create(&engine, "noent", "exit 0");
@@ -125,7 +125,7 @@ fn a_silent_workload_helper_crash_preserves_its_signal() {
     let env = Env::new();
     let fake = script(env.root(), "kill -TERM $$");
     let engine = libclankerd::Engine::new(
-        env.config(Arc::new(VmspawnVmm::new(fake, guestd_path()).dev_local())),
+        env.config(Arc::new(VmspawnVmm::new(fake, guest_root()).dev_local())),
     )
     .unwrap();
     let m = create(&engine, "silent", "exit 0");
@@ -158,7 +158,7 @@ fn guest_console_errors_explain_a_helper_that_exits_successfully() {
         "echo 'clankerd-guestd: mount ext4 /dev/vda: Invalid argument' > \"$(dirname \"$2\")/console.log\"; exit 0",
     );
     let engine = libclankerd::Engine::new(
-        env.config(Arc::new(VmspawnVmm::new(fake, guestd_path()).dev_local())),
+        env.config(Arc::new(VmspawnVmm::new(fake, guest_root()).dev_local())),
     )
     .unwrap();
     let m = create(&engine, "guest-failed", "exit 0");
@@ -176,7 +176,7 @@ fn stale_libkrun_listener_is_removed_before_the_next_helper_starts() {
     let env = Env::new();
     let fake = script(env.root(), "exit 1");
     let engine = libclankerd::Engine::new(
-        env.config(Arc::new(VmspawnVmm::new(&fake, guestd_path()).dev_local())),
+        env.config(Arc::new(VmspawnVmm::new(&fake, guest_root()).dev_local())),
     )
     .unwrap();
     let machine = create(&engine, "restart", "sleep 60");
@@ -203,13 +203,35 @@ fn the_real_helper_off_macos_explains_it_cannot_boot() {
     let guest = env.root().join("guest");
     std::fs::create_dir_all(guest.join("management/sbin")).unwrap();
     for tool in ["mke2fs", "dhcpcd"] {
-        std::fs::write(guest.join("management/sbin").join(tool), "fixture").unwrap();
+        std::fs::write(
+            guest.join("management/sbin").join(tool),
+            "#!/bin/sh\nexit 0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            guest.join("management/sbin").join(tool),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
     }
-    std::fs::copy(guestd_path(), guest.join("clankerd-guestd")).unwrap();
-    let vmm = Arc::new(VmspawnVmm::new(
-        vmspawn_path(),
-        guest.join("clankerd-guestd"),
-    ));
+    std::fs::create_dir_all(guest.join("management/usr/sbin")).unwrap();
+    std::fs::write(
+        guest.join("management/usr/sbin/resize2fs"),
+        "#!/bin/sh\nexit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        guest.join("management/usr/sbin/resize2fs"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    std::fs::copy(
+        guestd_path(),
+        guest.join("management/usr/sbin/clankerd-guestd"),
+    )
+    .unwrap();
+
+    let vmm = Arc::new(VmspawnVmm::new(vmspawn_path(), guest.join("management")));
     let engine = libclankerd::Engine::new(env.config(vmm)).unwrap();
     let m = create(&engine, "linux", "exit 0");
     let err = m.start().unwrap_err();
@@ -313,13 +335,7 @@ fn helper_protocol_preserves_semantics_and_access_independently() {
 #[test]
 fn the_helper_receives_all_volume_disks_in_mount_order() {
     let env = Env::new();
-    let tools = env.root().join("tools");
-    std::fs::create_dir(&tools).unwrap();
-    std::fs::copy(guestd_path(), tools.join("clankerd-guestd")).unwrap();
-    for name in ["mke2fs", "resize2fs"] {
-        std::fs::copy(common::tool(name), tools.join(name)).unwrap();
-    }
-    let vmm = Arc::new(VmspawnVmm::new(vmspawn_path(), tools.join("clankerd-guestd")).dev_local());
+    let vmm = Arc::new(VmspawnVmm::new(vmspawn_path(), guest_root()).dev_local());
     let engine = libclankerd::Engine::new(env.config(vmm)).unwrap();
     let machine = engine
         .create(
@@ -626,7 +642,7 @@ fn helper_descriptor_capacity_is_raised_within_its_inherited_hard_limit_only() {
     let native = vmspawn_path();
     std::fs::write(&wrapper, format!("#!/usr/bin/env python3\nimport os,resource,sys\nresource.setrlimit(resource.RLIMIT_NOFILE,(64,512))\nos.execv({native:?},[{native:?},*sys.argv[1:]])\n", native=native.to_string_lossy())).unwrap();
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let vmm = Arc::new(VmspawnVmm::new(wrapper, guestd_path()).dev_local());
+    let vmm = Arc::new(VmspawnVmm::new(wrapper, guest_root()).dev_local());
     let engine = libclankerd::Engine::new(env.config(vmm)).unwrap();
     let observed = env.root().join("child-limits");
     let machine = create(

@@ -370,7 +370,7 @@ impl Engine {
                     )));
                 }
             }
-            networks.assign(&mut host_config, &id)?;
+            networks.assign(&mut host_config)?;
             let volumes = self.volume_store();
             new_volumes = crate::mount::ensure_volume(&volumes, &host_config.mounts)?;
             let record = Record {

@@ -6,7 +6,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-use clankerd_proto::spawn::{BOOT_GUESTD, BOOT_WORKLOAD, NetDevice, SpawnSpec};
+use clankerd_proto::spawn::{BOOT_WORKLOAD, NetDevice, SpawnSpec};
 
 use super::{BootHandle, BootSpec, Vmm};
 use crate::error::{Error, Result};
@@ -26,17 +26,16 @@ const DEFAULT_MEMORY: u64 = 1024 * 1024 * 1024;
 #[derive(Debug, Clone)]
 pub struct VmspawnVmm {
     vmspawn: PathBuf,
-    guestd: PathBuf,
+    guest_root: PathBuf,
     dev_local: bool,
 }
 
 impl VmspawnVmm {
-    /// `vmspawn` is the helper binary; `guestd` the static aarch64 Linux
-    /// clankerd-guestd that becomes PID 1 in the guest.
-    pub fn new(vmspawn: impl Into<PathBuf>, guestd: impl Into<PathBuf>) -> Self {
+    /// `vmspawn` is the host launcher; `guest_root` is the complete management filesystem.
+    pub fn new(vmspawn: impl Into<PathBuf>, guest_root: impl Into<PathBuf>) -> Self {
         VmspawnVmm {
             vmspawn: vmspawn.into(),
-            guestd: guestd.into(),
+            guest_root: guest_root.into(),
             dev_local: false,
         }
     }
@@ -50,21 +49,8 @@ impl VmspawnVmm {
 
     fn prepare_boot_dir(&self, boot: &Path, spec: &BootSpec) -> Result<()> {
         fs::create_dir_all(boot)?;
-        let target = boot.join(BOOT_GUESTD);
-        let _ = fs::remove_file(&target);
-        // virtio-fs cannot follow links out of the shared directory, so the
-        // binary has to be a real file here.
-        if fs::hard_link(&self.guestd, &target).is_err() {
-            fs::copy(&self.guestd, &target).map_err(|e| {
-                Error::unavailable(format!(
-                    "cannot place clankerd-guestd ({}) in the boot directory: {e}",
-                    self.guestd.display()
-                ))
-            })?;
-        }
-        if !self.dev_local {
-            crate::guest_environment::place(self.guestd.parent().unwrap_or(Path::new(".")), boot)?;
-        }
+        crate::guest_environment::place(&self.guest_root, boot)?;
+        fs::create_dir_all(boot.join("etc/clankerd"))?;
         fs::write(
             boot.join(BOOT_WORKLOAD),
             serde_json::to_vec(&spec.workload)?,

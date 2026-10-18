@@ -235,7 +235,7 @@ use clankerd_proto::rootdisk::{
 use std::process::Command;
 
 fn tool(name: &str) -> String {
-    std::env::var_os("CLANKERD_TEST_BOOT_DIR")
+    std::env::var_os("CLANKERD_TEST_TOOLS")
         .map(|dir| PathBuf::from(dir).join(name).to_string_lossy().into_owned())
         .into_iter()
         .chain(

@@ -11,7 +11,7 @@ fn missing_hypervisor_entitlement_names_the_entitlement_and_the_fix() {
     assert_eq!(e.kind(), ErrorKind::EntitlementMissing);
     let msg = e.to_string();
     assert!(msg.contains("com.apple.security.hypervisor"), "{msg}");
-    assert!(msg.contains("make rust-sign"), "{msg}");
+    assert!(msg.contains("make build"), "{msg}");
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn other_libkrun_failures_name_the_call_and_errno() {
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn booting_is_unsupported_off_macos() {
-    let cfg = libkrun_sys::BootConfig::new("/boot", "/clankerd-guestd");
+    let cfg = libkrun_sys::BootConfig::new("/boot", "/usr/sbin/clankerd-guestd");
     let e = libkrun_sys::boot(&cfg).unwrap_err();
     assert_eq!(e.kind(), ErrorKind::Unsupported);
     assert!(e.to_string().contains("macOS"), "{e}");

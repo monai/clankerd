@@ -9,6 +9,8 @@ archive, destination = map(Path, sys.argv[1:])
 destination.mkdir(parents=True)
 with tarfile.open(archive) as source:
     for member in source:
+        if member.name.startswith('/') or '..' in member.name.split('/'):
+            raise ValueError('archive member must remain inside the guest root: ' + member.name)
         # APK metadata and scripts are evidence, never host-executed code.
         # Alpine tar paths begin './'; APK control members begin '.'.
         if member.name.startswith('.') and not member.name.startswith('./') and member.name != '.':

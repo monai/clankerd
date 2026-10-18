@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The prototype's end-to-end smoke test (ticket 10): Docker inside a clankerd
 # machine, driven only through the vmctl CLI. Run on the Apple Silicon Mac
-# after `make rust`, with the slim image changes applied
+# after `make build`, with the slim image changes applied
 # (docs/docker-in-machine.md). Exits non-zero on the first failed check, and
 # always removes its machines and volume. Not run in CI (GitHub's macOS
 # runners cannot run VMs); a self-hosted runner can call it as is.
@@ -37,7 +37,7 @@ if [ -n "${VMCTL:-}" ]; then
 else
   vmctl=$out/darwin-arm64/vmctl
   export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn
-  export CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
+  export CLANKERD_GUEST_ROOT=$out/linux-arm64/management
 fi
 state=$(mktemp -d "${TMPDIR:-/tmp}/clankerd-smoke.XXXXXX")
 export CLANKERD_STATE_DIR=$state/state
@@ -114,8 +114,8 @@ diagnose() {
 step "prerequisites"
 if [ -z "${VMCTL:-}" ]; then
   [ "$(uname -sm)" = "Darwin arm64" ] || fail "run this on the Apple Silicon Mac"
-  for f in "$vmctl" "$CLANKERD_VMSPAWN" "$CLANKERD_GUESTD" "$out/linux-arm64/management/mke2fs"; do
-    [ -x "$f" ] || fail "$f missing: run make rust"
+  for f in "$vmctl" "$CLANKERD_VMSPAWN" "$CLANKERD_GUEST_ROOT/usr/sbin/clankerd-guestd" "$out/linux-arm64/management/sbin/mke2fs"; do
+    [ -x "$f" ] || fail "$f missing: run make build"
   done
 fi
 command -v curl >/dev/null || fail "curl is required on the host"

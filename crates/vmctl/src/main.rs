@@ -62,26 +62,20 @@ fn engine(cli: &Cli) -> Result<Engine, Error> {
     }
     if let Some(guestd) = &cli.dev_guestd {
         cfg.vmm = Arc::new(LocalProcessVmm::new(guestd));
-        let boot_dir = cli
-            .boot_dir
-            .clone()
-            .or_else(|| guestd.parent().map(PathBuf::from))
-            .unwrap_or_default();
-        cfg.populator = Some(Arc::new(LocalGuestdPopulator::new(guestd, boot_dir)));
+        if let Some(root) = &cli.guest_root {
+            cfg.populator = Some(Arc::new(LocalGuestdPopulator::new(guestd, root)));
+        }
     } else if cfg!(target_os = "macos") || cli.vmspawn.is_some() {
         let vmspawn = cli
             .vmspawn
             .clone()
-            .unwrap_or_else(|| sibling("clankerd-vmspawn", &["."]));
-        let guestd = cli
-            .guestd
+            .unwrap_or_else(|| sibling("clankerd-vmspawn"));
+        let guest_root = cli
+            .guest_root
             .clone()
-            .unwrap_or_else(|| sibling("clankerd-guestd", &[".", "../linux-arm64"]));
-        // Base root disks are built by a population boot of the same helper;
-        // mke2fs and the other static tools sit next to guestd.
-        let guest_dir = guestd.parent().map(PathBuf::from).unwrap_or_default();
-        let mut populator = VmspawnPopulator::new(&vmspawn, guest_dir);
-        let mut vmm = VmspawnVmm::new(vmspawn, guestd);
+            .unwrap_or_else(|| sibling("../linux-arm64/management"));
+        let mut populator = VmspawnPopulator::new(&vmspawn, &guest_root);
+        let mut vmm = VmspawnVmm::new(vmspawn, guest_root);
         // Development: CLANKERD_VMSPAWN_DEV_LOCAL=1 runs guestd as a local process, not a VM.
         if dev_local {
             vmm = vmm.dev_local();
@@ -90,7 +84,7 @@ fn engine(cli: &Cli) -> Result<Engine, Error> {
         cfg.vmm = Arc::new(vmm);
         cfg.populator = Some(Arc::new(populator));
         if !dev_local && !cli.boot_dir_root {
-            cfg.net = Some(Arc::new(match &cli.vmnet_helper {
+            cfg.net = Some(Arc::new(match &cli.network_executable {
                 Some(binary) => VmnetBackend::new(binary),
                 None => VmnetBackend::default(),
             }));
@@ -99,20 +93,13 @@ fn engine(cli: &Cli) -> Result<Engine, Error> {
     Engine::new(cfg)
 }
 
-/// Looks for `name` in directories relative to this executable; returns the
-/// first candidate path (existing or not) so errors name a concrete path.
-fn sibling(name: &str, dirs: &[&str]) -> PathBuf {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(PathBuf::from))
-        .unwrap_or_default();
-    let candidates: Vec<PathBuf> = dirs.iter().map(|d| exe_dir.join(d).join(name)).collect();
-    candidates
-        .iter()
-        .find(|p| p.exists())
-        .or(candidates.first())
-        .cloned()
-        .unwrap_or_else(|| PathBuf::from(name))
+/// Resolve one artifact-relative executable path; no host or former-layout search.
+fn sibling(relative: &str) -> PathBuf {
+    std::env::current_exe()
+        .expect("current executable path")
+        .parent()
+        .expect("executable directory")
+        .join(relative)
 }
 
 fn create(engine: &Engine, a: CreateArgs) -> Result<libclankerd::Machine, Error> {

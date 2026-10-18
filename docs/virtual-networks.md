@@ -16,8 +16,7 @@ vmctl network rm team
 ```
 
 Modes are `shared` and `host-only`. Omit `--subnet` to allocate an unused /24
-from 192.168.64.0/24 through 192.168.254.0/24, reserving 105 and 128 for legacy
-defaults. Allocation checks overlapping managed resources and persisted machines
+from 192.168.64.0/24 through 192.168.254.0/24. Allocation checks overlapping managed resources and persisted machines
 under the same state directory. Native network conflicts with other applications
 or independent state directories remain native setup failures; there is no
 fallback to a different network after creation.
@@ -42,9 +41,10 @@ while any persisted machine belongs to it, including a stopped machine. Resource
 remain until explicitly removed; failed machine creation may leave an allocated
 resource for inspection/removal.
 
-A singleton virtual network provides individual machine isolation. Existing persisted records remain readable; the CLI does not silently migrate or readdress them. Explicit stopped updates select canonical membership.
+A singleton virtual network provides individual machine isolation. Create a
+network and assign only that machine; there is no per-machine peer opt-out flag.
 
-Active native attachments register with the installed host PF controller before
+Active native attachments register with the bundled native PF controller before
 the workload starts. It marks packets by their incoming native bridge and blocks
 them from leaving through another managed network's bridge. Members on the same
 bridge can communicate. Traffic terminating on the Mac and traffic leaving via
@@ -52,34 +52,26 @@ the Mac's physical Internet interface do not cross this boundary. Canonical
 host-only members use native host mode without per-interface isolation.
 
 The Mac host and its administrator are trusted. The policy assumes the host
-retains the installed rules and does not install conflicting rules or states.
+retains the active rules and does not install conflicting rules or states.
 Clankerd does not monitor or undo deliberate host firewall changes. To run a
 controlled PF experiment, `CLANKERD_NETWORK_PF=off` explicitly disables registration;
 this override also disables the production isolation guarantee.
 
-New explicitly created shared networks also persist a randomly allocated ULA /64
-in `ipv6_prefix`; canonical member configuration copies it to
-`shared_ipv6_prefix`. The backend requests this prefix and requires the native
-metadata to acknowledge it before booting the workload. Prefix selection remains
-stable across machine restarts. Host-only resources have no global IPv6 prefix;
-implicit legacy mode/subnet resources retain native automatic prefix selection
-for existing common-network interoperability. Existing records with a null or
-absent prefix are not silently readdressed.
+All shared networks persist a ULA /64 in `ipv6_prefix`, including resources
+created implicitly for a mode/subnet selection. Member configuration copies it
+to `shared_ipv6_prefix`. The bundled attachment requests that prefix and must
+acknowledge it before workload startup; restart retains it. Host-only resources
+have no global IPv6 prefix.
 
-The prefix-capable helper is built from checksum-pinned upstream 0.13.0 plus the
-reviewable patch in `scripts/patches/vmnet-helper-nat66-prefix.patch`.
-`scripts/m2-install-and-run-network-gates.sh` installs it root-owned at
-`/opt/clankerd/libexec/vmnet-helper` and the PF controller at
-`/opt/clankerd/libexec/clankerd-network-pf`, with a dedicated sudoers entry, then
-runs the consolidated gates. The controller uses Apple's `/usr/bin/python3` in
-isolated mode, checked by the installer. The upstream `/opt/vmnet-helper` installation is unchanged.
-The backend prefers the clankerd helper when installed; an explicit
-`CLANKERD_VMNET_HELPER` selection remains authoritative.
+The bundled `clankerd-network` uses Apple's vmnet APIs and owns PF operations.
+Ordinary sudo authorization starts a runtime-owned authorization session; the
+VM and Ethernet transport remain unprivileged. No system helper, installer,
+sudoers entry or alternate controller is supported. `--network-executable PATH`
+(or `CLANKERD_NETWORK`) selects an explicit executable for development.
 
 The VMM-owned relay rejects IPv4 sources outside the selected guest subnet and
 IPv6 sources outside the actual native-advertised ULA /64 or link-local scope.
-Automatic legacy shared prefixes are read from native metadata without changing
-the persisted resource's addressing. Host-only attachments permit link-local IPv6
+Native metadata must match the selected resource's persisted prefix. Host-only attachments permit link-local IPv6
 and its bootstrap traffic, without accepting foreign global IPv6 sources.
 Bootstrap DAD, router solicitation and MLD reports remain permitted. These checks
 reject foreign-prefix state spoofing before host PF lookup.
@@ -104,7 +96,7 @@ rules and releases any reference acquired by that registration. A failed referen
 release retains a registry entry so cleanup can retry. Failed cleanup is reported and can leave restrictive
 rules until the next operation reconciles the registry.
 
-The native-prefix gate now checks the installed controller with actual routed
+The native-prefix gate now checks the bundled controller with actual routed
 IPv4/IPv6 TCP/UDP traffic, same-network controls, Mac access, NAT, member stop,
 restart and final cleanup. These checks passed in Mac suite
 `/tmp/clankerd-network-gates.M9Cztl`. The host-only gate now additionally verifies

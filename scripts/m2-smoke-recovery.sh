@@ -8,7 +8,7 @@ out=${OUT:-$root/build/rust}
 vmctl=$out/darwin-arm64/vmctl
 export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn
 export CLANKERD_NET_DIAGNOSTICS=1
-export CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
+export CLANKERD_GUEST_ROOT=$out/linux-arm64/management
 work=$(mktemp -d /tmp/clankerd-recovery.XXXXXX)
 export CLANKERD_STATE_DIR=$work/state CLANKERD_RUNTIME_DIR=$work/run
 name=vmnet-recovery

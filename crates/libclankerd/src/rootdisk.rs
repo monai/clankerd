@@ -4,7 +4,7 @@
 //! The host never formats or unpacks anything itself. A [`DiskPopulator`] boots
 //! clankerd-guestd against a blank disk (a *population boot*), streams it the
 //! merged tar over the protocol and lets guestd format the disk with the
-//! shipped static mke2fs and unpack the tar with real Linux semantics.
+//! packaged mke2fs and unpack the tar with real Linux semantics.
 //!
 //! * [`LocalGuestdPopulator`]: the Linux stand-in; guestd runs as a local
 //!   process (as root, since it mounts) with a unix socket for vsock.
@@ -46,7 +46,7 @@ pub struct LocalGuestdPopulator {
 }
 
 impl LocalGuestdPopulator {
-    /// `boot_dir` holds the static e2fsprogs binaries (mke2fs).
+    /// `boot_dir` holds the packaged e2fsprogs binaries (mke2fs).
     pub fn new(guestd: impl Into<PathBuf>, boot_dir: impl Into<PathBuf>) -> Self {
         LocalGuestdPopulator {
             guestd: guestd.into(),
@@ -70,7 +70,7 @@ impl DiskPopulator for LocalGuestdPopulator {
         let fd = listener.as_raw_fd();
         let mut cmd = Command::new(&self.guestd);
         cmd.arg("--populate")
-            .arg("--boot-dir")
+            .arg("--management-root")
             .arg(&self.boot_dir)
             .env("LISTEN_FDS", "1")
             .stdin(Stdio::null());

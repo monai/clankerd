@@ -128,36 +128,6 @@ fn concurrent_engines_allocate_distinct_subnets_and_duplicate_names_conflict() {
 }
 
 #[test]
-fn legacy_peer_opt_out_allocates_a_singleton_network_instead_of_reusing_the_subnet() {
-    let env = Env::new();
-    let engine = Engine::new(env.config(std::sync::Arc::new(
-        libclankerd::vmm::LocalProcessVmm::new(guestd_path()),
-    )))
-    .unwrap();
-    let a = engine
-        .create(Some("plain"), sh("true"), Default::default())
-        .unwrap();
-    let b = engine
-        .create(
-            Some("singleton"),
-            sh("true"),
-            libclankerd::HostConfig {
-                shared_peer_participation: false,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    let a = a.inspect().unwrap().host_config;
-    let b = b.inspect().unwrap().host_config;
-    assert_ne!(a.virtual_network, b.virtual_network);
-    assert_ne!(a.shared_network, b.shared_network);
-    assert!(
-        b.shared_peer_participation,
-        "no per-member veto in canonical model"
-    );
-}
-
-#[test]
 fn implicit_network_names_cannot_change_requested_mode_or_subnet() {
     let env = Env::new();
     let engine = Engine::new(env.config(std::sync::Arc::new(
@@ -179,27 +149,6 @@ fn implicit_network_names_cannot_change_requested_mode_or_subnet() {
             .kind(),
         ErrorKind::Conflict
     );
-}
-
-#[test]
-fn repeated_legacy_singleton_updates_preserve_membership() {
-    let env = Env::new();
-    let engine = Engine::new(env.config(std::sync::Arc::new(
-        libclankerd::vmm::LocalProcessVmm::new(guestd_path()),
-    )))
-    .unwrap();
-    let machine = engine
-        .create(Some("member"), sh("true"), Default::default())
-        .unwrap();
-    let host = libclankerd::HostConfig {
-        shared_peer_participation: false,
-        ..Default::default()
-    };
-    let config = machine.inspect().unwrap().config;
-    machine.update(&config, host.clone()).unwrap();
-    let first = machine.inspect().unwrap().host_config;
-    machine.update(&config, host).unwrap();
-    assert_eq!(machine.inspect().unwrap().host_config, first);
 }
 
 #[test]
@@ -285,4 +234,63 @@ fn shared_prefixes_persist_follow_membership_and_are_distinct() {
             .ipv6_prefix
             .is_none()
     );
+}
+
+#[test]
+fn shared_resources_always_own_a_stable_prefix_and_host_only_resources_do_not() {
+    let env = Env::new();
+    let engine = Engine::new(env.config(std::sync::Arc::new(
+        libclankerd::vmm::LocalProcessVmm::new(guestd_path()),
+    )))
+    .unwrap();
+    for (name, kind) in [
+        ("example-shared", NetworkKind::Shared),
+        ("example-host", NetworkKind::HostOnly),
+    ] {
+        let network = engine.create_network(name, kind, None).unwrap();
+        match kind {
+            NetworkKind::Shared => {
+                let prefix = network.ipv6_prefix.unwrap();
+                assert_eq!(prefix.octets()[0], 0xfd);
+                assert_eq!(u128::from(prefix) & u128::from(u64::MAX), 0);
+            }
+            NetworkKind::HostOnly => assert_eq!(network.ipv6_prefix, None),
+        }
+        assert_eq!(engine.inspect_network(name).unwrap(), network);
+    }
+    let machine = engine
+        .create(Some("example-default"), sh("true"), Default::default())
+        .unwrap();
+    assert!(
+        machine
+            .inspect()
+            .unwrap()
+            .host_config
+            .shared_ipv6_prefix
+            .is_some()
+    );
+}
+
+#[test]
+fn persisted_networks_reject_prefixes_inconsistent_with_their_mode() {
+    for (kind, prefix) in [
+        (NetworkKind::Shared, serde_json::Value::Null),
+        (NetworkKind::Shared, serde_json::json!("2001:db8::")),
+        (NetworkKind::Shared, serde_json::json!("fd00::1")),
+        (NetworkKind::HostOnly, serde_json::json!("fd00::")),
+    ] {
+        let env = Env::new();
+        let engine = Engine::new(env.config(std::sync::Arc::new(
+            libclankerd::vmm::LocalProcessVmm::new(guestd_path()),
+        )))
+        .unwrap();
+        engine.create_network("example", kind, None).unwrap();
+        let path = env.root().join("state/networks/example.json");
+        let mut record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        record["ipv6_prefix"] = prefix;
+        std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+        assert!(engine.inspect_network("example").is_err());
+        assert!(engine.networks().is_err());
+    }
 }

@@ -1,7 +1,9 @@
 # Self-contained artifact
 
 Run `mise install`, then `mise exec -- make -j4 build`. Python 3.12+ is a build
-prerequisite. Apple Silicon macOS builds require Apple's command-line SDK;
+prerequisite. `pkg-config` is a build tool prerequisite for linking the locked
+host liblzma; its absence fails configuration rather than selecting a source
+build. Apple Silicon macOS builds require Apple's command-line SDK;
 Linux ARM64 and x86_64 cross-builds use the repository's SDK link declarations
 and Zig. Cargo owns all clankerd Rust code. The only C compilation is clankerd's
 own Apple vmnet transport, checked against Apple's headers on native builds.
@@ -139,3 +141,24 @@ original logs. An optional evidence-directory argument selects an older run.
 Gate timeout isolation uses a separate process group in the authorizing
 terminal session, so cached sudo authorization remains available to the
 native-prefix gate's noninteractive diagnostic and fixture commands.
+
+## Current artifact and interface contract
+
+`linux-arm64/management` is the sole guest management filesystem. Guestd lives
+at `usr/sbin/clankerd-guestd`; distribution tools retain `sbin/` and `usr/sbin/`
+paths. Runtime configuration is `etc/clankerd/workload.json`. No executable or
+tool alias is placed at the filesystem root, and no standalone guestd copy is
+published under `linux-arm64`.
+
+`--guest-root DIR` / `CLANKERD_GUEST_ROOT` selects that complete filesystem.
+`--network-executable PATH` / `CLANKERD_NETWORK` selects the native transport.
+The build and runtime accept their current contracts only: no flat tool layout,
+old CLI names, scalar-volume decoder, peer-opt-out adapter, implicit automatic
+shared prefix, installed helper/controller, Make aliases or artifact-directory
+migration is retained. Existing unrelated output directories are rejected.
+Shared networks always persist their ULA /64; native readiness reports the
+transport PID and must acknowledge that prefix before workload startup.
+
+The earlier native PASS is baseline evidence. This cleanup changes runtime
+interfaces and requires a fresh consolidated Mac run; see the current
+[contract review](self-contained-build-review.md).

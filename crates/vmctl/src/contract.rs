@@ -28,10 +28,6 @@ pub struct Cli {
         value_delimiter = ','
     )]
     pub insecure_registries: Vec<String>,
-    /// Development: directory with the static e2fsprogs (mke2fs); defaults to
-    /// the directory of --dev-guestd.
-    #[arg(long, env = "CLANKERD_BOOT_DIR", hide = true)]
-    pub boot_dir: Option<PathBuf>,
     /// Boot the machine's `boot/` directory as the guest root instead of an
     /// image's root disk (the first-boot check of docs/libkrun-first-boot.md).
     #[arg(long, env = "CLANKERD_BOOT_DIR_ROOT", hide = true)]
@@ -39,12 +35,12 @@ pub struct Cli {
     /// Machine launcher executable.
     #[arg(long, env = "CLANKERD_VMSPAWN", value_name = "PATH")]
     pub vmspawn: Option<PathBuf>,
-    /// Guest init executable.
-    #[arg(long, env = "CLANKERD_GUESTD", value_name = "PATH")]
-    pub guestd: Option<PathBuf>,
+    /// Complete guest management filesystem.
+    #[arg(long, env = "CLANKERD_GUEST_ROOT", value_name = "DIR")]
+    pub guest_root: Option<PathBuf>,
     /// Clankerd native networking executable.
     #[arg(long, env = "CLANKERD_NETWORK", value_name = "PATH")]
-    pub vmnet_helper: Option<PathBuf>,
+    pub network_executable: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -287,7 +283,6 @@ impl HostArgs {
             host.bridge_interface = Some(interface.clone());
             host.shared_network = SharedNetwork::default();
             host.shared_ipv6_prefix = None;
-            host.shared_peer_participation = true;
         }
         if let Some(value) = self.cpus {
             host.cpus = Some(value);
@@ -530,7 +525,9 @@ fn decorate(mut command: clap::Command, depth: usize) -> clap::Command {
             };
             let group = if depth == 0 {
                 match arg.get_id().as_str() {
-                    "vmspawn" | "guestd" | "vmnet_helper" => "Executable overrides (global)",
+                    "vmspawn" | "guest_root" | "network_executable" => {
+                        "Executable overrides (global)"
+                    }
                     _ => "Global options",
                 }
             } else {

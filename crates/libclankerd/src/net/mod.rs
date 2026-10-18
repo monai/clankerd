@@ -20,10 +20,10 @@ pub use vmnet::VmnetBackend;
 
 /// What a backend needs to run one machine's sidecar.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NetSpec {
     pub machine_id: String,
     /// Stable resource identity, independent of names, state paths and native addressing.
-    #[serde(default)]
     pub network_id: Option<String>,
     pub host_config: crate::HostConfig,
     /// The machine's state directory (pid file, sidecar log).

@@ -1,5 +1,5 @@
 //! Seam A: the network sidecar. The only fakes are the `Vmm` (guestd as a
-//! local process) and the vmnet-helper binary (a shell script that makes its socket
+//! local process) and the native attachment executable (a shell script that makes its socket
 //! and waits to be signalled, like the real one).
 
 mod common;
@@ -25,9 +25,9 @@ done
 echo $$ > "$0.pid"
 echo 'INFO starting interface' >&2
 if [ -n "$prefix" ]; then
-  printf '{"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514,"vmnet_nat66_prefix":"%s"}\n' "$prefix"
+  printf '{"pid":%s,"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514,"vmnet_nat66_prefix":"%s"}\n' "$$" "$prefix"
 else
-echo '{"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514}'
+printf '{"pid":%s,"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514}\n' "$$"
 fi
 : > "$sock"
 trap 'rm -f "$sock"; exit 0' TERM
@@ -226,7 +226,7 @@ fn the_vmspawn_helper_is_told_to_attach_the_nic() {
     let env = Env::new();
     let helper = script(env.root(), FAKE_VMNET);
     let mut cfg = env.config(Arc::new(
-        libclankerd::vmm::VmspawnVmm::new(vmspawn_path(), guestd_path()).dev_local(),
+        libclankerd::vmm::VmspawnVmm::new(vmspawn_path(), guest_root()).dev_local(),
     ));
     cfg.net = Some(Arc::new(VmnetBackend::new(&helper)));
     let engine = Engine::new(cfg).unwrap();
@@ -381,7 +381,6 @@ fn bridged_network_requires_an_explicit_physical_interface() {
         serde_json::json!({"network_mode":"bridged","bridge_interface":""}),
         serde_json::json!({"network_mode":"bridged","bridge_interface":"../en0"}),
         serde_json::json!({"network_mode":"shared","bridge_interface":"en0"}),
-        serde_json::json!({"network_mode":"bridged","bridge_interface":"en0","shared_peer_participation":false}),
         serde_json::json!({"network_mode":"bridged","bridge_interface":"en0","shared_network":{"address":"192.168.109.0","prefix_len":24}}),
     ] {
         let host: HostConfig = serde_json::from_value(config).unwrap();
@@ -397,11 +396,10 @@ fn bridged_network_requires_an_explicit_physical_interface() {
 }
 
 #[test]
-fn singleton_membership_and_selected_network_are_preserved_until_the_next_restart() {
+fn selected_network_changes_apply_only_after_stopping() {
     let rig = rig(FAKE_VMNET);
     let host: HostConfig = serde_json::from_value(serde_json::json!({
-        "shared_network":{"address":"192.168.109.0","prefix_len":24},
-        "shared_peer_participation":false
+        "shared_network":{"address":"192.168.109.0","prefix_len":24}
     }))
     .unwrap();
     let machine = rig
@@ -416,7 +414,7 @@ fn singleton_membership_and_selected_network_are_preserved_until_the_next_restar
     let args = rig.args();
     let before = machine.inspect().unwrap();
     assert!(before.host_config.virtual_network.is_some());
-    assert_ne!(
+    assert_eq!(
         before.host_config.shared_network.address.to_string(),
         "192.168.109.0"
     );
@@ -433,8 +431,7 @@ fn singleton_membership_and_selected_network_are_preserved_until_the_next_restar
         "membership replaces per-member isolation"
     );
     let next: HostConfig = serde_json::from_value(serde_json::json!({
-        "shared_network":{"address":"192.168.110.0","prefix_len":25},
-        "shared_peer_participation":true
+        "shared_network":{"address":"192.168.110.0","prefix_len":25}
     }))
     .unwrap();
     assert_eq!(
@@ -480,7 +477,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 echo 'INFO starting interface' >&2
-echo '{"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514}'
+printf '{"pid":%s,"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514}\n' "$$"
 : > "$sock"
 trap 'rm -f "$sock"; exit 0' TERM
 while :; do sleep 0.1; done
@@ -616,12 +613,11 @@ while :; do sleep 0.1; done
 }
 
 #[test]
-fn host_only_native_attachment_and_singleton_membership_persist() {
+fn host_only_membership_persists_across_restarts() {
     let rig = rig(FAKE_VMNET);
     let host: HostConfig = serde_json::from_value(serde_json::json!({
         "network_mode":"host-only",
-        "shared_network":{"address":"192.168.128.0","prefix_len":24},
-        "shared_peer_participation":false
+        "shared_network":{"address":"192.168.128.0","prefix_len":24}
     }))
     .unwrap();
     let machine = rig
@@ -663,7 +659,6 @@ fn host_only_members_share_the_same_virtual_network() {
     let a = a.inspect().unwrap().host_config;
     let b = b.inspect().unwrap().host_config;
     assert_eq!(a.virtual_network, b.virtual_network);
-    assert!(a.shared_peer_participation && b.shared_peer_participation);
 }
 
 #[test]

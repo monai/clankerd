@@ -1,4 +1,4 @@
-//! Real Mac virtio-fs contracts. Build signed helpers with `make rust`, then run:
+//! Real Mac virtio-fs contracts. Build signed helpers with `make build`, then run:
 //! cargo test -p vmctl --test native_bind_semantics -- --ignored --test-threads=1
 //! OUT selects the helper artifacts; IMAGE selects a Linux image with sh, stat,
 //! chmod, chown, mount, touch and sleep (default: the native smoke-test image).
@@ -30,11 +30,11 @@ impl NativeShare {
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../build/rust"));
         for binary in [
             "darwin-arm64/clankerd-vmspawn",
-            "linux-arm64/clankerd-guestd",
+            "linux-arm64/management/usr/sbin/clankerd-guestd",
         ] {
             assert!(
                 out.join(binary).is_file(),
-                "missing {binary}; run make rust"
+                "missing {binary}; run make build"
             );
         }
         let share = Self {

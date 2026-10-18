@@ -33,10 +33,10 @@ fn inspection_converts_guest_probe_seconds_to_utc_milliseconds() {
         &helper,
         r#"#!/bin/sh
 while [ "$#" -gt 0 ]; do
-  case "$1" in --socket) sock=$2 ;; esac
+  case "$1" in --socket) sock=$2 ;; --nat66-prefix) prefix=$2 ;; esac
   shift
 done
-echo '{"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514}'
+printf '{"pid":%s,"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514,"vmnet_nat66_prefix":"%s"}\n' "$$" "$prefix"
 : > "$sock"
 trap 'exit 0' TERM
 while :; do sleep 0.05; done
@@ -128,7 +128,7 @@ while :; do sleep 0.05; done
             .args([
                 "--vmspawn",
                 "/unused-fixture-helper",
-                "--vmnet-helper",
+                "--network-executable",
                 helper.to_str().unwrap(),
                 "machine",
                 "inspect",

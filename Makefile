@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := build
-.PHONY: build rust rust-build rust-sign test rust-test test-linux test-native lint rust-lint coverage rust-coverage coverage-setup rust-coverage-setup clean
+.PHONY: build test test-linux test-native lint coverage coverage-setup clean
 
 # mise install supplies the pinned toolchain; all build phases run in one context.
 # Binary distribution inputs and each assembly phase are real graph nodes.
@@ -60,7 +60,7 @@ $(WORK)/guest-inputs.json: $(RUST_GUEST_INPUTS) scripts/record-build-inputs.py F
 	@$(PYTHON) scripts/record-build-inputs.py $@ $(RUST_GUEST_INPUTS)
 
 $(WORK)/host-rust/.complete: $(WORK)/host-libraries/.complete $(WORK)/configuration.json $(WORK)/host-inputs.json $(RUST_HOST_INPUTS) $(PHASE_TOOLS) FORCE
-	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- sh -ec 'PKG_CONFIG_PATH="$(abspath $(WORK)/host-libraries/pkgconfig)" PKG_CONFIG_LIBDIR="$(abspath $(WORK)/host-libraries/pkgconfig)" PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_SYSROOT_DIR=/ SDKROOT="$(HOST_SDK)" $(HOST_CARGO) --locked --release --target $(HOST_TARGET) -p vmctl -p clankerd-vmspawn -p clankerd-network; mkdir -p "$$1"; cp "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/vmctl" "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/clankerd-vmspawn" "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/clankerd-network" "$$1/"' sh '{out}'
+	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- sh -ec 'PKG_CONFIG_PATH="$(realpath $(WORK)/host-libraries/pkgconfig)" PKG_CONFIG_LIBDIR="$(realpath $(WORK)/host-libraries/pkgconfig)" PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_SYSROOT_DIR=/ SDKROOT="$(HOST_SDK)" $(HOST_CARGO) --locked --release --target $(HOST_TARGET) -p vmctl -p clankerd-vmspawn -p clankerd-network; mkdir -p "$$1"; cp "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/vmctl" "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/clankerd-vmspawn" "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/clankerd-network" "$$1/"' sh '{out}'
 
 $(WORK)/guest-rust/.complete: $(WORK)/configuration.json $(WORK)/guest-inputs.json $(RUST_GUEST_INPUTS) $(PHASE_TOOLS) FORCE
 	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- sh -ec 'cargo build --locked --release --target $(GUEST_TARGET) --config target.$(GUEST_TARGET).linker=\"rust-lld\" -p clankerd-guestd; mkdir -p "$$1"; cp "$(CARGO_TARGET_DIR)/$(GUEST_TARGET)/release/clankerd-guestd" "$$1/"' sh '{out}'
@@ -73,15 +73,11 @@ $(WORK)/artifact/.complete: $(LICENSE_ARCHIVES) $(WORK)/host-rust/.complete $(WO
 build: $(WORK)/artifact/.complete
 	@$(PYTHON) scripts/publish-artifact.py $(WORK)/artifact $(RUST_OUT)
 
-rust rust-build: build
-
-rust-sign: build
-
 ifeq ($(BUILD_CONTEXT),Linux-aarch64)
 $(WORK)/linux-test-tools/.complete: $(WORK)/management/.complete scripts/linux-test-tools.py $(PHASE_TOOLS) FORCE
 	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- $(PYTHON) scripts/linux-test-tools.py $(WORK)/management '{out}'
 TEST_PREREQUISITES := $(WORK)/linux-test-tools/.complete
-TEST_ENV := CLANKERD_TEST_BOOT_DIR=$(abspath $(WORK)/linux-test-tools)
+TEST_ENV := CLANKERD_TEST_TOOLS=$(abspath $(WORK)/linux-test-tools)
 endif
 
 ifeq ($(shell uname -s),Darwin)
@@ -92,8 +88,6 @@ test: $(TEST_PREREQUISITES)
 	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 	$(TEST_ENV) python3 scripts/rust-test.py test
 
-rust-test: test
-
 test-linux:
 	python3 scripts/rust-test.py test-linux
 
@@ -103,17 +97,11 @@ test-native:
 lint:
 	python3 scripts/rust-test.py lint
 
-rust-lint: lint
-
 coverage: coverage-setup
 	python3 scripts/rust-test.py coverage
 
-rust-coverage: coverage
-
 coverage-setup:
 	python3 scripts/rust-test.py coverage-setup
-
-rust-coverage-setup: coverage-setup
 
 clean:
 	rm -rf build target

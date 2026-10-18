@@ -356,7 +356,7 @@ impl Machine {
                 record.name
             )));
         }
-        networks.assign(&mut host_config, &self.id)?;
+        networks.assign(&mut host_config)?;
         let new_volumes = crate::mount::ensure_volume(
             &VolumeStore::new(self.inner.store.volumes_dir()),
             &host_config.mounts,

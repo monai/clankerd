@@ -42,16 +42,16 @@ if not any(line.startswith('dhcpcd:') for line in passwd.read_text().splitlines(
 for name in ['var/lib/dhcpcd', 'run/dhcpcd', 'usr/lib/clankerd']:
     (out / name).mkdir(parents=True, exist_ok=True)
 hook = out / 'usr/lib/clankerd/network-hook'
-hook.write_text('#!/bin/sh\nexec /clankerd-guestd network-hook\n')
+hook.write_text('#!/bin/sh\nexec /usr/sbin/clankerd-guestd network-hook\n')
 hook.chmod(0o755)
-for name, target in [('mke2fs','sbin/mke2fs'), ('e2fsck','sbin/e2fsck'), ('resize2fs','usr/sbin/resize2fs'), ('debugfs','usr/sbin/debugfs')]:
-    (out / name).symlink_to(target)
 # busybox's distribution trigger populates applet links; the minirootfs has
 # them already. Require the shell and nologin used by dhcpcd's packaged hook.
 for required in required_files:
     if not (out / required).exists():
         raise RuntimeError('missing guest runtime input: ' + required)
     data=(out / required).read_bytes()
+    if (data.startswith(b'\x7fELF') or required.startswith(('bin/', 'sbin/', 'usr/bin/', 'usr/sbin/'))) and not (out / required).stat().st_mode & 0o111:
+        raise RuntimeError('guest runtime program is not executable: ' + required)
     if data.startswith(b'\x7fELF') and (data[4]!=2 or int.from_bytes(data[18:20], 'little')!=183):
         raise RuntimeError('guest binary is not AArch64: ' + required)
 # Runtime ownership is root in libkrun's UID mapping; host build owns no devices.

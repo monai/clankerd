@@ -17,7 +17,7 @@ evidence=$(cd "$evidence" && pwd)
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$root/build/acceptance-cargo-Darwin-arm64}
 # Runtime checks must inherit no dependency paths or earlier experiment overlays.
 for variable in $(env | cut -d= -f1); do
-  case "$variable" in DYLD_*|CONTROL_PLANE_*|CLANKERD_VMNET_HELPER|CLANKERD_NETWORK|CLANKERD_VMSPAWN|CLANKERD_GUESTD|CLANKERD_NETWORK_PF|CLANKERD_BOOT_DIR|CLANKERD_BOOT_DIR_ROOT|CLANKERD_DEV_GUESTD|CLANKERD_VMSPAWN_DEV_LOCAL|VMNET_TEST_LIBRARY_PATH) unset "$variable";; esac
+  case "$variable" in DYLD_*|CLANKERD_NETWORK|CLANKERD_VMSPAWN|CLANKERD_GUEST_ROOT|CLANKERD_NETWORK_PF|CLANKERD_BOOT_DIR_ROOT|CLANKERD_DEV_GUESTD|CLANKERD_VMSPAWN_DEV_LOCAL) unset "$variable";; esac
 done
 printf 'Evidence: %s\n' "$evidence"
 exec 3>&1
@@ -59,7 +59,7 @@ printf 'extern int krun_create_ctx(void); int main(void) { return krun_create_ct
   | xcrun clang -arch arm64 -x c - -L crates/libkrun-sys/stubs -lkrun \
       -o "$evidence/libkrun-stub-check"
 step 'Script regressions (usually under 30 seconds)'
-python3 -m unittest scripts.tests.test_build_graph scripts.tests.test_accept_vm_process scripts.tests.test_acceptance_gates
+python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 step 'Build artifact (long-running: about 1–10 minutes; cold downloads may take longer)'
 make -j"${BUILD_JOBS:-4}" build
 step 'Copy and verify relocated artifact'
@@ -100,7 +100,7 @@ fi
 python3 scripts/accept-management.py "$OUT" \
   "$CARGO_TARGET_DIR/aarch64-unknown-linux-musl/release/examples/workload-probe" "$evidence"
 sudo -v
-# Legacy gates use sudo for read-only PF observations and temporary test fixtures.
+# Native gates use sudo for read-only PF observations and temporary test fixtures.
 ( while sleep 30; do sudo -n -v || exit; done ) &
 refresh_pid=$!
 step 'Native bind semantics (long-running: about 1–5 minutes)'

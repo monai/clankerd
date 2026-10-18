@@ -35,7 +35,7 @@ static void set_string(xpc_object_t desc, const char *key, const char *value) {
 }
 int clankerd_vmnet(int argc, char **argv) {
     if (geteuid()!=0) { fprintf(stderr,"native networking requires administrator authorization\n"); return 1; }
-    if (flag(argc,argv,"--list-shared-interfaces")) {
+    if (argc == 2 && flag(argc,argv,"--list-shared-interfaces")) {
         xpc_object_t list=vmnet_copy_shared_interface_list();
         if (!list) return 1;
         for (size_t i=0;i<xpc_array_get_count(list);i++) {
@@ -43,6 +43,14 @@ int clankerd_vmnet(int argc, char **argv) {
             if (name) puts(name);
         }
         xpc_release(list); return 0;
+    }
+    const char *keys[] = {"--socket", "--interface-id", "--operation-mode", "--start-address",
+        "--end-address", "--subnet-mask", "--nat66-prefix", "--shared-interface"};
+    for (int i=1; i<argc; i+=2) {
+        int known=0;
+        for (size_t k=0; k<sizeof(keys)/sizeof(keys[0]); k++) if (!strcmp(argv[i],keys[k])) known=1;
+        if (!known || i+1>=argc) { fprintf(stderr,"invalid native attachment option: %s\n",argv[i]); return 2; }
+        for (int j=1; j<i; j+=2) if (!strcmp(argv[i],argv[j])) return 2;
     }
     const char *path=option(argc,argv,"--socket"), *identity=option(argc,argv,"--interface-id"),
         *mode=option(argc,argv,"--operation-mode");
@@ -60,7 +68,6 @@ int clankerd_vmnet(int argc, char **argv) {
     set_string(desc,vmnet_subnet_mask_key,option(argc,argv,"--subnet-mask"));
     set_string(desc,vmnet_nat66_prefix_key,option(argc,argv,"--nat66-prefix"));
     set_string(desc,vmnet_shared_interface_name_key,option(argc,argv,"--shared-interface"));
-    xpc_dictionary_set_bool(desc,vmnet_enable_isolation_key,flag(argc,argv,"--enable-isolation"));
     __block vmnet_return_t status=0;
     __block xpc_object_t metadata=NULL;
     interface_ref interface=vmnet_start_interface(desc,queue,^(vmnet_return_t result,xpc_object_t info) {
@@ -89,7 +96,7 @@ int clankerd_vmnet(int argc, char **argv) {
     buffer=malloc(max);
     if(!buffer) goto cleanup;
     signal(SIGTERM,stop); signal(SIGINT,stop); signal(SIGHUP,stop);
-    printf("{\"vmnet_mac_address\":\"%s\",\"vmnet_mtu\":%llu,\"vmnet_max_packet_size\":%llu",mac,(unsigned long long)mtu,(unsigned long long)max);
+    printf("{\"pid\":%ld,\"vmnet_mac_address\":\"%s\",\"vmnet_mtu\":%llu,\"vmnet_max_packet_size\":%llu",(long)getpid(),mac,(unsigned long long)mtu,(unsigned long long)max);
     if(prefix) printf(",\"vmnet_nat66_prefix\":\"%s\"",prefix);
     puts("}"); fflush(stdout);
     struct sockaddr_un peer={0}; socklen_t peer_len=0;

@@ -53,6 +53,7 @@ impl Hypervisor for Libkrun {
             }
             argv
         };
+        cfg.argv.extend(["--management-root".into(), "/".into()]);
         // Order matters: the first disk is /dev/vda (root), the next /dev/vdb.
         if let Some(disk) = &spec.root_disk {
             cfg.disks.push(libkrun_sys::Disk {
@@ -140,7 +141,9 @@ impl Hypervisor for DevLocal {
             .map_err(|e| e.to_string())?;
         let mut cmd = Command::new(spec.boot_dir.join(BOOT_GUESTD));
         if spec.populate {
-            cmd.arg("--populate").arg("--boot-dir").arg(&spec.boot_dir);
+            cmd.arg("--populate")
+                .arg("--management-root")
+                .arg(&spec.boot_dir);
             // SAFETY: geteuid has no preconditions.
             if unsafe { libc::geteuid() } != 0 {
                 // Unprivileged development runs cannot chown or mount.

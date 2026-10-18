@@ -33,15 +33,22 @@ fn tar_of(files: &[(&str, &[u8], u32)]) -> Vec<u8> {
 
 /// The directory the populator ships into the guest: guestd and mke2fs.
 fn guest_dir() -> tempfile::TempDir {
-    let boot = boot_dir_with_mke2fs();
-    std::fs::create_dir_all(boot.path().join("management/sbin")).unwrap();
-    std::fs::copy(
-        common::tool("mke2fs"),
-        boot.path().join("management/sbin/mke2fs"),
+    let boot = tempfile::tempdir().unwrap();
+    for (name, relative) in [
+        ("mke2fs", "sbin/mke2fs"),
+        ("resize2fs", "usr/sbin/resize2fs"),
+    ] {
+        let destination = boot.path().join(relative);
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::copy(common::tool(name), destination).unwrap();
+    }
+    std::fs::write(boot.path().join("sbin/dhcpcd"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        boot.path().join("sbin/dhcpcd"),
+        std::fs::Permissions::from_mode(0o755),
     )
     .unwrap();
-    std::fs::write(boot.path().join("management/sbin/dhcpcd"), "fixture").unwrap();
-    std::os::unix::fs::symlink(guestd_path(), boot.path().join("clankerd-guestd")).unwrap();
+    std::fs::copy(guestd_path(), boot.path().join("usr/sbin/clankerd-guestd")).unwrap();
     boot
 }
 
@@ -79,7 +86,8 @@ fn the_tar_is_unpacked_by_guestd_behind_the_helper() {
 fn a_missing_mke2fs_is_reported_before_anything_boots() {
     let env = Env::new();
     let guest = tempfile::tempdir().unwrap();
-    std::os::unix::fs::symlink(guestd_path(), guest.path().join("clankerd-guestd")).unwrap();
+    std::fs::create_dir_all(guest.path().join("usr/sbin")).unwrap();
+    std::fs::copy(guestd_path(), guest.path().join("usr/sbin/clankerd-guestd")).unwrap();
     let target = env.root().join("disk");
     std::fs::create_dir(&target).unwrap();
     let err = dev_populator(guest.path())

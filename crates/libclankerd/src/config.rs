@@ -236,8 +236,8 @@ impl std::str::FromStr for SharedNetwork {
 }
 
 /// How the machine is hosted: resources, mounts, ports, policies.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct HostConfig {
     /// Canonical virtual network membership; bridged attachments have none.
     pub virtual_network: Option<String>,
@@ -247,7 +247,6 @@ pub struct HostConfig {
     pub shared_network: SharedNetwork,
     /// Authoritative native shared ULA /64, copied from virtual-network membership.
     pub shared_ipv6_prefix: Option<std::net::Ipv6Addr>,
-    pub shared_peer_participation: bool,
     pub cpus: Option<u32>,
     /// Bytes.
     pub memory: Option<u64>,
@@ -261,11 +260,6 @@ pub struct HostConfig {
 }
 
 pub(crate) fn validate_bridge_config(host: &HostConfig) -> crate::error::Result<()> {
-    if host.network_mode == NetworkMode::Bridged && !host.shared_peer_participation {
-        return Err(crate::error::Error::invalid_parameter(
-            "shared peer isolation does not apply to a bridged physical interface",
-        ));
-    }
     if host.network_mode == NetworkMode::Bridged && host.shared_network != SharedNetwork::default()
     {
         return Err(crate::error::Error::invalid_parameter(
@@ -289,24 +283,5 @@ pub(crate) fn validate_bridge_config(host: &HostConfig) -> crate::error::Result<
             "bridge interface is only valid for bridged networking",
         )),
         (_, None) => Ok(()),
-    }
-}
-
-impl Default for HostConfig {
-    fn default() -> Self {
-        Self {
-            virtual_network: None,
-            network_mode: NetworkMode::default(),
-            bridge_interface: None,
-            shared_network: SharedNetwork::default(),
-            shared_ipv6_prefix: None,
-            shared_peer_participation: true,
-            cpus: None,
-            memory: None,
-            mounts: Vec::new(),
-            socket_bindings: Vec::new(),
-            restart_policy: RestartPolicy::default(),
-            pull_policy: PullPolicy::default(),
-        }
     }
 }

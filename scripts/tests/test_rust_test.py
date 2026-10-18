@@ -39,8 +39,16 @@ elif "build" in args:
             tool = tools / name
             tool.write_text("#!/bin/sh\nexit 0\n")
             tool.chmod(0o755)
-        env = {"CLANKERD_TEST_BOOT_DIR": str(tools), "CARGO": str(self.fake), "RECORD": str(self.log),
+        make = self.root / "make"
+        make.write_text('''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["RECORD"], "a") as log:
+    log.write(json.dumps({"args": ["make", *sys.argv[1:]], "env": dict(os.environ)}) + "\\n")
+''')
+        make.chmod(0o755)
+        env = {"CLANKERD_TEST_TOOLS": str(tools), "CARGO": str(self.fake), "RECORD": str(self.log),
                "META_TARGET": str(self.root / "configured-target"),
+               "PATH": str(self.root)+os.pathsep+os.environ["PATH"],
                "COVERAGE_OUT": str(self.root / "reports")}
         self.environment = patch.dict(os.environ, env, clear=True)
         self.environment.start()
@@ -49,19 +57,19 @@ elif "build" in args:
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
-    def test_native_vm_checks_build_the_selected_bundle_first(self):
-        with patch.dict(os.environ, {"OUT": "custom-bundle"}), \
-             patch.object(runner.subprocess, "run") as build, \
-             patch.object(runner, "cargo") as cargo:
+    def test_native_vm_checks_use_the_selected_completed_bundle(self):
+        bundle = str(self.root / "native-bundle")
+        with patch.dict(os.environ, {"OUT": bundle}):
             runner.main("test-native", "Darwin")
-            expected = str(runner.ROOT / "custom-bundle")
-            self.assertEqual(build.call_args.kwargs["env"]["RUST_OUT"], expected)
-            self.assertEqual(cargo.call_args.kwargs["env"]["OUT"], expected)
-            self.assertIn("--ignored", cargo.call_args.args)
-        with patch.object(runner.subprocess, "run") as build:
-            with self.assertRaisesRegex(RuntimeError, "Native VM tests require"):
-                runner.main("test-native", "Linux")
-            build.assert_not_called()
+        build, test = self.calls()
+        self.assertEqual(build["env"]["RUST_OUT"], bundle)
+        self.assertEqual(test["env"]["OUT"], bundle)
+        self.assertIn("--ignored", test["args"])
+
+    def test_native_vm_checks_reject_non_macos_before_launching_tools(self):
+        with self.assertRaisesRegex(RuntimeError, "Native VM tests require"):
+            runner.main("test-native", "Linux")
+        self.assertFalse(self.log.exists())
 
     def test_linux_prebuild_paths_reach_suite(self):
         runner.main("test", "Linux")
@@ -76,7 +84,7 @@ elif "build" in args:
         env = {"PATH": str(self.root / "tools")}
         with patch.object(runner, "SYSTEM_TOOL_DIRS", ()):
             with runner.linux_test_environment(env) as resolved:
-                self.assertEqual(resolved["CLANKERD_TEST_BOOT_DIR"], str(self.root / "tools"))
+                self.assertEqual(resolved["CLANKERD_TEST_TOOLS"], str(self.root / "tools"))
 
     def test_split_tool_directories_get_temporary_links(self):
         second = self.root / "other-tools"
@@ -85,13 +93,13 @@ elif "build" in args:
         env = {"PATH": os.pathsep.join([str(self.root / "tools"), str(second)])}
         with patch.object(runner, "SYSTEM_TOOL_DIRS", ()):
             with runner.linux_test_environment(env) as resolved:
-                directory = Path(resolved["CLANKERD_TEST_BOOT_DIR"])
+                directory = Path(resolved["CLANKERD_TEST_TOOLS"])
                 self.assertTrue((directory / "debugfs").is_file())
                 self.assertTrue((directory / "mke2fs").is_file())
             self.assertFalse(directory.exists())
 
     def test_missing_linux_tools_fail_before_cargo(self):
-        with patch.dict(os.environ, {"CLANKERD_TEST_BOOT_DIR": str(self.root / "missing")}):
+        with patch.dict(os.environ, {"CLANKERD_TEST_TOOLS": str(self.root / "missing")}):
             for operation in ("test", "coverage"):
                 with self.assertRaisesRegex(RuntimeError, "Install native e2fsprogs"):
                     runner.main(operation, "Linux")

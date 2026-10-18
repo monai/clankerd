@@ -4,8 +4,7 @@ set -Eeuo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${OUT:-$root/build/rust}
 vmctl=$out/darwin-arm64/vmctl
-export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
-export DYLD_FALLBACK_LIBRARY_PATH=${DYLD_FALLBACK_LIBRARY_PATH:-/opt/homebrew/lib:/usr/local/lib:/usr/lib}
+export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn CLANKERD_GUEST_ROOT=$out/linux-arm64/management
 work=$(mktemp -d /tmp/clankerd-isolation-path.XXXXXX)
 export CLANKERD_STATE_DIR=$work/state CLANKERD_RUNTIME_DIR=$work/run
 captures=()

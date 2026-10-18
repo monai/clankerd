@@ -36,12 +36,25 @@ pub struct VirtualNetwork {
     pub name: String,
     pub mode: NetworkKind,
     pub subnet: SharedNetwork,
-    #[serde(default)]
     pub ipv6_prefix: Option<std::net::Ipv6Addr>,
     pub created: SystemTime,
 }
 
 impl VirtualNetwork {
+    fn validate(&self) -> Result<()> {
+        match (self.mode, self.ipv6_prefix) {
+            (NetworkKind::Shared, Some(prefix))
+                if prefix.octets()[0] == 0xfd && u128::from(prefix) & u128::from(u64::MAX) == 0 =>
+            {
+                Ok(())
+            }
+            (NetworkKind::HostOnly, None) => Ok(()),
+            _ => Err(Error::invalid_parameter(
+                "network mode requires a persisted shared ULA /64 or no host-only prefix",
+            )),
+        }
+    }
+
     /// Select this resource's membership and addressing, preserving unrelated host settings.
     /// Persist the result with [`crate::Machine::update`] before starting the machine.
     pub fn configure_member(&self, host: &mut HostConfig) {
@@ -49,7 +62,6 @@ impl VirtualNetwork {
         host.network_mode = self.mode.mode();
         host.shared_network = self.subnet.clone();
         host.shared_ipv6_prefix = self.ipv6_prefix;
-        host.shared_peer_participation = true;
         host.bridge_interface = None;
     }
 }
@@ -74,7 +86,9 @@ impl<'a> Networks<'a> {
         resource_path(&self.root, name)
     }
     fn get(&self, name: &str) -> Result<VirtualNetwork> {
-        read_resource(&self.root, name)
+        let network: VirtualNetwork = read_resource(&self.root, name)?;
+        network.validate()?;
+        Ok(network)
     }
 
     fn list(&self) -> Result<Vec<VirtualNetwork>> {
@@ -82,7 +96,9 @@ impl<'a> Networks<'a> {
         for entry in fs::read_dir(&self.root)? {
             let path = entry?.path();
             if path.extension().is_some_and(|ext| ext == "json") {
-                networks.push(serde_json::from_slice::<VirtualNetwork>(&fs::read(path)?)?);
+                let network: VirtualNetwork = serde_json::from_slice(&fs::read(path)?)?;
+                network.validate()?;
+                networks.push(network);
             }
         }
         networks.sort_by(|a, b| a.name.cmp(&b.name));
@@ -111,7 +127,6 @@ impl<'a> Networks<'a> {
         name: &str,
         mode: NetworkKind,
         subnet: Option<SharedNetwork>,
-        allocate_ipv6: bool,
     ) -> Result<VirtualNetwork> {
         let path = self.path(name)?;
         if path.exists() {
@@ -131,7 +146,6 @@ impl<'a> Networks<'a> {
                 subnet
             }
             None => (64..=254)
-                .filter(|third| !matches!(third, 105 | 128))
                 .map(|third| SharedNetwork {
                     address: std::net::Ipv4Addr::new(192, 168, third, 0),
                     prefix_len: 24,
@@ -140,7 +154,7 @@ impl<'a> Networks<'a> {
                 .ok_or_else(|| Error::unavailable("no free automatic virtual network subnet"))?,
         };
         let id = crate::engine::random_id()?;
-        let ipv6_prefix = if mode == NetworkKind::Shared && allocate_ipv6 {
+        let ipv6_prefix = if mode == NetworkKind::Shared {
             let entropy = u64::from_str_radix(&id[..14], 16)
                 .map_err(|_| Error::unavailable("invalid network identity entropy"))?;
             let prefix = std::net::Ipv6Addr::from(u128::from((0xfd_u64 << 56) | entropy) << 64);
@@ -168,7 +182,7 @@ impl<'a> Networks<'a> {
         crate::store::write_atomic(&path, &serde_json::to_vec_pretty(&network)?)?;
         Ok(network)
     }
-    pub(crate) fn assign(&self, host: &mut HostConfig, machine_id: &str) -> Result<()> {
+    pub(crate) fn assign(&self, host: &mut HostConfig) -> Result<()> {
         if host.network_mode == NetworkMode::Bridged {
             if host.virtual_network.is_some() {
                 return Err(Error::invalid_parameter(
@@ -179,30 +193,6 @@ impl<'a> Networks<'a> {
         }
         let network = if let Some(name) = &host.virtual_network {
             self.get(name)?
-        } else if !host.shared_peer_participation {
-            let name = format!("machine-{machine_id}");
-            let kind = if host.network_mode == NetworkMode::HostOnly {
-                NetworkKind::HostOnly
-            } else {
-                NetworkKind::Shared
-            };
-            match self.get(&name) {
-                Ok(network) => {
-                    let (record, _) = self.store.load(machine_id)?;
-                    if network.mode != kind
-                        || record.host_config.virtual_network.as_deref() != Some(&name)
-                    {
-                        return Err(Error::conflict(
-                            "singleton virtual network conflicts with existing membership",
-                        ));
-                    }
-                    network
-                }
-                Err(error) if error.kind() == crate::ErrorKind::NotFound => {
-                    self.create(&name, kind, None, true)?
-                }
-                Err(error) => return Err(error),
-            }
         } else {
             let kind = if host.network_mode == NetworkMode::HostOnly {
                 NetworkKind::HostOnly
@@ -229,7 +219,7 @@ impl<'a> Networks<'a> {
                     network
                 }
                 Err(error) if error.kind() == crate::ErrorKind::NotFound => {
-                    self.create(&name, kind, Some(host.shared_network.clone()), false)?
+                    self.create(&name, kind, Some(host.shared_network.clone()))?
                 }
                 Err(error) => return Err(error),
             }
@@ -269,7 +259,7 @@ impl Engine {
         mode: NetworkKind,
         subnet: Option<SharedNetwork>,
     ) -> Result<VirtualNetwork> {
-        Networks::lock(&self.inner.store)?.create(name, mode, subnet, true)
+        Networks::lock(&self.inner.store)?.create(name, mode, subnet)
     }
     pub fn networks(&self) -> Result<Vec<VirtualNetwork>> {
         Networks::lock(&self.inner.store)?.list()

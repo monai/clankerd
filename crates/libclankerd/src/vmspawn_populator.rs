@@ -2,7 +2,7 @@
 //! `clankerd-vmspawn` helper.
 //!
 //! The helper boots a VM whose root is a throwaway boot directory holding
-//! clankerd-guestd and the static e2fsprogs, with the blank disk attached as
+//! clankerd-guestd and the packaged e2fsprogs, with the blank disk attached as
 //! the first block device. guestd runs with `--populate`, the library streams
 //! it the merged tar over the usual guest socket (`PopulateDisk`), guestd
 //! formats the disk, unpacks the tar on it and powers the VM off. Nothing
@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant};
 
-use clankerd_proto::spawn::{BOOT_GUESTD, ROOT_DEVICE, SpawnSpec};
+use clankerd_proto::spawn::{ROOT_DEVICE, SpawnSpec};
 
 use crate::error::{Error, Result};
 use crate::guest::{EventStream, Next};
@@ -28,10 +28,6 @@ use crate::vmm::explain_exit;
 const SPEC_FILE: &str = "vmspawn.json";
 const LOG_FILE: &str = "vmspawn.log";
 const CONSOLE_FILE: &str = "console.log";
-/// Static binaries of the guest boot directory the population boot needs.
-const REQUIRED: [&str; 2] = [BOOT_GUESTD, "mke2fs"];
-/// Everything else in the shipped directory that guestd may use later.
-const OPTIONAL: [&str; 3] = ["e2fsck", "resize2fs", "debugfs"];
 const BOOT_TIMEOUT: Duration = Duration::from_secs(120);
 const POWER_OFF_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -39,18 +35,17 @@ const POWER_OFF_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug, Clone)]
 pub struct VmspawnPopulator {
     vmspawn: PathBuf,
-    guest_dir: PathBuf,
+    guest_root: PathBuf,
     dev_local: bool,
 }
 
 impl VmspawnPopulator {
-    /// `vmspawn` is the helper binary; `guest_dir` the directory shipping the
-    /// static aarch64 `clankerd-guestd` and e2fsprogs (`mke2fs`, ...), e.g.
-    /// `build/rust/linux-arm64`.
-    pub fn new(vmspawn: impl Into<PathBuf>, guest_dir: impl Into<PathBuf>) -> Self {
+    /// `vmspawn` is the host launcher; `guest_root` is the packaged management
+    /// filesystem, e.g. `build/rust/linux-arm64/management`.
+    pub fn new(vmspawn: impl Into<PathBuf>, guest_root: impl Into<PathBuf>) -> Self {
         VmspawnPopulator {
             vmspawn: vmspawn.into(),
-            guest_dir: guest_dir.into(),
+            guest_root: guest_root.into(),
             dev_local: false,
         }
     }
@@ -63,32 +58,7 @@ impl VmspawnPopulator {
     }
 
     fn prepare_boot_dir(&self, boot: &Path) -> Result<()> {
-        fs::create_dir_all(boot)?;
-        if !self.dev_local {
-            return crate::guest_environment::place(&self.guest_dir, boot);
-        }
-        for name in REQUIRED {
-            if !self.guest_dir.join(name).exists() {
-                return Err(Error::unavailable(format!(
-                    "{name} not found in {} (run `make rust`, it builds the guest boot directory)",
-                    self.guest_dir.display()
-                )));
-            }
-        }
-        for name in REQUIRED.into_iter().chain(OPTIONAL) {
-            let src = self.guest_dir.join(name);
-            if !src.exists() {
-                continue;
-            }
-            let dst = boot.join(name);
-            // virtio-fs cannot follow links out of the shared directory.
-            if fs::hard_link(&src, &dst).is_err() {
-                fs::copy(&src, &dst).map_err(|e| {
-                    Error::unavailable(format!("cannot place {} in the boot directory: {e}", name))
-                })?;
-            }
-        }
-        Ok(())
+        crate::guest_environment::place(&self.guest_root, boot)
     }
 }
 

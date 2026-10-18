@@ -55,7 +55,7 @@ impl Error {
             HV_DENIED => (
                 ErrorKind::EntitlementMissing,
                 "the hypervisor entitlement is missing: clankerd-vmspawn must be signed with \
-                 com.apple.security.hypervisor (run `make rust-sign`, or \
+                 com.apple.security.hypervisor (run `make build`, or \
                  `codesign --force -s - --entitlements crates/clankerd-vmspawn/entitlements.plist \
                  clankerd-vmspawn`)"
                     .to_owned(),

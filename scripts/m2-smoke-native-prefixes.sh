@@ -7,7 +7,7 @@ out=${OUT:-$root/build/rust}
 vmctl=$out/darwin-arm64/vmctl
 work=$(mktemp -d /tmp/clankerd-prefix-guests.XXXXXX)
 export CLANKERD_STATE_DIR=$work/state CLANKERD_RUNTIME_DIR=$work/run
-export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
+export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn CLANKERD_GUEST_ROOT=$out/linux-arm64/management
 cleanup() {
   if [ -n "${forward4:-}" ]; then sudo -n sysctl -w net.inet.ip.forwarding="$forward4" > "$work/forwarding-cleanup.log" 2>&1 || true; fi
   if [ -n "${forward6:-}" ]; then sudo -n sysctl -w net.inet6.ip6.forwarding="$forward6" >> "$work/forwarding-cleanup.log" 2>&1 || true; fi
@@ -266,4 +266,4 @@ if not state['records']:assert state['token'] is None,state
 print('PASS production PF last-member cleanup and owned reference release')
 PYCLEANUP
 echo 'PASS production network lifecycle: native prefixes, routed IPv4/IPv6 exclusion, same-network peers, Mac/NAT, member stop, restart, helper replacement, stopped network update and teardown'
-echo 'COVERAGE: trusted Mac host retaining installed policy; cross-network other-VMM, sleep/wake and independent LAN-peer acceptance remain open.'
+echo 'COVERAGE: trusted Mac host retaining active runtime policy; cross-network other-VMM, sleep/wake and independent LAN-peer acceptance remain open.'

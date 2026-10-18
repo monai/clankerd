@@ -13,11 +13,15 @@ licenses.mkdir()
 # Load-command strings only shrink; no binary data offsets need to move.
 # An unknown non-system import is an error, never a host fallback.
 commands = {0xc, 0xd, 0x80000018, 0x8000001f, 0x20, 0x80000023}
+lzma_version = None
 separator = sys.argv.index('--required')
 for source in [Path(value).resolve() for value in sys.argv[2:separator]]:
     for path in source.rglob('*'):
         if path.is_symlink() or not path.is_file():
             continue
+        if path.name == 'liblzma.pc':
+            lzma_version = next(line.split(':', 1)[1].strip() for line in path.read_text().splitlines()
+                                if line.startswith('Version:'))
         if path.suffix == '.dylib':
             target = lib / path.name
             if target.exists():
@@ -68,9 +72,11 @@ for required in sys.argv[separator+1:]:
 
 # Cargo's lzma-sys probes this package instead of the host's Homebrew install.
 if (lib / 'liblzma.5.dylib').exists():
-    (lib / 'liblzma.dylib').symlink_to('liblzma.5.dylib')
+    if not lzma_version:
+        raise RuntimeError('locked liblzma package lacks version metadata')
     metadata = out / 'pkgconfig'
-    metadata.mkdir()
+    (metadata / 'link').mkdir(parents=True)
+    (metadata / 'link/liblzma.dylib').symlink_to('../../lib/liblzma.5.dylib')
     (metadata / 'liblzma.pc').write_text(
-        'libdir=${pcfiledir}/../lib\nName: liblzma\nDescription: pinned host liblzma\n'
-        'Version: 5.8.4\nLibs: -L${libdir} -llzma\n')
+        'libdir=${pcfiledir}/link\nName: liblzma\nDescription: pinned host liblzma\n'
+        f'Version: {lzma_version}\nLibs: -L${{libdir}} -llzma\n')

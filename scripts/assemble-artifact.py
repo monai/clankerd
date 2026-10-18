@@ -9,7 +9,6 @@ out, work, lock = map(Path, sys.argv[1:4])
 host = out / 'darwin-arm64'
 guest = out / 'linux-arm64'
 shutil.copytree((work / 'host-rust').resolve(), host, ignore=shutil.ignore_patterns('.complete'))
-shutil.copytree((work / 'guest-rust').resolve(), guest, ignore=shutil.ignore_patterns('.complete'))
 shutil.copytree((work / 'management').resolve(), guest / 'management', symlinks=True, ignore=shutil.ignore_patterns('.complete'))
 shutil.copytree((work / 'host-libraries').resolve() / 'lib', host / 'lib', symlinks=True)
 shutil.copytree((work / 'host-libraries').resolve() / 'licenses', out / 'licenses/host')
@@ -19,7 +18,8 @@ for name in sys.argv[4:]:
     target = out / 'licenses/texts' / (name + '.txt')
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(path, target)
-shutil.copy2(guest / 'clankerd-guestd', guest / 'management/clankerd-guestd')
+(guest / 'management/usr/sbin').mkdir(parents=True, exist_ok=True)
+shutil.copy2(work / 'guest-rust/clankerd-guestd', guest / 'management/usr/sbin/clankerd-guestd')
 # Preserve package metadata and scripts as provisioning/provenance evidence.
 for package in (work / 'packages').iterdir():
     metadata = package / 'package-metadata'

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unprivileged preboot Ethernet filter; the installed vmnet-helper stays real."""
+"""Unprivileged Ethernet filter in front of the bundled native attachment."""
 import json
 import os
 from pathlib import Path
@@ -75,10 +75,6 @@ def main():
     spec = json.loads(original.read_text())
     family = os.environ.get('VMNET_TEST_FAMILY', 'dual')
     binary = os.environ['VMNET_TEST_REAL_VMSPAWN']
-    # macOS protected interpreters may strip DYLD_* before this wrapper starts.
-    # Restore immediately before exec/spawn of the signed native VMM.
-    os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = os.environ.get(
-        'VMNET_TEST_LIBRARY_PATH', '/opt/homebrew/lib:/usr/local/lib:/usr/lib')
     if family == 'dual' or not spec.get('net'):
         os.execv(binary, [binary, *args])
     with tempfile.TemporaryDirectory(prefix='vmnet-filter-', dir='/tmp') as directory:
@@ -137,7 +133,7 @@ def self_test():
         proxy.pump()
         got, peer = helper.recvfrom(2048)
         assert got == packet
-        helper.connect(peer)  # vmnet-helper uses this exact peer handshake.
+        helper.connect(peer)  # the native attachment learns this Unixgram peer.
         helper.send(packet)
         proxy.pump()
         assert client.recv(2048) == packet
@@ -159,7 +155,6 @@ def self_test():
         standin.write_text(f'#!{sys.executable}\n' + "import json,os,socket,sys\n"
             + "listener=socket.socket(fileno=3)\n"
             + "assert listener.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)==socket.SOCK_STREAM\n"
-            + "assert sys.platform=='darwin' or os.environ.get('DYLD_FALLBACK_LIBRARY_PATH')==os.environ['VMNET_TEST_LIBRARY_PATH']\n"
             + "assert sys.argv[1]=='--spec'\n"
             + "open(os.environ['VMNET_TEST_RESULT'],'w').write(json.dumps(sys.argv[1:]))\n")
         standin.chmod(0o755)
@@ -167,9 +162,7 @@ def self_test():
         listener.bind(directory + '/management.sock')
         listener.listen()
         env = dict(os.environ, VMNET_TEST_REAL_VMSPAWN=str(standin),
-            VMNET_TEST_FAMILY='ipv6', VMNET_TEST_RESULT=str(result_path),
-            VMNET_TEST_LIBRARY_PATH='/fixture/custom/lib:/opt/homebrew/lib')
-        env.pop('DYLD_FALLBACK_LIBRARY_PATH', None)
+            VMNET_TEST_FAMILY='ipv6', VMNET_TEST_RESULT=str(result_path))
         bootstrap = 'import os,sys;os.dup2(int(sys.argv[1]),3,inheritable=True);os.execv(sys.argv[2],sys.argv[2:])'
         try:
             for spec in ({'populate': True, 'net': None}, {'populate': True}):

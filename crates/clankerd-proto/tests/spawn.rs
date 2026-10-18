@@ -12,7 +12,7 @@ fn required_fields() -> Value {
 }
 
 #[test]
-fn volume_disk_decoding_accepts_absence_collections_and_legacy_specs() {
+fn volume_disks_decode_as_an_ordered_collection() {
     for (field, value, expected) in [
         (None, Value::Null, vec![]),
         (Some("volume_disks"), json!([]), vec![]),
@@ -25,12 +25,6 @@ fn volume_disk_decoding_accepts_absence_collections_and_legacy_specs() {
             Some("volume_disks"),
             json!(["/example/first.ext4", "/example/second.ext4"]),
             vec!["/example/first.ext4", "/example/second.ext4"],
-        ),
-        (Some("volume_disk"), Value::Null, vec![]),
-        (
-            Some("volume_disk"),
-            json!("/example/legacy.ext4"),
-            vec!["/example/legacy.ext4"],
         ),
     ] {
         let mut input = required_fields();
@@ -55,5 +49,18 @@ fn volume_disks_are_written_as_an_ordered_collection() {
         let encoded = serde_json::to_value(&spec).unwrap();
         assert_eq!(encoded["volume_disks"], json!(disks));
         assert!(encoded.get("volume_disk").is_none());
+    }
+}
+
+#[test]
+fn spawn_specs_reject_unknown_fields_and_non_collection_disks() {
+    for (field, value) in [
+        ("volume_disk", json!("/example/disk.ext4")),
+        ("volume_disks", json!("/example/disk.ext4")),
+        ("volume_disks", Value::Null),
+    ] {
+        let mut input = required_fields();
+        input[field] = value;
+        assert!(serde_json::from_value::<SpawnSpec>(input).is_err());
     }
 }

@@ -17,7 +17,7 @@ environment = os.environ.copy()
 # These descriptors are closed by Python before the version probes execute.
 for name in ('MAKEFLAGS', 'MFLAGS', 'CARGO_MAKEFLAGS'):
     environment.pop(name, None)
-for tool in ['rustc', 'cargo', 'zig', 'rcodesign']:
+for tool in ['rustc', 'cargo', 'zig', 'rcodesign', 'pkg-config']:
     configuration[tool] = [shutil.which(tool), subprocess.check_output([tool, '--version' if tool != 'zig' else 'version'], text=True, env=environment).strip()]
 content = json.dumps(configuration, sort_keys=True) + '\n'
 path.parent.mkdir(parents=True, exist_ok=True)

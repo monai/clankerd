@@ -48,6 +48,7 @@ fn reimage_rebuilds_the_root_and_retains_volume_and_explicit_configuration() {
             .env("CLANKERD_STATE_DIR", env.root().join("state"))
             .env("CLANKERD_RUNTIME_DIR", env.root().join("run"))
             .env("CLANKERD_DEV_GUESTD", &guestd)
+            .env("CLANKERD_GUEST_ROOT", domain::guest_root())
             .env("CLANKERD_CACHE_DIR", &cache)
             .env("CLANKERD_INSECURE_REGISTRIES", &registry.addr)
             .output()

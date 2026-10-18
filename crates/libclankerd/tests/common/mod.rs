@@ -5,6 +5,7 @@
 pub mod registry;
 pub mod tarcompare;
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
@@ -110,7 +111,7 @@ impl libclankerd::DiskPopulator for TarCapture {
 /// A boot directory holding the host's mke2fs (stands in for the shipped static one).
 pub fn boot_dir_with_mke2fs() -> tempfile::TempDir {
     let dir = tempfile::Builder::new().prefix("boot").tempdir().unwrap();
-    let mke2fs = match std::env::var_os("CLANKERD_TEST_BOOT_DIR") {
+    let mke2fs = match std::env::var_os("CLANKERD_TEST_TOOLS") {
         Some(d) => PathBuf::from(d).join("mke2fs"),
         None => ["/usr/sbin/mke2fs", "/sbin/mke2fs", "/usr/bin/mke2fs"]
             .into_iter()
@@ -118,7 +119,8 @@ pub fn boot_dir_with_mke2fs() -> tempfile::TempDir {
             .find(|p| p.exists())
             .expect("mke2fs (e2fsprogs) must be installed"),
     };
-    std::os::unix::fs::symlink(mke2fs, dir.path().join("mke2fs")).unwrap();
+    std::fs::create_dir_all(dir.path().join("sbin")).unwrap();
+    std::os::unix::fs::symlink(mke2fs, dir.path().join("sbin/mke2fs")).unwrap();
     dir
 }
 
@@ -169,7 +171,7 @@ pub fn debugfs(image: &Path, request: &str) -> String {
 }
 
 pub fn tool(name: &str) -> String {
-    std::env::var_os("CLANKERD_TEST_BOOT_DIR")
+    std::env::var_os("CLANKERD_TEST_TOOLS")
         .map(|dir| PathBuf::from(dir).join(name).to_string_lossy().into_owned())
         .into_iter()
         .chain(
@@ -186,4 +188,30 @@ pub fn finish_workload_and_stop(machine: &Machine) -> libclankerd::Result<libcla
     let result = machine.wait_workload()?;
     machine.stop(Duration::from_secs(10))?;
     Ok(result)
+}
+
+/// Management filesystem fixture for the local VMM protocol stand-in.
+pub fn guest_root() -> PathBuf {
+    static ROOT: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("usr/sbin")).unwrap();
+        std::fs::create_dir_all(root.path().join("sbin")).unwrap();
+        std::fs::copy(guestd_path(), root.path().join("usr/sbin/clankerd-guestd")).unwrap();
+        for (name, relative) in [
+            ("mke2fs", "sbin/mke2fs"),
+            ("resize2fs", "usr/sbin/resize2fs"),
+        ] {
+            std::fs::copy(tool(name), root.path().join(relative)).unwrap();
+        }
+        std::fs::write(root.path().join("sbin/dhcpcd"), "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(
+            root.path().join("sbin/dhcpcd"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        root
+    })
+    .path()
+    .to_owned()
 }

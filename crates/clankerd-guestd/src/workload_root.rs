@@ -83,7 +83,7 @@ pub fn start() -> Result<(), String> {
     fs::create_dir_all(&run).map_err(|e| e.to_string())?;
     let marker = run.join(".clankerd-namespace-ready");
     let _ = fs::remove_file(&marker);
-    let mut cmd = Command::new("/clankerd-guestd");
+    let mut cmd = Command::new(format!("/{}", clankerd_proto::spawn::BOOT_GUESTD));
     cmd.arg("namespace-keeper")
         .stdin(std::process::Stdio::null());
     let mut child = crate::power::spawn_owned(&mut cmd).map_err(|e| e.to_string())?;

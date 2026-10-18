@@ -67,7 +67,7 @@ impl Guestd {
         let listener = UnixListener::bind(&socket).unwrap();
         let fd = listener.as_raw_fd();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_clankerd-guestd"));
-        cmd.args(["--populate", "--boot-dir"])
+        cmd.args(["--populate", "--management-root"])
             .arg(boot_dir)
             .env("LISTEN_FDS", "1")
             .stdin(Stdio::null());
@@ -156,14 +156,10 @@ impl Guestd {
     }
 }
 
-/// A boot directory containing the host's mke2fs, standing in for the shipped
-/// static binary (CI and developers have e2fsprogs; the static build is
-/// assembled separately by the production build).
+/// Management filesystem fixture using the selected native test formatter.
 pub fn boot_dir_with_mke2fs() -> tempfile::TempDir {
     let dir = tempfile::Builder::new().prefix("boot").tempdir().unwrap();
-    // CLANKERD_TEST_BOOT_DIR points at a real boot directory (e.g. the output of
-    // scripts/build-e2fsprogs.sh) to exercise the shipped static binary.
-    let mke2fs = match std::env::var_os("CLANKERD_TEST_BOOT_DIR") {
+    let mke2fs = match std::env::var_os("CLANKERD_TEST_TOOLS") {
         Some(d) => PathBuf::from(d).join("mke2fs"),
         None => ["/usr/sbin/mke2fs", "/sbin/mke2fs", "/usr/bin/mke2fs"]
             .into_iter()
@@ -171,6 +167,7 @@ pub fn boot_dir_with_mke2fs() -> tempfile::TempDir {
             .find(|p| p.exists())
             .expect("mke2fs (e2fsprogs) must be installed to run seam B tests"),
     };
-    std::os::unix::fs::symlink(mke2fs, dir.path().join("mke2fs")).unwrap();
+    std::fs::create_dir_all(dir.path().join("sbin")).unwrap();
+    std::os::unix::fs::symlink(mke2fs, dir.path().join("sbin/mke2fs")).unwrap();
     dir
 }

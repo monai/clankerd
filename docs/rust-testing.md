@@ -21,7 +21,7 @@ CI generates and uploads both. Override `COVERAGE_OUT` for report placement and
 `CARGO_TARGET_DIR` for build placement. In a container with a shared workspace,
 keep the build directory and `TMPDIR` on the container's root filesystem.
 
-`CLANKERD_TEST_BOOT_DIR` can point at compatible mke2fs, e2fsck, debugfs and
+`CLANKERD_TEST_TOOLS` can point at compatible mke2fs, e2fsck, debugfs and
 resize2fs binaries. Tests obtain helper executable paths from Cargo's JSON
 build messages, so instrumented binaries are included without assuming Cargo's
 output layout.
@@ -61,5 +61,5 @@ collection and every report.
 
 Linux tests require native e2fsprogs (`apt-get install e2fsprogs` on Debian/Ubuntu).
 The runner resolves these tools before compilation and reports missing prerequisites.
-`CLANKERD_TEST_BOOT_DIR` is authoritative when set; it must contain executable tools
+`CLANKERD_TEST_TOOLS` is authoritative when set; it must contain executable tools
 for the test machine, which may differ from the shipped ARM64 guest target.

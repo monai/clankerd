@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Included in m2-run-network-gates.sh: stopped edits, reimage and data retention.
+# Included in accept-self-contained-build.sh: stopped edits, reimage and data retention.
 set -Eeuo pipefail
 [ "$(uname -s)" = Darwin ] || { echo 'Requires the Mac host' >&2; exit 1; }
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -7,7 +7,7 @@ out=${OUT:-$root/build/rust}
 vmctl=$out/darwin-arm64/vmctl
 work=$(mktemp -d /tmp/clankerd-command-system.XXXXXX)
 export CLANKERD_STATE_DIR=$work/state CLANKERD_RUNTIME_DIR=$work/run
-export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
+export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn CLANKERD_GUEST_ROOT=$out/linux-arm64/management
 image=${IMAGE:-python:3.13-alpine}
 cleanup() { "$vmctl" machine rm -f member >/dev/null 2>&1 || true; }
 trap cleanup EXIT

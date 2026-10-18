@@ -16,8 +16,8 @@
 //! from the `Exited` event instead.
 //!
 //! Population boot (`--populate`, no workload): serves only the root-disk
-//! methods (format, unpack tar, populate disk) with the static e2fsprogs from
-//! `--boot-dir` (default: next to this binary); `--lenient-ownership` is a
+//! methods (format, unpack tar, populate disk) with the packaged e2fsprogs from
+//! `--management-root` (required for local formatting); `--lenient-ownership` is a
 //! development flag for runs without root.
 //!
 //! As PID 1 (booted by libkrun's init.krun) guestd outlives the OCI command.
@@ -111,7 +111,7 @@ fn main() {
     let mut host_vsock_port = None;
     let mut vsock_port = None;
     let mut populate = false;
-    let mut boot_dir = None;
+    let mut management_root = None;
     let mut lenient = false;
     let mut boot_root = false;
     let mut args = std::env::args().skip(1);
@@ -125,7 +125,7 @@ fn main() {
             }
             "--vsock-port" => vsock_port = Some(port_arg(args.next(), "--vsock-port")),
             "--populate" => populate = true,
-            "--boot-dir" => boot_dir = args.next().map(PathBuf::from),
+            "--management-root" => management_root = args.next().map(PathBuf::from),
             "--lenient-ownership" => lenient = true,
             "--boot" => boot_root = true,
             other => die(&format!("unknown argument {other}")),
@@ -150,18 +150,9 @@ fn main() {
             die(&e);
         }
     }
-    let boot_dir = boot_dir.unwrap_or_else(|| {
-        if boot_root {
-            PathBuf::from("/")
-        } else {
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(PathBuf::from))
-                .unwrap_or_else(|| PathBuf::from("/"))
-        }
-    });
+    let management_root = management_root.or_else(|| boot_root.then(|| PathBuf::from("/")));
     let disk = Arc::new(rootdisk::Ctx {
-        boot_dir,
+        management_root,
         populate_mode: populate,
         populated: Default::default(),
         lenient,

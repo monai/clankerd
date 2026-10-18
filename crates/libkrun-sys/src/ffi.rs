@@ -35,7 +35,7 @@ unsafe extern "C" {
         read_only: bool,
         semantics: u32,
     ) -> i32;
-    /// virtio-net backed by a unix datagram socket (gvproxy, vmnet-helper).
+    /// virtio-net backed by a unix datagram socket (clankerd native attachment).
     /// `c_path` and `fd` are mutually exclusive (`fd` -1 with a path). `c_mac`
     /// points at 6 bytes. `flags`: `NET_FLAG_VFKIT` (1 << 0) sends the vfkit
     /// magic, `NET_FLAG_DHCP_CLIENT` (1 << 1) would run libkrun's own DHCP

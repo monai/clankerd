@@ -29,6 +29,7 @@ struct State {
     token: Option<String>,
 }
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Request {
     action: String,
     socket: String,
@@ -70,6 +71,7 @@ fn alive(record: &Record) -> bool {
     let Ok(out) = command(
         &[
             "/bin/ps",
+            "-ww",
             "-o",
             "uid=,command=",
             "-p",
@@ -79,13 +81,16 @@ fn alive(record: &Record) -> bool {
     ) else {
         return false;
     };
-    let fields: Vec<_> = out.split_whitespace().collect();
+    owned_attachment(&out, record.uid, &record.socket)
+}
+fn owned_attachment(output: &str, uid: u32, socket: &str) -> bool {
+    let fields: Vec<_> = output.split_whitespace().collect();
     fields.len() >= 4
-        && fields[0].parse::<u32>().ok() == Some(record.uid)
+        && fields[0].parse::<u32>().ok() == Some(uid)
         && fields[1].ends_with("/clankerd-network")
         && fields[2..]
             .windows(2)
-            .any(|pair| pair == ["--socket", &record.socket])
+            .any(|pair| pair == ["--socket", socket])
 }
 fn rules(records: &BTreeMap<String, Record>) -> String {
     let bridges: BTreeSet<_> = records.values().map(|r| &r.bridge).collect();
@@ -285,4 +290,91 @@ pub fn run() -> Result<()> {
     }
     println!("{}", serde_json::json!({"attachments":state.records.len()}));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(bridge: &str) -> Record {
+        Record {
+            uid: 501,
+            socket: "/tmp/example.net".into(),
+            pid: 123,
+            network_id: "a".repeat(64),
+            subnet: "192.168.120.0/24".into(),
+            prefix: Some("fd00:1::/64".into()),
+            bridge: bridge.into(),
+        }
+    }
+
+    #[test]
+    fn attachment_ownership_requires_the_caller_executable_and_exact_socket_argument() {
+        for (text, expected) in [
+            (
+                "501 /tmp/example/clankerd-network --socket /tmp/example.net",
+                true,
+            ),
+            (
+                "501 /tmp/example/clankerd-network --operation-mode shared --socket /tmp/example.net",
+                true,
+            ),
+            (
+                "0 /tmp/example/clankerd-network --socket /tmp/example.net",
+                false,
+            ),
+            (
+                "502 /tmp/example/clankerd-network --socket /tmp/example.net",
+                false,
+            ),
+            ("501 /tmp/example/other --socket /tmp/example.net", false),
+            (
+                "501 /tmp/example/clankerd-network --other /tmp/example.net",
+                false,
+            ),
+            (
+                "501 /tmp/example/clankerd-network --socket /tmp/example.net-extra",
+                false,
+            ),
+            ("", false),
+            ("invalid process output", false),
+        ] {
+            assert_eq!(
+                owned_attachment(text, 501, "/tmp/example.net"),
+                expected,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn policy_marks_each_active_bridge_and_blocks_only_cross_bridge_egress() {
+        let mut records = BTreeMap::new();
+        assert_eq!(rules(&records), "");
+        records.insert("example-a".into(), record("bridge1"));
+        let one = "anchor \"mark-bridge1\" in on bridge1 all tag \"clankerd_bridge1\"\n";
+        assert_eq!(rules(&records), one);
+        records.insert("example-b".into(), record("bridge1"));
+        assert_eq!(
+            rules(&records),
+            one,
+            "same-network members share a policy boundary"
+        );
+        records.insert("example-c".into(), record("bridge2"));
+        assert_eq!(
+            rules(&records),
+            concat!(
+                "anchor \"mark-bridge1\" in on bridge1 all tag \"clankerd_bridge1\"\n",
+                "anchor \"mark-bridge2\" in on bridge2 all tag \"clankerd_bridge2\"\n",
+                "block drop out quick on bridge2 all tagged \"clankerd_bridge1\" label \"clankerd-bridge1-bridge2\"\n",
+                "block drop out quick on bridge1 all tagged \"clankerd_bridge2\" label \"clankerd-bridge2-bridge1\"\n"
+            )
+        );
+        records.remove("example-c");
+        assert_eq!(
+            rules(&records),
+            one,
+            "removal retains surviving members' policy"
+        );
+    }
 }

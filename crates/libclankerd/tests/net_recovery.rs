@@ -16,7 +16,7 @@ if Path(sys.argv[0]+'.blocked').exists(): sys.exit(4)
 path=sys.argv[sys.argv.index('--socket')+1]
 sock=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)
 sock.bind(path)
-print('{"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514}',flush=True)
+print('{"pid":%s,"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514}' % __import__('os').getpid(),flush=True)
 first,peer=sock.recvfrom(65536,socket.MSG_PEEK)
 sock.connect(peer)
 if len(first)<64: sock.recv(65536)
@@ -32,7 +32,7 @@ while True:
         dir: directory.path().into(),
         socket: directory.path().join("backend.net"),
         host_config: libclankerd::HostConfig {
-            shared_peer_participation: false,
+            network_mode: libclankerd::NetworkMode::HostOnly,
             ..Default::default()
         },
     };
@@ -121,14 +121,14 @@ while True:
 }
 
 #[test]
-fn automatic_native_prefix_bounds_the_relay() {
+fn the_selected_resource_prefix_bounds_the_relay() {
     let directory = tempfile::tempdir().unwrap();
     let helper = directory.path().join("clankerd-network");
     std::fs::write(&helper, r#"#!/usr/bin/env python3
 import socket,sys
 path=sys.argv[sys.argv.index('--socket')+1]
 sock=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM);sock.bind(path)
-print('{"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514,"vmnet_nat66_prefix":"fd42:1::"}',flush=True)
+print('{"pid":%s,"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514,"vmnet_nat66_prefix":"fd42:1::"}' % __import__('os').getpid(),flush=True)
 while True:
     packet,peer=sock.recvfrom(65536)
     if len(packet)>=64:sock.sendto(packet,peer)
@@ -139,7 +139,10 @@ while True:
         network_id: None,
         dir: directory.path().into(),
         socket: directory.path().join("backend.net"),
-        host_config: Default::default(),
+        host_config: libclankerd::HostConfig {
+            shared_ipv6_prefix: Some("fd42:1::".parse().unwrap()),
+            ..Default::default()
+        },
     };
     let backend = VmnetBackend::new(&helper);
     backend.start(&spec).unwrap();

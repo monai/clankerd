@@ -1,3 +1,4 @@
+"""Acceptance evidence must prove an unprivileged VMM and bundled dependencies."""
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -11,31 +12,28 @@ SPEC.loader.exec_module(runner)
 
 
 class VmProcessEvidence(unittest.TestCase):
-    def test_long_bundle_path_uses_recorded_pid_without_command_matching(self):
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = Path(directory)
-            bundle = evidence / ('long-acceptance-path-' * 8) / 'bundle'
-            mappings = f'Path: {bundle}/darwin-arm64/clankerd-vmspawn\n{bundle}/darwin-arm64/lib/libkrun.1.dylib\n'
-            with patch.object(runner.os, 'getuid', return_value=501), patch.object(
-                    runner.subprocess, 'check_output', side_effect=[' 123 501\n', mappings]) as read:
-                runner.verify(123, bundle, evidence)
-                self.assertEqual(read.call_args_list[0].args[0],
-                                 ['/bin/ps', '-p', '123', '-o', 'pid=,uid='])
-                self.assertEqual((evidence / 'vmmap-123.log').read_text(), mappings)
+    def test_only_the_requesting_nonroot_identity_is_accepted(self):
+        for owner in (0, 500, 501):
+            with self.subTest(owner=owner), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                mappings = f'Path: {root}/darwin-arm64/clankerd-vmspawn\n{root}/darwin-arm64/lib/libkrun.1.dylib\n'
+                with patch.object(runner.os, 'getuid', return_value=501), patch.object(
+                        runner.subprocess, 'check_output', side_effect=[f'123 {owner}\n', mappings]):
+                    if owner == 501:
+                        runner.verify(123, root, root)
+                        self.assertEqual((root / 'vmmap-123.log').read_text(), mappings)
+                    else:
+                        with self.assertRaises(AssertionError):
+                            runner.verify(123, root, root)
+                    self.assertEqual((root / 'process-123.log').read_text(), f'123 {owner}\n')
 
-    def test_root_owned_vm_is_rejected_before_reading_mappings(self):
+    def test_mapping_evidence_requires_the_bundle_executable_and_libraries(self):
         with tempfile.TemporaryDirectory() as directory:
-            with patch.object(runner.os, 'getuid', return_value=501), patch.object(
-                    runner.subprocess, 'check_output', return_value='123 0\n') as read:
-                with self.assertRaises(AssertionError):
-                    runner.verify(123, Path(directory), Path(directory))
-                self.assertEqual(read.call_count, 1)
-
-    def test_unbundled_library_is_rejected_and_evidence_retained(self):
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = Path(directory)
-            with patch.object(runner.os, 'getuid', return_value=501), patch.object(
-                    runner.subprocess, 'check_output', side_effect=['123 501\n', '/opt/homebrew/lib/libkrun.dylib']):
-                with self.assertRaises(AssertionError):
-                    runner.verify(123, evidence, evidence)
-                self.assertTrue((evidence / 'vmmap-123.log').is_file())
+            root = Path(directory)
+            for mappings in ['', '/opt/homebrew/lib/libkrun.dylib', '/usr/local/Cellar/libkrun.dylib',
+                             f'{root}/darwin-arm64/clankerd-vmspawn', f'{root}/darwin-arm64/lib/libkrun.1.dylib']:
+                with self.subTest(mappings=mappings), patch.object(runner.os, 'getuid', return_value=501), patch.object(
+                        runner.subprocess, 'check_output', side_effect=['123 501\n', mappings]):
+                    with self.assertRaises(AssertionError):
+                        runner.verify(123, root, root)
+                    self.assertEqual((root / 'vmmap-123.log').read_text(), mappings)

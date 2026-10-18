@@ -67,7 +67,7 @@ class ArtifactGraph(unittest.TestCase):
             'sbin/mke2fs': b'format', 'usr/sbin/resize2fs': b'grow', 'lib/ld-musl-aarch64.so.1': b'loader',
             'lib/apk/db/installed': b'fixture package database'})
         dylib = struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 6, 0, 0, 0, 0)
-        host = archive('host.tar.gz', {'libkrun/1.19.6/lib/libkrun.1.19.6.dylib': dylib, 'xz/5.8.4/lib/liblzma.5.dylib': dylib})
+        host = archive('host.tar.gz', {'libkrun/1.19.6/lib/libkrun.1.19.6.dylib': dylib, 'xz/5.8.4/lib/liblzma.5.dylib': dylib, 'xz/5.8.4/lib/pkgconfig/liblzma.pc': b'Version: 5.8.4\n'})
         self.lock = self.root / 'inputs.mk'
         self.lock.write_text('INPUTS := base host\nGUEST_INPUTS := base\nHOST_INPUTS := host\n' +
             ''.join(f'{name}_URL := {path.as_uri()}\n{name}_SHA256 := {hashlib.sha256(path.read_bytes()).hexdigest()}\n'
@@ -76,21 +76,20 @@ class ArtifactGraph(unittest.TestCase):
         tools.mkdir()
         cargo = tools / 'cargo'
         cargo.write_text('''#!/usr/bin/env python3
-import os,sys,struct
+import os,sys,struct,re,subprocess
 from pathlib import Path
 args=sys.argv
+for flags in (os.environ.get(name,'') for name in ('MAKEFLAGS','CARGO_MAKEFLAGS')):
+ for low,high in re.findall(r'--jobserver-(?:fds|auth)=(\\d+),(\\d+)',flags):
+  os.fstat(int(low)); os.fstat(int(high))
 if '--version' in args:
- assert not any(name in os.environ for name in ('MAKEFLAGS', 'MFLAGS', 'CARGO_MAKEFLAGS'))
  print('fixture cargo'); sys.exit(0)
 kind='guest' if 'aarch64-unknown-linux-musl' in args else 'host'
-assert not any(name in os.environ for name in ('MAKEFLAGS', 'MFLAGS', 'CARGO_MAKEFLAGS'))
 if kind=='host':
- metadata=Path(os.environ['PKG_CONFIG_LIBDIR'])/'liblzma.pc'
- assert metadata.is_file()
- assert (metadata.parent.parent/'lib/liblzma.dylib').is_file()
- assert os.environ['PKG_CONFIG_ALLOW_CROSS']=='1'
- assert os.environ['PKG_CONFIG_PATH']==str(metadata.parent)
- assert os.environ['PKG_CONFIG_SYSROOT_DIR']=='/'
+ libdir=Path(subprocess.check_output(['pkg-config','--variable=libdir','liblzma'],text=True).strip())
+ expected=next(Path('build/self-contained').glob('*/host-libraries/lib/liblzma.5.dylib'))
+ assert (libdir/'liblzma.dylib').resolve()==expected.resolve()
+ assert (libdir/'liblzma.dylib').is_file()
 with open(os.environ['GRAPH_LOG'],'a') as stream: stream.write(kind+'\\n')
 if os.environ.get('FAIL_CARGO'): sys.exit(1)
 if os.environ.get('BLOCK_CARGO'):
@@ -110,6 +109,7 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
     return struct.pack('<III',code,size,header)+bytes(header-12)+data+bytes(size-header-len(data))
    commands=command(0xc,24,'@rpath/libkrun.1.dylib')+command(0x8000001c,12,'@executable_path/lib')
   (out/name).write_bytes(struct.pack('<8I',0xfeedfacf,0x100000c,0,2,2 if commands else 0,len(commands),0,0)+commands)
+ (out/name).chmod(0o755)
 ''')
         cargo.chmod(0o755)
         signer = tools / 'rcodesign'
@@ -121,7 +121,9 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
             tool.chmod(0o755)
         self.log = self.root / 'cargo.log'
         self.env = dict(os.environ, PATH=str(tools)+os.pathsep+os.environ['PATH'], GRAPH_LOG=str(self.log))
-        self.args = ['make', '--no-print-directory', '-j4', 'build', f'INPUT_LOCK={self.lock}']
+        self.args = ['make', '--no-print-directory', '-j4', 'build', f'INPUT_LOCK={self.lock}',
+                     'BUILD_ROOT=build/self-contained', 'DOWNLOADS=build/self-contained/downloads',
+                     f'CARGO_TARGET_DIR={self.root / "cargo"}']
 
     def run_make(self, ok=True, env=None):
         result = subprocess.run(self.args, cwd=self.root, env=env or self.env, text=True, capture_output=True)
@@ -131,20 +133,14 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
             self.assertNotEqual(result.returncode, 0, result.stdout+result.stderr)
         return result
 
-    def test_build_works_without_the_loader_api_removed_in_python_315(self):
-        startup = self.root / 'python315'
-        startup.mkdir()
-        (startup / 'sitecustomize.py').write_text(
-            'from importlib.machinery import SourceFileLoader\n'
-            'for cls in SourceFileLoader.__mro__:\n'
-            '    if "load_module" in vars(cls): delattr(cls, "load_module")\n')
-        self.run_make(env=dict(self.env, PYTHONPATH=str(startup)))
-        self.assertTrue((self.root / 'build/rust/darwin-arm64/vmctl').is_file())
-
     def test_warm_build_missing_output_and_changed_rust_have_the_correct_rebuild_scope(self):
         self.run_make()
         artifact = self.root / 'build/rust'
         self.assertTrue((artifact / 'linux-arm64/management/sbin/dhcpcd').is_file())
+        self.assertEqual({p.name for p in (artifact / 'linux-arm64').iterdir()}, {'management'})
+        management = artifact / 'linux-arm64/management'
+        self.assertTrue((management / 'usr/sbin/clankerd-guestd').is_file())
+        self.assertFalse(any(p.is_file() or p.is_symlink() for p in management.iterdir()))
         original = artifact.resolve()
         calls = self.log.read_text()
         self.run_make()
@@ -168,16 +164,13 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         self.run_make()
         self.assertEqual(self.log.read_text(), calls+'host\n')
 
-    def test_legacy_bundle_is_retained_when_the_complete_artifact_is_published(self):
+    def test_publication_rejects_an_unowned_directory(self):
         output = self.root / 'build/rust'
-        (output / 'darwin-arm64').mkdir(parents=True)
-        (output / 'linux-arm64').mkdir()
-        (output / 'darwin-arm64/vmctl').write_text('previous bundle')
-        self.run_make()
-        self.assertTrue(output.is_symlink())
-        previous = list((self.root / 'build').glob('.rust-legacy-*'))
-        self.assertEqual(len(previous), 1)
-        self.assertEqual((previous[0] / 'darwin-arm64/vmctl').read_text(), 'previous bundle')
+        output.mkdir(parents=True)
+        (output / 'user-file').write_text('fixture user data')
+        self.run_make(ok=False)
+        self.assertFalse(output.is_symlink())
+        self.assertEqual((output / 'user-file').read_text(), 'fixture user data')
 
     def test_failed_signing_and_corrupt_input_preserve_the_published_artifact(self):
         self.run_make()

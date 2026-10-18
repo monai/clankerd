@@ -41,7 +41,7 @@ filesystem under `linux-arm64`. Package metadata and license texts accompany it.
 Publication switches to a completed generation only after signing succeeds.
 Warm builds validate content and reuse unchanged outputs. `RUST_OUT` selects the
 publication path, `BUILD_ROOT` selects isolated phase outputs/caches, and
-`CARGO_TARGET_DIR` selects Cargo intermediates. `make rust` aliases `make build`.
+`CARGO_TARGET_DIR` selects Cargo intermediates. `make build` is the artifact build entry point.
 
 Host networking uses bundled clankerd-owned Apple vmnet and PF code.
 Administrator authorization uses ordinary sudo authentication. The VM and

@@ -1,7 +1,6 @@
 //! Root-disk methods: `FormatExt4`, `UnpackTar` and `PopulateDisk`.
 //!
-//! Formatting runs the static `mke2fs` shipped next to guestd in the boot
-//! directory. Unpacking is [`crate::unpack`]. Populating a disk composes them:
+//! Formatting runs the packaged `sbin/mke2fs` in the management filesystem. Unpacking is [`crate::unpack`]. Populating a disk composes them:
 //! format, mount (attaching a loop device first when the "disk" is a regular
 //! file), unpack, sync, unmount.
 
@@ -28,8 +27,8 @@ use serde_json::Value;
 use crate::unpack::unpack;
 
 pub struct Ctx {
-    /// Directory holding the static e2fsprogs binaries (default: next to guestd).
-    pub boot_dir: PathBuf,
+    /// Management filesystem containing sbin/ and usr/sbin/.
+    pub management_root: Option<PathBuf>,
     /// Populate boot: power off after the host acknowledges `PopulateDisk`.
     pub populate_mode: bool,
     pub populated: AtomicBool,
@@ -130,10 +129,14 @@ pub(crate) fn format_device(
             device.display()
         )));
     }
-    let mke2fs = ctx.boot_dir.join("mke2fs");
+    let root = ctx
+        .management_root
+        .as_ref()
+        .ok_or_else(|| Failure::failed("no management filesystem configured"))?;
+    let mke2fs = root.join("sbin/mke2fs");
     if !mke2fs.exists() {
         return Err(Failure::failed(format!(
-            "{} not found (the boot directory must ship mke2fs)",
+            "{} not found (the management filesystem must contain sbin/mke2fs)",
             mke2fs.display()
         )));
     }
@@ -313,5 +316,29 @@ impl Drop for LoopDevice {
             // SAFETY: detaching our own device; fails harmlessly if already cleared.
             unsafe { libc::ioctl(dev.as_raw_fd(), LOOP_CLR_FD) };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formatting_requires_an_explicit_management_filesystem() {
+        let directory = tempfile::tempdir().unwrap();
+        let device = directory.path().join("example.ext4");
+        fs::File::create(&device)
+            .unwrap()
+            .set_len(16 << 20)
+            .unwrap();
+        let ctx = Ctx {
+            management_root: None,
+            populate_mode: false,
+            populated: AtomicBool::new(false),
+            lenient: false,
+        };
+        let failure =
+            format_device(&ctx, &device, None, None).expect_err("unconfigured formatter must fail");
+        assert!(failure.1.contains("no management filesystem configured"));
     }
 }

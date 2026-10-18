@@ -2,6 +2,7 @@
 //! over a temp state directory, and polling.
 #![allow(dead_code)]
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
@@ -65,4 +66,27 @@ impl Drop for Cleanup {
             }
         }
     }
+}
+
+/// A management filesystem for the local launcher; no alternate flat layout.
+pub fn guest_root() -> PathBuf {
+    static ROOT: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["sbin", "usr/sbin"] {
+            std::fs::create_dir_all(root.path().join(name)).unwrap();
+        }
+        std::fs::copy(guestd(), root.path().join("usr/sbin/clankerd-guestd")).unwrap();
+        for name in ["sbin/mke2fs", "sbin/dhcpcd", "usr/sbin/resize2fs"] {
+            std::fs::write(root.path().join(name), "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(
+                root.path().join(name),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+        }
+        root
+    })
+    .path()
+    .to_owned()
 }

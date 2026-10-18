@@ -14,22 +14,16 @@ use serde::{Deserialize, Serialize};
 const CONFIG: &str = "net-recovery.json";
 const HEALTH: &str = "net-connected";
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Configuration {
     binary: PathBuf,
     spec: NetSpec,
-    #[serde(default)]
-    source_ipv6_prefix: Option<std::net::Ipv6Addr>,
 }
 
-pub(super) fn record(
-    binary: &Path,
-    spec: &NetSpec,
-    source_ipv6_prefix: Option<std::net::Ipv6Addr>,
-) -> crate::Result<()> {
+pub(super) fn record(binary: &Path, spec: &NetSpec) -> crate::Result<()> {
     let bytes = serde_json::to_vec(&Configuration {
         binary: binary.into(),
         spec: spec.clone(),
-        source_ipv6_prefix,
     })?;
     let temporary = spec.dir.join("net-recovery.tmp");
     fs::write(&temporary, bytes)?;
@@ -99,8 +93,8 @@ fn connect(local: &Path, upstream: &Path) -> io::Result<UnixDatagram> {
     let socket = UnixDatagram::bind(local)?;
     socket.connect(upstream)?;
     socket.set_nonblocking(true)?;
-    // vmnet-helper accepts a short frame to establish its Unixgram peer, then discards it.
-    socket.send(b"VFKT")?;
+    // Register the relay peer before any Ethernet traffic arrives.
+    socket.send(b"CLNK")?;
     Ok(socket)
 }
 fn serve(
@@ -111,10 +105,7 @@ fn serve(
     active: Arc<AtomicBool>,
 ) {
     let backend = VmnetBackend::new(&config.binary);
-    let mut source_policy = config.spec.host_config.clone();
-    source_policy.shared_ipv6_prefix = config
-        .source_ipv6_prefix
-        .or(source_policy.shared_ipv6_prefix);
+    let source_policy = config.spec.host_config.clone();
     let mut back = Some(back);
     let mut helper_pid = pid(&config.spec);
     let mut retry_at = Instant::now();

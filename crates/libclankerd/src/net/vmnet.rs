@@ -38,6 +38,13 @@ impl Default for VmnetBackend {
 
 impl NetBackend for VmnetBackend {
     fn start(&self, spec: &NetSpec) -> Result<NetAttachment> {
+        if spec.host_config.network_mode == NetworkMode::Shared
+            && spec.host_config.shared_ipv6_prefix.is_none()
+        {
+            return Err(Error::invalid_parameter(
+                "shared attachment requires its virtual network's persisted IPv6 prefix",
+            ));
+        }
         crate::config::validate_bridge_config(&spec.host_config)?;
         super::validate_host_config(&spec.host_config)?;
         let binary = &self.binary;
@@ -92,9 +99,6 @@ impl NetBackend for VmnetBackend {
                 if let Some(prefix) = spec.host_config.shared_ipv6_prefix {
                     command.args(["--nat66-prefix", &prefix.to_string()]);
                 }
-                if !spec.host_config.shared_peer_participation {
-                    command.arg("--enable-isolation");
-                }
             }
             NetworkMode::Bridged => {
                 command.args([
@@ -145,7 +149,7 @@ impl NetBackend for VmnetBackend {
                 )));
             }
             if spec.socket.exists()
-                && interface_ready(&log_path, spec.host_config.shared_ipv6_prefix)
+                && interface_ready(&log_path, spec.host_config.shared_ipv6_prefix).is_some()
             {
                 // Recheck after reading the completion record: a helper that
                 // exited during publication cannot launch the workload.
@@ -170,27 +174,16 @@ impl NetBackend for VmnetBackend {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        // sudo may keep a privileged monitor in a separate process group.
-        // Record the helper after it drops privileges, so later CLI processes
-        // can terminate it directly without sudo or a live parent.
-        if cfg!(target_os = "macos") {
-            let pid = helper_pid(&spec.socket).ok_or_else(|| {
-                self.stop_helper(spec);
-                Error::unavailable("cannot identify the unprivileged clankerd-network process")
-            })?;
-            if let Err(error) = fs::write(spec.dir.join(PID_FILE), pid.to_string()) {
-                self.stop_helper(spec);
-                let _ = child.wait();
-                return Err(error.into());
-            }
+        let ready = interface_ready(&log_path, spec.host_config.shared_ipv6_prefix)
+            .ok_or_else(|| Error::unavailable("native attachment readiness record disappeared"))?;
+        let pid = ready.pid;
+        if let Err(error) = fs::write(spec.dir.join(PID_FILE), pid.to_string()) {
+            self.stop_helper(spec);
+            return Err(error.into());
         }
-        let pid = fs::read_to_string(spec.dir.join(PID_FILE))?
-            .trim()
-            .parse::<u32>()
-            .map_err(|error| Error::unavailable(format!("reading native helper PID: {error}")))?;
-        let prefix = native_prefix(&log_path);
+        let prefix = spec.host_config.shared_ipv6_prefix;
         if let Err(error) = super::pf::register(spec, pid, prefix)
-            .and_then(|_| super::recovery::record(binary, spec, prefix))
+            .and_then(|_| super::recovery::record(binary, spec))
         {
             self.stop_helper(spec);
             super::pf::remove(spec);
@@ -230,13 +223,6 @@ impl VmnetBackend {
     }
 
     fn stop_helper(&self, spec: &NetSpec) {
-        // A failed sudo startup may leave the monitor PID in the record.
-        // Signal the actual dropped-privilege helper as well, if it exists.
-        if cfg!(target_os = "macos")
-            && let Some(pid) = helper_pid(&spec.socket)
-        {
-            signal_group(pid, libc::SIGTERM);
-        }
         let pid_file = spec.dir.join(PID_FILE);
         if let Some(pid) = fs::read_to_string(&pid_file)
             .ok()
@@ -280,18 +266,28 @@ fn is_helper(pid: i32, socket: &Path) -> bool {
     if !process_exists(pid) {
         return false;
     }
-    match Command::new("ps")
-        .args(["-o", "command=", "-p", &pid.to_string()])
+    let Ok(out) = Command::new("/bin/ps")
+        .args(["-ww", "-o", "uid=,command=", "-p", &pid.to_string()])
         .output()
-    {
-        Ok(out) if out.status.success() || !out.stdout.is_empty() => {
-            let command = String::from_utf8_lossy(&out.stdout);
-            command.contains("clankerd-network")
-                && command.contains(socket.to_string_lossy().as_ref())
-        }
-        Ok(_) => false,
-        Err(_) => false,
+    else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
     }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let fields: Vec<_> = text.split_whitespace().collect();
+    // The local protocol stand-in is an interpreted executable; native transport
+    // is the program itself. Both must belong to the caller and exact socket.
+    fields.first().and_then(|value| value.parse::<u32>().ok()) == Some(unsafe { libc::geteuid() })
+        && fields
+            .iter()
+            .skip(1)
+            .take(2)
+            .any(|program| program.ends_with("/clankerd-network"))
+        && fields
+            .windows(2)
+            .any(|pair| pair == ["--socket", socket.to_string_lossy().as_ref()])
 }
 
 fn log_tail(path: &Path) -> String {
@@ -336,88 +332,83 @@ fn interface_identity(id: &str) -> String {
     )
 }
 
-fn helper_pid(socket: &Path) -> Option<i32> {
-    let output = Command::new("ps")
-        .args(["-axo", "pid=,uid=,command="])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.lines().find_map(|line| {
-        let mut fields = line.split_whitespace();
-        let pid = fields.next()?.parse().ok()?;
-        let uid: u32 = fields.next()?.parse().ok()?;
-        let program = fields.next()?;
-        // SAFETY: geteuid simply reads the process identity.
-        if uid != unsafe { libc::geteuid() } || !program.ends_with("/clankerd-network") {
-            return None;
-        }
-        let args: Vec<_> = fields.collect();
-        if args.first() == Some(&"launch") {
-            return None;
-        }
-        if args
-            .windows(2)
-            .any(|pair| pair[0] == "--socket" && pair[1] == socket.to_string_lossy())
-        {
-            Some(pid)
-        } else {
-            None
-        }
-    })
+/// Completion is one flushed record identifying the unprivileged transport,
+/// its usable interface, and the exact resource-selected prefix.
+#[derive(serde::Deserialize)]
+struct InterfaceReady {
+    pid: u32,
+    vmnet_mac_address: String,
+    vmnet_mtu: u64,
+    vmnet_max_packet_size: u64,
+    vmnet_nat66_prefix: Option<std::net::Ipv6Addr>,
 }
-
-/// Native vmnet publishes a flushed, single-line JSON record after creating
-/// the interface. Log text, partial JSON and socket existence are not a handshake.
-fn interface_ready(path: &Path, expected_prefix: Option<std::net::Ipv6Addr>) -> bool {
-    #[derive(serde::Deserialize)]
-    struct InterfaceReady {
-        vmnet_mac_address: String,
-        vmnet_mtu: u64,
-        vmnet_max_packet_size: u64,
-        vmnet_nat66_prefix: Option<String>,
-    }
-    let bytes = fs::read(path).unwrap_or_default();
+fn interface_ready(
+    path: &Path,
+    expected_prefix: Option<std::net::Ipv6Addr>,
+) -> Option<InterfaceReady> {
+    let bytes = fs::read(path).ok()?;
     String::from_utf8_lossy(&bytes)
         .split_inclusive('\n')
-        .any(|line| {
+        .find_map(|line| {
             if !line.ends_with('\n') {
-                return false;
+                return None;
             }
-            let Ok(info) = serde_json::from_str::<InterfaceReady>(line.trim()) else {
-                return false;
-            };
-            let mac: Option<Vec<u8>> = info
+            let info: InterfaceReady = serde_json::from_str(line.trim()).ok()?;
+            let mac: Vec<u8> = info
                 .vmnet_mac_address
                 .split(':')
                 .map(|part| {
-                    (part.len() == 2)
-                        .then(|| u8::from_str_radix(part, 16).ok())
-                        .flatten()
+                    if part.len() == 2 {
+                        u8::from_str_radix(part, 16).ok()
+                    } else {
+                        None
+                    }
                 })
-                .collect();
-            let Some(mac) = mac else {
-                return false;
-            };
-            expected_prefix.is_none_or(|prefix| {
-                info.vmnet_nat66_prefix
-                    .as_deref()
-                    .and_then(|value| value.parse::<std::net::Ipv6Addr>().ok())
-                    == Some(prefix)
-            }) && mac.len() == 6
+                .collect::<Option<_>>()?;
+            (info.pid > 1
+                && info.vmnet_nat66_prefix == expected_prefix
+                && mac.len() == 6
                 && mac[0] & 1 == 0
                 && mac.iter().any(|byte| *byte != 0)
                 && (576..=65535).contains(&info.vmnet_mtu)
-                && info.vmnet_max_packet_size >= info.vmnet_mtu + 14
+                && info.vmnet_max_packet_size >= info.vmnet_mtu + 14)
+                .then_some(info)
         })
 }
 
-fn native_prefix(path: &Path) -> Option<std::net::Ipv6Addr> {
-    fs::read_to_string(path).ok()?.lines().find_map(|line| {
-        serde_json::from_str::<serde_json::Value>(line)
-            .ok()?
-            .get("vmnet_nat66_prefix")?
-            .as_str()?
-            .parse()
-            .ok()
-    })
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn readiness_requires_a_complete_identity_interface_and_selected_prefix() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("readiness.log");
+        let valid = serde_json::json!({"pid":123, "vmnet_mac_address":"02:00:00:00:00:01",
+            "vmnet_mtu":1500, "vmnet_max_packet_size":1514, "vmnet_nat66_prefix":"fd00:1::"});
+        let prefix = Some("fd00:1::".parse().unwrap());
+        fs::write(&path, format!("diagnostic text\n{valid}\n")).unwrap();
+        assert_eq!(interface_ready(&path, prefix).unwrap().pid, 123);
+        for (field, value) in [
+            ("pid", serde_json::json!(0)),
+            ("pid", serde_json::Value::Null),
+            ("vmnet_mac_address", serde_json::json!("00:00:00:00:00:00")),
+            ("vmnet_mac_address", serde_json::json!("01:00:00:00:00:01")),
+            ("vmnet_mtu", serde_json::json!(575)),
+            ("vmnet_max_packet_size", serde_json::json!(1500)),
+            ("vmnet_nat66_prefix", serde_json::json!("fd00:2::")),
+            ("vmnet_nat66_prefix", serde_json::Value::Null),
+        ] {
+            let mut record = valid.clone();
+            record[field] = value;
+            fs::write(&path, format!("{record}\n")).unwrap();
+            assert!(interface_ready(&path, prefix).is_none(), "{record}");
+        }
+        fs::write(&path, valid.to_string()).unwrap();
+        assert!(interface_ready(&path, prefix).is_none(), "unflushed record");
+        let mut host_only = valid;
+        host_only["vmnet_nat66_prefix"] = serde_json::Value::Null;
+        fs::write(&path, format!("{host_only}\n")).unwrap();
+        assert!(interface_ready(&path, None).is_some());
+    }
 }

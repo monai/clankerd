@@ -6,12 +6,11 @@ set -Eeuo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${OUT:-$root/build/rust}
 vmctl=$out/darwin-arm64/vmctl
-export VMNET_TEST_LIBRARY_PATH=${VMNET_TEST_LIBRARY_PATH:-${DYLD_FALLBACK_LIBRARY_PATH:-/opt/homebrew/lib:/usr/local/lib:/usr/lib}}
 export VMNET_TEST_REAL_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn
 export CLANKERD_VMSPAWN=$root/scripts/fixtures/vmnet-family-filter.py
-export CLANKERD_GUESTD=$out/linux-arm64/clankerd-guestd
-export CLANKERD_VMNET_HELPER=${CLANKERD_VMNET_HELPER:-/opt/vmnet-helper/bin/vmnet-helper}
-sudo --non-interactive -- "$CLANKERD_VMNET_HELPER" --version
+export CLANKERD_GUEST_ROOT=$out/linux-arm64/management
+export CLANKERD_NETWORK=$out/darwin-arm64/clankerd-network
+"$CLANKERD_NETWORK" authorize
 sw_vers
 work=$(mktemp -d /tmp/clankerd-bridge.XXXXXX)
 export CLANKERD_STATE_DIR=$work/state
@@ -34,7 +33,7 @@ PYLOG
 }
 trap cleanup EXIT
 trap 'failed=1; echo "FAIL line $LINENO: $BASH_COMMAND" >&2; find "$work/state" -name "*.log" -exec tail -50 {} \;' ERR
-sudo --non-interactive -- "$CLANKERD_VMNET_HELPER" --list-shared-interfaces > "$work/supported"
+"$CLANKERD_NETWORK" launch --list-shared-interfaces > "$work/supported"
 cat "$work/supported"
 python3 - "$work/supported" > "$work/active" <<'PY'
 import subprocess,sys
