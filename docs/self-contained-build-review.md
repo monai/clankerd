@@ -156,3 +156,18 @@ remainder of a shell script. It now executes its initial contents from memory;
 a regression replaces the script file while paused and verifies that its
 original continuation completes. Native corrected boot and Docker gates remain
 pending; passed native gates need not be rerun to investigate those failures.
+
+## Final boot gate sidecar check
+
+The latest native run passed management and Docker smoke. The remaining boot
+gate failure was its broad `pgrep clankerd-network.*<state-directory>` after
+removing only the net machine. The gate still has other running machines
+(probe/override), so their legitimate sidecars satisfy that pattern. A fixture
+reproduced this failure and now verifies removal using net's recorded network
+PID while an unrelated process remains alive. The check waits up to five
+seconds and treats zombies as stopped, recording live process details on failure.
+
+Acceptance now prints compact progress and automatically emits the retained
+paste-summary at exit. Full output stays in acceptance.log and per-gate logs;
+ACCEPTANCE_VERBOSE=1 restores verbose terminal output. The native corrected
+boot gate remains pending.

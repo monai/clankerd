@@ -313,9 +313,28 @@ net_check() {
   [ "$("$vmctl" exec net cat /proc/sys/net/ipv4/ip_forward)" = 1 ] || fail "net.ipv4.ip_forward is not 1"
 
   step "net: clankerd-network stops with the machine"
-  pgrep -f "clankerd-network.*$state" >/dev/null || fail "no clankerd-network sidecar is running"
+  local machine_id helper_pid
+  machine_id=$("$vmctl" inspect net | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
+  helper_pid=$(cat "$CLANKERD_STATE_DIR/machines/$machine_id/net.pid")
+  kill -0 "$helper_pid" 2>/dev/null || fail "recorded clankerd-network sidecar is not running"
   "$vmctl" rm -f net >/dev/null
-  ! pgrep -f "clankerd-network.*$state" >/dev/null || fail "clankerd-network outlived its machine"
+  # Other machines in this gate retain their own sidecars. Check only net's PID.
+  python3 - "$helper_pid" <<'PYSTOPPED'
+import subprocess, sys, time
+pid = sys.argv[1]
+deadline = time.monotonic() + 5
+while True:
+    process = subprocess.run(['/bin/ps', '-ww', '-p', pid, '-o', 'pid=,uid=,stat=,command='],
+                             text=True, capture_output=True)
+    rows = [line.split(None, 3) for line in process.stdout.splitlines() if line.strip()]
+    if not rows or all(row[2].startswith('Z') for row in rows):
+        print('PASS removed machine network sidecar stopped (PID ' + pid + ')')
+        break
+    if time.monotonic() >= deadline:
+        print('FAIL: removed machine network sidecar outlived its machine: ' + process.stdout.strip(), file=sys.stderr)
+        sys.exit(1)
+    time.sleep(.1)
+PYSTOPPED
 }
 
 case "$mode" in

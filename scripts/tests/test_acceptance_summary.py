@@ -40,3 +40,12 @@ class AcceptanceSummary(unittest.TestCase):
             self.assertIn('error:', report)
             self.assertIn('[truncated; see log]', report)
             self.assertLess(len(report), 1000)
+
+    def test_live_progress_hides_verbose_output_but_keeps_numbered_steps(self):
+        import subprocess
+        import sys
+        result = subprocess.run([sys.executable, str(Path(runner.__file__)), '--progress'],
+            input='[2/10] Build (long-running)\nnoisy compiler output\nPASS\tm2-smoke-test\nWARN vsock\n',
+            text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '[2/10] Build (long-running)\nPASS\tm2-smoke-test\n')

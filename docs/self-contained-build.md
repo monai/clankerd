@@ -104,7 +104,8 @@ acceptance matrix remain unverified until this script runs on the Mac. Existing
 experiment evidence is not acceptance of this implementation. Host sleep/wake
 and external IPv6 remain unverified unless actually exercised.
 
-Native gate output is streamed to the terminal and saved in each gate's log.
+Native gate output is saved in each gate's log. The terminal shows compact
+numbered progress and gate results; `ACCEPTANCE_VERBOSE=1` also streams full output.
 Quiet gates report elapsed time every 30 seconds. Each gate has a 30-minute
 deadline; set `ACCEPTANCE_GATE_TIMEOUT` (seconds) to change it. A timeout sends
 TERM to the gate's process group to allow its cleanup trap to run, then KILL

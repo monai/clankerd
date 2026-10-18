@@ -94,3 +94,43 @@ class ScriptSnapshot(unittest.TestCase):
                     if process.poll() is None:
                         process.kill()
                         process.communicate()
+
+
+class NetworkGate(unittest.TestCase):
+    def test_removal_checks_only_the_removed_machines_recorded_sidecar(self):
+        source = (ROOT / 'scripts/m2-boot-check.sh').read_text()
+        start = source.index('  step "net: clankerd-network stops with the machine"')
+        end = source.index('\n}', start)
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            (work / 'state/machines/target').mkdir(parents=True)
+            # Keep a real unrelated process alive, as other boot gate machines are.
+            with subprocess.Popen(['sleep', '10']) as helper, subprocess.Popen(['sleep', '10']) as unrelated:
+                try:
+                    (work / 'state/machines/target/net.pid').write_text(str(helper.pid))
+                    vmctl = work / 'vmctl'
+                    vmctl.write_text('''#!/bin/sh
+case "$1" in
+ inspect) echo '[{"id":"target"}]';;
+ rm) kill "$TARGET_PID";;
+esac
+''')
+                    vmctl.chmod(0o755)
+                    tools = work / 'tools'
+                    tools.mkdir()
+                    # The old broad pgrep also finds unrelated machines in this state directory.
+                    (tools / 'pgrep').write_text('#!/bin/sh\nexit 0\n')
+                    (tools / 'pgrep').chmod(0o755)
+                    snippet = 'set -euo pipefail\nstep() { :; }\nfail() { echo "$*"; exit 1; }\n' + 'net_check() {\n' + source[start:end] + '\n}\nnet_check\n'
+                    result = subprocess.run(['bash', '-c', snippet],
+                        env=dict(os.environ, vmctl=str(vmctl), state=str(work),
+                                 CLANKERD_STATE_DIR=str(work / 'state'), TARGET_PID=str(helper.pid),
+                                 PATH=str(tools)+os.pathsep+os.environ['PATH']),
+                        text=True, capture_output=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIsNone(unrelated.poll())
+                finally:
+                    helper.terminate()
+                    helper.wait()
+                    unrelated.terminate()
+                    unrelated.wait()

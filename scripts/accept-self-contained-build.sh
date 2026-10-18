@@ -20,7 +20,12 @@ for variable in $(env | cut -d= -f1); do
   case "$variable" in DYLD_*|CONTROL_PLANE_*|CLANKERD_VMNET_HELPER|CLANKERD_NETWORK|CLANKERD_VMSPAWN|CLANKERD_GUESTD|CLANKERD_NETWORK_PF|CLANKERD_BOOT_DIR|CLANKERD_BOOT_DIR_ROOT|CLANKERD_DEV_GUESTD|CLANKERD_VMSPAWN_DEV_LOCAL|VMNET_TEST_LIBRARY_PATH) unset "$variable";; esac
 done
 printf 'Evidence: %s\n' "$evidence"
-exec > >(tee "$evidence/acceptance.log") 2>&1
+exec 3>&1
+if [ "${ACCEPTANCE_VERBOSE:-0}" = 1 ]; then
+  exec > >(tee "$evidence/acceptance.log") 2>&1
+else
+  exec > >(tee "$evidence/acceptance.log" | python3 scripts/summarize-self-contained-build.py --progress) 2>&1
+fi
 finish() {
   status=$?
   if [ -n "${refresh_pid:-}" ]; then kill "$refresh_pid" 2>/dev/null || true; fi
@@ -32,6 +37,7 @@ root=Path(sys.argv[1]); code=int(sys.argv[2]); results=root/'results.tsv'
     'gates':results.read_text().splitlines() if results.exists() else [],
     'management':json.loads((root/'management-result.json').read_text()) if (root/'management-result.json').exists() else None}, indent=2)+'\n')
 PYRESULT
+  python3 scripts/summarize-self-contained-build.py "$evidence" >&3 || true
   echo "Evidence retained: $evidence"
   exit "$status"
 }

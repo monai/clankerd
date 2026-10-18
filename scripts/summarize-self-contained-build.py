@@ -51,6 +51,11 @@ def summarize(evidence):
 
 
 def main():
+    if sys.argv[1:] == ['--progress']:
+        for line in sys.stdin:
+            if re.match(r'^(\[\d+/\d+\]|STILL RUNNING|PASS\t|FAIL\t|TIMEOUT|Evidence retained:)', line):
+                print(line, end='', flush=True)
+        return
     if len(sys.argv) > 1:
         evidence = Path(sys.argv[1]).resolve()
     else:
