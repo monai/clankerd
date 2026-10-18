@@ -39,6 +39,8 @@ that publication path. Copy its **contents** to relocate it. `BUILD_ROOT` and
 archives fail closed; remove the named archive to retry the download. Old
 complete generations remain available until `make clean`.
 
+The workload's `/run` is a separate tmpfs created on each boot. Runtime PID files
+and sockets expire at reboot; the image filesystem and data volumes persist.
 Guestd remains PID1 in management. Workloads and execs join a persistent private
 mount namespace rooted in the workload disk, sharing PID and network namespaces.
 Their resolver directory is shared deliberately; workload accounts, loaders and

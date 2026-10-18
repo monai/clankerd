@@ -24,6 +24,7 @@ pub fn init(workload: &Workload) -> Result<(), String> {
     wait_for_device(Path::new(ROOT_DEVICE), "workload root").map_err(|e| e.to_string())?;
     fs::create_dir_all("/workload").map_err(|e| e.to_string())?;
     mount(ROOT_DEVICE, "/workload", "ext4", libc::MS_NOATIME, "").map_err(|e| e.to_string())?;
+    crate::workload_root::prepare_runtime().map_err(|e| format!("workload runtime mount: {e}"))?;
     fs::create_dir_all("/run/clankerd-resolver/etc").map_err(|e| e.to_string())?;
     let resolver = Path::new("/etc/resolv.conf");
     if fs::symlink_metadata(resolver).is_ok() {

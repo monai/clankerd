@@ -78,6 +78,21 @@ pub fn account_path(name: &str) -> io::Result<PathBuf> {
     filesystem_path(&PathBuf::from("/etc").join(name))
 }
 
+/// Runtime files belong to this boot, independently of the persistent image
+/// and management's own runtime directory.
+pub fn prepare_runtime() -> io::Result<()> {
+    let run = workload_path("/run")?;
+    fs::create_dir_all(&run)?;
+    crate::boot::mount(
+        "tmpfs",
+        run.to_str()
+            .ok_or_else(|| io::Error::other("invalid runtime mount path"))?,
+        "tmpfs",
+        libc::MS_NOSUID | libc::MS_NODEV,
+        "mode=0755",
+    )
+}
+
 pub fn start() -> Result<(), String> {
     let run = workload_path("/run").map_err(|e| e.to_string())?;
     fs::create_dir_all(&run).map_err(|e| e.to_string())?;

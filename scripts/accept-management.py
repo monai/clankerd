@@ -92,11 +92,16 @@ try:
     vm('exec', 'management-glibc', 'sh', '-c',
        'printf "dhcpcd:x:4242:4242:hostile:/missing:/missing\\n" >> /etc/passwd; '
        'printf broken > /lib/ld-musl-aarch64.so.1; printf "noipv4\\nnoipv6\\n" > /etc/dhcpcd.conf; '
-       'mkdir -p /var/lib/dhcpcd /run/dhcpcd; echo hostile > /var/lib/dhcpcd/workload-only')
+       'mkdir -p /var/lib/dhcpcd /run/dhcpcd; echo hostile > /var/lib/dhcpcd/workload-only; '
+       'echo ephemeral > /run/workload-only')
     observe('management-glibc', '/fixture/' + probe.name)
     assert vm('exec', '-u', '1234:1234', '-w', '/tmp', 'management-glibc', 'sh', '-c', 'id -u; pwd').strip() == '1234\n/tmp'
     vm('stop', 'management-glibc'); vm('start', 'management-glibc')
     observe('management-glibc', '/fixture/' + probe.name)
+    vm('exec', 'management-glibc', 'sh', '-ec',
+       'test ! -e /run/workload-only; test ! -e /var/run/workload-only; '
+       'test "$(cat /var/lib/dhcpcd/workload-only)" = hostile; '
+       'echo current > /run/workload-only; test "$(cat /var/run/workload-only)" = current')
     (evidence / 'management-images.json').write_text(vm('image', 'ls', '--output', 'json'))
     (evidence / 'management-result.json').write_text(json.dumps({'status': 'PASS', 'state': str(work)}) + '\n')
 except BaseException as error:
