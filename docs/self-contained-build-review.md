@@ -171,3 +171,15 @@ Acceptance now prints compact progress and automatically emits the retained
 paste-summary at exit. Full output stays in acceptance.log and per-gate logs;
 ACCEPTANCE_VERBOSE=1 restores verbose terminal output. The native corrected
 boot gate remains pending.
+
+## Consolidated run authorization context
+
+The consolidated macOS run at 20261018T163015Z passed management, bind checks,
+boot, command-system, lifetimes, recovery, and Docker smoke. Native-prefix
+exited before its network checks with `sudo: a password is required`. The gate
+runner's `start_new_session=True` detached each gate from the controlling terminal
+session where acceptance had run sudo -v. It now uses process_group=0, retaining
+that session while keeping a distinct process group for bounded timeout cleanup.
+A regression failed on the old session ID and passes with both the original
+session and a separate child-owned process group. Existing timeout/cleanup
+checks continue to pass. Actual consolidated native verification is pending.

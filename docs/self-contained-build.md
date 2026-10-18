@@ -134,3 +134,7 @@ It reads the latest completed acceptance evidence without rerunning any VMs,
 prints gate statuses and up to 20 lines around each failure before cleanup's
 verbose log dumps, and saves the same text as `paste-summary.txt` beside the
 original logs. An optional evidence-directory argument selects an older run.
+
+Gate timeout isolation uses a separate process group in the authorizing
+terminal session, so cached sudo authorization remains available to the
+native-prefix gate's noninteractive diagnostic and fixture commands.

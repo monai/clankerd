@@ -61,6 +61,18 @@ class GateRunner(unittest.TestCase):
             self.assertIn('phase-one\nphase-two\n', result.stdout)
             self.assertEqual(log.read_text(), 'phase-one\nphase-two\n')
 
+    def test_gate_keeps_authorizing_session_but_has_its_own_process_group(self):
+        import json
+        import sys
+        with tempfile.TemporaryDirectory() as directory:
+            code = 'import json,os; print(json.dumps([os.getsid(0),os.getpgid(0),os.getpid()]))'
+            result = self.run_gate(Path(directory) / 'gate.log', 'exec "$1" -c "$2"', sys.executable, code)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            session, group, pid = json.loads(result.stdout)
+            self.assertEqual(session, os.getsid(0))
+            self.assertEqual(group, pid)
+            self.assertNotEqual(group, os.getpgid(0))
+
     def test_timeout_runs_shell_cleanup_and_retains_diagnostics(self):
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)

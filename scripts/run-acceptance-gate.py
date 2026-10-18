@@ -12,7 +12,9 @@ def run(log, command, timeout=1800, heartbeat=30, grace=30):
     started = time.monotonic()
     next_heartbeat = started + heartbeat
     with log.open('wb') as output, log.open('rb') as reader:
-        process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+        # Keep the terminal session used by sudo -v, while isolating signals
+        # for timeout cleanup. setsid would discard that authorization context.
+        process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT, process_group=0)
         try:
             while True:
                 data = reader.read()
