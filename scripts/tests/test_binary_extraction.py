@@ -33,7 +33,8 @@ class BinaryExtraction(unittest.TestCase):
             result = self.extract(root, [(program, b'fixture program'), (link, b''),
                 (install, f'#!/bin/sh\ntouch {marker}\n'.encode())])
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((root / 'out/sbin/example').resolve(), root / 'out/usr/sbin/example')
+            self.assertEqual((root / 'out/sbin/example').resolve(),
+                             (root / 'out/usr/sbin/example').resolve())
             self.assertEqual((root / 'out/usr/sbin/example').read_bytes(), b'fixture program')
             self.assertEqual((root / 'out/usr/sbin/example').stat().st_mode & 0o777, 0o755)
             self.assertTrue((root / 'out/package-metadata/.post-install').is_file())
