@@ -122,3 +122,14 @@ mise exec -- bash scripts/accept-self-contained-build.sh m2-boot-check m2-smoke-
 
 A successful selective run reports success for those selected gates; retain the
 previous evidence for the other gates.
+
+For compact output to share after a run, use this single-line command:
+
+```bash
+mise exec -- python3 scripts/summarize-self-contained-build.py
+```
+
+It reads the latest completed acceptance evidence without rerunning any VMs,
+prints gate statuses and up to 20 lines around each failure before cleanup's
+verbose log dumps, and saves the same text as `paste-summary.txt` beside the
+original logs. An optional evidence-directory argument selects an older run.
