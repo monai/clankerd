@@ -39,7 +39,7 @@ and unrelated untracked image files were retained.
 - Full `make test`: 356 Rust tests pass (7 native tests ignored), including the updated VMM/population/CLI
   fixtures; native-only tests remain ignored on Linux. Privilege-gated paths
   do not establish actual VM observations.
-- Python suite: 30 tests pass. Make graph behavior, controller prior-art contracts and Rust
+- Python suite: 31 tests pass. Make graph behavior, controller prior-art contracts and Rust
   runner tests pass. The graph suite covers legacy publication, source additions/
   removals, changed binary declarations, corrupt/bad hashes, missing outputs,
   failed signing, interruption and concurrent invocations.
@@ -71,3 +71,15 @@ Older other-VMM and exploratory PF diagnostic scripts still refer to installed
 helper paths and historical host policy. They are not invoked by the integrated
 acceptance runner; general migration of those experiments remains outside this
 refactor. No unrelated image/Dockerfile changes were included.
+
+## Python 3.15 compatibility follow-up
+
+The first Mac run reached the graph tests and exposed Python 3.15's removal of
+`SourceFileLoader.load_module`. The phase runner now uses `exec_module`.
+A regression test removes the obsolete API on older interpreters and builds
+through the real Make entry point. All eight graph tests pass on the available
+Python 3.13 and 3.14 interpreters; the full Python suite passes 31 tests.
+Concurrent tests collect both subprocess results before asserting, preventing
+unreaped processes and open-pipe warnings when a build fails. An actual Python
+3.15 binary was unavailable in the Linux download catalog; Mac execution remains
+pending a rerun of the same consolidated acceptance command.

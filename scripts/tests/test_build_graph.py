@@ -121,6 +121,16 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
             self.assertNotEqual(result.returncode, 0, result.stdout+result.stderr)
         return result
 
+    def test_build_works_without_the_loader_api_removed_in_python_315(self):
+        startup = self.root / 'python315'
+        startup.mkdir()
+        (startup / 'sitecustomize.py').write_text(
+            'from importlib.machinery import SourceFileLoader\n'
+            'for cls in SourceFileLoader.__mro__:\n'
+            '    if "load_module" in vars(cls): delattr(cls, "load_module")\n')
+        self.run_make(env=dict(self.env, PYTHONPATH=str(startup)))
+        self.assertTrue((self.root / 'build/rust/darwin-arm64/vmctl').is_file())
+
     def test_warm_build_missing_output_and_changed_rust_have_the_correct_rebuild_scope(self):
         self.run_make()
         artifact = self.root / 'build/rust'
@@ -194,11 +204,11 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
     def test_concurrent_builds_and_interrupted_compilation_never_publish_partial_outputs(self):
         import signal
         import time
-        first = subprocess.Popen(self.args, cwd=self.root, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        second = subprocess.Popen(self.args, cwd=self.root, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        for process in [first, second]:
-            output, _ = process.communicate(timeout=30)
-            self.assertEqual(process.returncode, 0, output.decode())
+        with subprocess.Popen(self.args, cwd=self.root, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as first, \
+             subprocess.Popen(self.args, cwd=self.root, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as second:
+            results = [(process, process.communicate(timeout=30)[0]) for process in [first, second]]
+            for process, output in results:
+                self.assertEqual(process.returncode, 0, output.decode())
         artifact = self.root / 'build/rust'
         original = artifact.resolve()
         (self.root / 'crates/libclankerd/src/lib.rs').write_text('recompile')
@@ -211,7 +221,10 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
                 time.sleep(.01)
             self.assertTrue(marker.exists())
         finally:
-            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
             process.communicate(timeout=10)
         self.assertEqual(artifact.resolve(), original)
         self.run_make()

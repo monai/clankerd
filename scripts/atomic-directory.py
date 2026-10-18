@@ -7,9 +7,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_file_location
 
-tree = SourceFileLoader('artifact_tree', str(Path(__file__).with_name('artifact-tree.py'))).load_module()
+tree_spec = spec_from_file_location('artifact_tree', Path(__file__).with_name('artifact-tree.py'))
+tree = module_from_spec(tree_spec)
+tree_spec.loader.exec_module(tree)
 separator = sys.argv.index('--')
 output = Path(sys.argv[1]).absolute()
 inputs = [Path(value) for value in sys.argv[2:separator]]
