@@ -72,3 +72,25 @@ class GateRunner(unittest.TestCase):
             self.assertIn('TIMEOUT', result.stdout)
             self.assertTrue((work / 'cleaned').is_file(), result.stdout)
             self.assertIn('cleanup', (work / 'gate.log').read_text())
+
+
+class ScriptSnapshot(unittest.TestCase):
+    def test_entrypoint_finishes_from_memory_after_its_file_is_replaced(self):
+        prefix = (ROOT / 'scripts/accept-self-contained-build.sh').read_text().split('root=', 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / 'accept.sh'
+            # Padding ensures the continuation cannot rely on Bash's small input buffer.
+            script.write_text(prefix + "printf 'ready\\n'\nread -r resume\n" +
+                              '# padding\n' * 10000 + "printf 'snapshot-finished\\n'\n")
+            with subprocess.Popen(['bash', str(script)], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+                try:
+                    self.assertEqual(process.stdout.readline(), 'ready\n')
+                    script.write_text('"unterminated replacement\n')
+                    stdout, stderr = process.communicate('\n', timeout=5)
+                    self.assertEqual(process.returncode, 0, stderr)
+                    self.assertEqual(stdout, 'snapshot-finished\n')
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.communicate()

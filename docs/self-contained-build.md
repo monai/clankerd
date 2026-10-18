@@ -109,3 +109,16 @@ Quiet gates report elapsed time every 30 seconds. Each gate has a 30-minute
 deadline; set `ACCEPTANCE_GATE_TIMEOUT` (seconds) to change it. A timeout sends
 TERM to the gate's process group to allow its cleanup trap to run, then KILL
 after a 30-second cleanup grace period, and records a failed gate.
+
+Progress uses `[n/total]` and marks potentially slow steps with approximate
+runtimes. The entrypoint runs a snapshot of its own shell text, so editing its
+file during a long gate cannot corrupt the running shell's unread commands.
+To rerun only the two gates that failed in the initial native run (plus the
+standard preparation/management/bind checks):
+
+```bash
+mise exec -- bash scripts/accept-self-contained-build.sh m2-boot-check m2-smoke-test
+```
+
+A successful selective run reports success for those selected gates; retain the
+previous evidence for the other gates.

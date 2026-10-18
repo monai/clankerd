@@ -31,6 +31,7 @@ fn run_script(fail_on: Option<&str>) -> Run {
         &bin.join("vmctl"),
         r#"#!/bin/sh
 echo "$*" >> "$STUB_LOG"
+case "$*" in "image inspect"*) echo "unrecognized subcommand inspect" >&2; exit 2 ;; esac
 case "$*" in "exec -i "*) cat; exit 0 ;; *"ip -4 -o addr"*) echo 192.168.64.2; exit 0 ;; esac
 case "$*" in *"$STUB_FAIL_ON"*) [ -n "$STUB_FAIL_ON" ] && { echo "stub: failing $*" >&2; exit 1; } ;; esac
 exit 0
@@ -58,8 +59,12 @@ fn a_clean_run_walks_the_whole_prototype_and_cleans_up() {
     let stdout = String::from_utf8_lossy(&r.out.stdout);
     assert!(r.out.status.success(), "{stdout}\n{stderr}\n{}", r.calls);
     assert!(stdout.contains("PASS"), "{stdout}");
+    assert!(stdout.contains("[1/15]"), "{stdout}");
+    assert!(stdout.contains("[15/15]"), "{stdout}");
+    assert!(stdout.contains("long-running:"), "{stdout}");
     for expected in [
         "pull ghcr.io/monai/clankers:slim",
+        "image ls --output json",
         "-v smoke-data:/storage",
         "stop smoke",
         "start smoke",

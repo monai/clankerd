@@ -54,7 +54,12 @@ trap cleanup EXIT
 
 trap 'fail "command failed (line $LINENO): $BASH_COMMAND"' ERR
 
-step() { printf '\n== %s\n' "$*"; }
+step_number=0
+step_total=15
+step() {
+  step_number=$((step_number + 1))
+  printf '\n[%d/%d] %s\n' "$step_number" "$step_total" "$*"
+}
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
   exit 1
@@ -117,12 +122,12 @@ command -v curl >/dev/null || fail "curl is required on the host"
 command -v python3 >/dev/null || fail "python3 is required on the host"
 echo ok
 
-step "pull $image and $alt_image"
+step "pull $image and $alt_image (long-running: about 1–5 minutes, depending on cache/network)"
 "$vmctl" pull "$image"
 "$vmctl" pull "$alt_image"
-"$vmctl" image inspect "$image" "$alt_image"
+"$vmctl" image ls --output json
 
-step "boot with a volume"
+step "boot with a volume (long-running: about 1–3 minutes on a cold image)"
 "$vmctl" volume create --size 20G "$vol"
 "$vmctl" run -d --name smoke -v "$vol:/storage" "$image" sleep infinity
 retry "the machine to accept exec" exec_up smoke
@@ -131,7 +136,7 @@ step "interactive exec: stdin reaches the guest and output returns"
 reply=$(printf 'echo interactive-ok\nexit\n' | "$vmctl" exec -i smoke sh)
 case "$reply" in *interactive-ok*) echo ok ;; *) fail "interactive exec answered: $reply" ;; esac
 
-step "dockerd runs in nftables mode on the stock kernel"
+step "dockerd runs in nftables mode on the stock kernel (may wait up to ${timeout_s}s)"
 retry "dockerd" dockerd_up
 if ! guest 'docker info 2>&1 | grep -qi nftables'; then
   diagnose
@@ -154,7 +159,7 @@ until registry_dns_up >/dev/null 2>&1; do
 done
 echo "guest registry DNS resolved through libc"
 
-step "the Docker daemon can pull nginx through its normal registry transport"
+step "the Docker daemon can pull nginx through its normal registry transport (long-running: may wait up to ${timeout_s}s)"
 # DNS can become available before any external route. Retry the required pull,
 # preserving daemon address selection and completed layers; create no container yet.
 registry_deadline=$((SECONDS + timeout_s))
@@ -199,7 +204,7 @@ else
   cat "$state/compose-version.log"
 fi
 
-step "compose project with a user-defined network"
+step "compose project with a user-defined network (long-running: downloads may take 1–5 minutes)"
 guest 'mkdir -p /tmp/proj && cat > /tmp/proj/compose.yaml <<EOF2
 services:
   web:

@@ -138,3 +138,21 @@ and bounded process-group cleanup. Runner checks cover retained stdout/stderr,
 exit status, timeout, and execution of the shell cleanup trap. The user subsequently confirmed that the native-prefix gate passed and the
 lifetimes gate began. Corrected boot/image/volume/network and remaining gates
 still require Mac verification. All 37 Python checks and shell syntax checks pass.
+
+## Docker smoke CLI and progress follow-up
+
+The user confirmed native-prefix, lease/RA lifetimes, and recovery gates passed.
+The Docker gate stopped at `vmctl image inspect`, which is absent from the CLI;
+it now records cached image metadata with `vmctl image ls --output json`.
+The existing smoke-script fixture now rejects the unsupported command: its
+clean run failed with the exact reported CLI error before the fix and all three
+smoke-script tests pass afterward. Assertions also cover numbered progress and
+long-running labels. Acceptance numbers its nine preparation steps and selected
+gates, and includes estimated durations for slow operations.
+
+The reported EOF did not reproduce in syntax checks. The entrypoint had been
+edited while Bash was running its earlier version, which can change the unread
+remainder of a shell script. It now executes its initial contents from memory;
+a regression replaces the script file while paused and verifies that its
+original continuation completes. Native corrected boot and Docker gates remain
+pending; passed native gates need not be rerun to investigate those failures.
