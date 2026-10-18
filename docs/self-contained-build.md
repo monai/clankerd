@@ -103,3 +103,9 @@ behavior. Native authorization, packet transport, VM boot and the integrated
 acceptance matrix remain unverified until this script runs on the Mac. Existing
 experiment evidence is not acceptance of this implementation. Host sleep/wake
 and external IPv6 remain unverified unless actually exercised.
+
+Native gate output is streamed to the terminal and saved in each gate's log.
+Quiet gates report elapsed time every 30 seconds. Each gate has a 30-minute
+deadline; set `ACCEPTANCE_GATE_TIMEOUT` (seconds) to change it. A timeout sends
+TERM to the gate's process group to allow its cleanup trap to run, then KILL
+after a 30-second cleanup grace period, and records a failed gate.

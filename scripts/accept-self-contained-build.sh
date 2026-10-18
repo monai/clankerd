@@ -38,7 +38,7 @@ git diff HEAD -- crates scripts Makefile build-support > "$evidence/worktree.dif
 printf 'extern int krun_create_ctx(void); int main(void) { return krun_create_ctx(); }\n' \
   | xcrun clang -arch arm64 -x c - -L crates/libkrun-sys/stubs -lkrun \
       -o "$evidence/libkrun-stub-check"
-python3 -m unittest scripts.tests.test_build_graph scripts.tests.test_accept_vm_process
+python3 -m unittest scripts.tests.test_build_graph scripts.tests.test_accept_vm_process scripts.tests.test_acceptance_gates
 make -j"${BUILD_JOBS:-4}" build
 python3 scripts/artifact-tree.py check build/rust
 cp -R build/rust/. "$evidence/bundle"
@@ -85,7 +85,7 @@ failures=0
 for stage in "${stages[@]}"; do
   case "$stage" in m2-boot-check|m2-smoke-command-system|m2-smoke-native-prefixes|m2-smoke-lifetimes|m2-smoke-recovery|m2-smoke-test) ;; *) echo "Unsupported gate: $stage"; exit 1;; esac
   echo "RUN $stage (log: $evidence/$stage.log)"
-  if bash "scripts/$stage.sh" > "$evidence/$stage.log" 2>&1; then
+  if python3 scripts/run-acceptance-gate.py "$evidence/$stage.log" bash "scripts/$stage.sh"; then
     printf 'PASS\t%s\n' "$stage" | tee -a "$evidence/results.tsv"
   else
     failures=$((failures+1))

@@ -118,3 +118,23 @@ checks cover a long bundle path, root ownership rejection, and Homebrew import
 rejection, and run in the same Mac entrypoint. Tool version probes also clear
 stale Make jobserver variables; the graph fixture reproduces that environment
 failure before the fix. Full native acceptance still requires a Mac run.
+
+## Native gate progress and boot cleanup follow-up
+
+The macOS acceptance run at 20261018T104144Z passed all management checks,
+including shell-free and hostile glibc workloads, mount separation, unprivileged
+VMM ownership, bundled library mapping, attachment recovery after credential
+revocation, stop/start, identity overrides, and image identity retention.
+The command-system gate also passed. The boot gate received the correct exit
+code 2 and console output, then failed because it tried to remove the machine
+while management remained running. A script-level fixture reproduced that
+exact failure; the gate now explicitly stops it before removal and includes it
+in failure cleanup.
+
+The prefix gate's progress was redirected entirely to its evidence log, so the
+terminal alone cannot establish whether it hung. Acceptance now streams gate
+output and emits 30-second heartbeats, with a configurable 30-minute deadline
+and bounded process-group cleanup. Runner checks cover retained stdout/stderr,
+exit status, timeout, and execution of the shell cleanup trap. The user subsequently confirmed that the native-prefix gate passed and the
+lifetimes gate began. Corrected boot/image/volume/network and remaining gates
+still require Mac verification. All 37 Python checks and shell syntax checks pass.

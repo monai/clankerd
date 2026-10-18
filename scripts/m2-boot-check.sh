@@ -35,7 +35,7 @@ export CLANKERD_RUNTIME_DIR=$state/run
 cleanup() {
   local status=$?
   if [ "$status" -ne 0 ]; then
-    for m in net dev probe override stubborn second vol1 vol2 binds; do
+    for m in boot-check net dev probe override stubborn second vol1 vol2 binds; do
       "$vmctl" kill "$m" >/dev/null 2>&1 || true
     done
     for machine_dir in "$CLANKERD_STATE_DIR"/machines/*; do
@@ -49,7 +49,7 @@ cleanup() {
     printf '\nFailed check: diagnostics preserved in %s\n' "$state" >&2
     return
   fi
-  for m in net dev probe override stubborn second vol1 vol2 binds; do
+  for m in boot-check net dev probe override stubborn second vol1 vol2 binds; do
     "$vmctl" rm -f "$m" >/dev/null 2>&1 || true
   done
   "$vmctl" volume rm data >/dev/null 2>&1 || true
@@ -95,6 +95,8 @@ boot_check() {
   printf '%s\n' "$logs" | head -n 40
   printf '%s\n' "$logs" | grep -qi 'linux version' || echo "WARN: no kernel banner in logs (kernel may boot quietly)"
   printf '%s\n' "$logs" | grep -q 'unknown argument --nope' || fail "no guestd output in logs"
+  # Workload completion leaves the guest management environment running.
+  CLANKERD_BOOT_DIR_ROOT=true "$vmctl" stop boot-check >/dev/null
   CLANKERD_BOOT_DIR_ROOT=true "$vmctl" rm boot-check >/dev/null
 }
 
