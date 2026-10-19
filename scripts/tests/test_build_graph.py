@@ -199,7 +199,10 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         self.run_make()
         artifact = self.root / 'build/artifact'
         config = self.root / 'build-support/management-rootfs/etc/clankerd/dhcpcd.conf'
+        stamp = next((self.root / 'build/work').glob('*/management/.stamp'))
+        previous = stamp.stat().st_mtime_ns
         config.write_text('duid ll\nnoipv4ll\n# fixture policy\n')
+        os.utime(config, ns=(previous + 1, previous + 1))
         self.run_make()
         self.assertEqual((artifact / 'linux-arm64/management/etc/clankerd/dhcpcd.conf').read_text(),
                          'duid ll\nnoipv4ll\n# fixture policy\n')
@@ -233,7 +236,10 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         self.assertEqual(self.artifact_state(), original)
         self.assertTrue((artifact / 'darwin-arm64/vmctl').read_bytes().startswith(bytes.fromhex('cffaedfe')))
         archive = next((self.root / 'build/work/downloads').glob('base-*.archive'))
+        stamp = next((self.root / 'build/work').glob('*/packages/base/.stamp'))
+        previous = stamp.stat().st_mtime_ns
         archive.write_bytes(b'corrupt')
+        os.utime(archive, ns=(previous + 1, previous + 1))
         self.run_make(ok=False)
         self.assertEqual(self.artifact_state(), original)
 
@@ -253,7 +259,9 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         old = hashlib.sha256(package.read_bytes()).hexdigest()
         package.write_bytes(gzip.compress(gzip.decompress(package.read_bytes()), mtime=123))
         new = hashlib.sha256(package.read_bytes()).hexdigest()
+        previous_lock = (artifact / 'inputs.mk').stat().st_mtime_ns
         self.lock.write_text(self.lock.read_text().replace(old, new))
+        os.utime(self.lock, ns=(previous_lock + 1, previous_lock + 1))
         previous = self.artifact_state()
         self.run_make(env=env)
         self.assertNotEqual(self.artifact_state(), previous)

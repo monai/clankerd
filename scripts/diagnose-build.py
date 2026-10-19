@@ -8,12 +8,32 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
+import unittest
 
 root = Path(__file__).resolve().parent.parent
 os.chdir(root)
 (root / 'build').mkdir(exist_ok=True)
 evidence = Path(tempfile.mkdtemp(prefix='make-diagnostic-', dir=root / 'build'))
+if sys.argv[1:] == ['--regressions']:
+    print(f'[1/2] Script regressions; evidence: {evidence}', flush=True)
+    suite = unittest.defaultTestLoader.discover(str(root / 'scripts/tests'))
+    log_path = evidence / 'regressions.log'
+    with log_path.open('w') as log:
+        result = unittest.TextTestRunner(stream=log, verbosity=2).run(suite)
+    print(f'[2/2] {"PASS" if result.wasSuccessful() else "FAIL"}: '
+          f'{result.testsRun} tests; {len(result.failures)} failures; {len(result.errors)} errors')
+    if not result.wasSuccessful():
+        summary_spec = importlib.util.spec_from_file_location(
+            'acceptance_summary', root / 'scripts/summarize-self-contained-build.py')
+        summary = importlib.util.module_from_spec(summary_spec)
+        summary_spec.loader.exec_module(summary)
+        for line in summary.failure_excerpt(log_path.read_text()):
+            print(line[:500])
+    sys.exit(0 if result.wasSuccessful() else 1)
+if sys.argv[1:]:
+    sys.exit('Usage: diagnose-build.py [--regressions]')
 spec = importlib.util.spec_from_file_location('build_graph', root / 'scripts/tests/test_build_graph.py')
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)

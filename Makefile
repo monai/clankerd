@@ -15,6 +15,7 @@ export CARGO_BUILD_JOBS := $(BUILD_JOBS)
 endif
 INPUT_LOCK ?= build-support/inputs.mk
 include $(INPUT_LOCK)
+include build-support/file-times.mk
 PYTHON := python3
 .DELETE_ON_ERROR:
 HOST_TARGET := aarch64-apple-darwin
@@ -37,10 +38,11 @@ $(DOWNLOADS)/$(1)-$($(1)_SHA256).archive:
 	curl --fail --location --retry 3 $(if $(findstring https://ghcr.io/,$($(1)_URL)),-H 'Authorization: Bearer QQ==') --output "$$@.tmp" '$($(1)_URL)'
 	printf '%s  %s\n' '$($(1)_SHA256)' "$$@.tmp" | shasum -a 256 -c -
 	mv -f "$$@.tmp" "$$@"
-$(WORK)/packages/$(1)/.stamp: $(DOWNLOADS)/$(1)-$($(1)_SHA256).archive scripts/extract-binary.py Makefile
-	printf '%s  %s\n' '$($(1)_SHA256)' "$$<" | shasum -a 256 -c -
-	rm -rf "$$(@D)"
-	$(PYTHON) scripts/extract-binary.py "$$<" "$$(@D)"
+$(WORK)/packages/$(1)/.stamp: $(DOWNLOADS)/$(1)-$($(1)_SHA256).archive scripts/extract-binary.py Makefile check-file-times
+	@set -e; $$(skip_unchanged); \
+	printf '%s  %s\n' '$($(1)_SHA256)' "$$<" | shasum -a 256 -c -; \
+	rm -rf "$$(@D)"; \
+	$(PYTHON) scripts/extract-binary.py "$$<" "$$(@D)"; \
 	touch "$$@"
 endef
 $(foreach input,$(INPUTS),$(eval $(call binary_input,$(input))))
@@ -51,14 +53,16 @@ HOST_PACKAGES := $(addprefix $(WORK)/packages/,$(HOST_INPUTS))
 MANAGEMENT_ROOTFS := build-support/management-rootfs
 MANAGEMENT_FILES := $(shell find $(MANAGEMENT_ROOTFS))
 
-$(WORK)/management/.stamp: $(addsuffix /.stamp,$(GUEST_PACKAGES)) $(MANAGEMENT_FILES) $(INPUT_LOCK) scripts/assemble-management.py Makefile
-	rm -rf "$(@D)"
-	$(PYTHON) scripts/assemble-management.py "$(@D)" $(MANAGEMENT_ROOTFS) $(GUEST_PACKAGES) --required $(GUEST_REQUIRED)
+$(WORK)/management/.stamp: $(addsuffix /.stamp,$(GUEST_PACKAGES)) $(MANAGEMENT_FILES) $(INPUT_LOCK) scripts/assemble-management.py Makefile check-file-times
+	@set -e; $(skip_unchanged); \
+	rm -rf "$(@D)"; \
+	$(PYTHON) scripts/assemble-management.py "$(@D)" $(MANAGEMENT_ROOTFS) $(GUEST_PACKAGES) --required $(GUEST_REQUIRED); \
 	touch "$@"
 
-$(WORK)/host-libraries/.stamp: $(addsuffix /.stamp,$(HOST_PACKAGES)) $(INPUT_LOCK) scripts/relocate-host.py Makefile
-	rm -rf "$(@D)"
-	$(PYTHON) scripts/relocate-host.py "$(@D)" $(HOST_PACKAGES) --required $(HOST_REQUIRED)
+$(WORK)/host-libraries/.stamp: $(addsuffix /.stamp,$(HOST_PACKAGES)) $(INPUT_LOCK) scripts/relocate-host.py Makefile check-file-times
+	@set -e; $(skip_unchanged); \
+	rm -rf "$(@D)"; \
+	$(PYTHON) scripts/relocate-host.py "$(@D)" $(HOST_PACKAGES) --required $(HOST_REQUIRED); \
 	touch "$@"
 
 .PHONY: cargo-host cargo-guest
@@ -88,8 +92,8 @@ LINUX_TOOLS := $(WORK)/linux-test-tools
 $(LINUX_TOOLS):
 	mkdir -p "$@"
 
-$(LINUX_TOOLS)/run-tool: build-support/linux-test-tools/run-tool | $(LINUX_TOOLS)
-	install -m 755 "$<" "$@"
+$(LINUX_TOOLS)/run-tool: build-support/linux-test-tools/run-tool check-file-times | $(LINUX_TOOLS)
+	@set -e; $(skip_unchanged); install -m 755 "$<" "$@"
 
 $(LINUX_TOOLS)/management: | $(WORK)/management/.stamp $(LINUX_TOOLS)
 	ln -sfn "$(abspath $(WORK)/management)" "$@"
