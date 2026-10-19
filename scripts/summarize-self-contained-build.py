@@ -7,6 +7,18 @@ import sys
 
 
 def failure_excerpt(text):
+    test_failures = re.findall(
+        r'(?ms)^((?:FAIL|ERROR): test_[^\n]+\n.*?)(?=^={10,}$|\Z)', text)
+    if test_failures:
+        report = []
+        for failure in test_failures:
+            lines = failure.splitlines()
+            report.append(lines[0])
+            for line in lines[1:]:
+                if (line.lstrip().startswith(('File ', 'self.run_make(', 'AssertionError:',
+                                              'RuntimeError:', 'OSError:'))):
+                    report.append(line.strip())
+        return report
     # Cleanup dumps many machines' console logs after the actual failing assertion.
     # A plain tail hides that assertion beneath unrelated vsock/DHCP messages.
     body = re.split(r'(?m)^== /(?:private/)?tmp/', text, maxsplit=1)[0]

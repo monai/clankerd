@@ -11,6 +11,23 @@ SPEC.loader.exec_module(runner)
 
 
 class AcceptanceSummary(unittest.TestCase):
+    def test_each_script_failure_keeps_its_name_and_call_site(self):
+        text = ('=' * 70 + '\nFAIL: test_failed_stages (test_build_graph.ArtifactGraph)\n' +
+                '-' * 70 + '\nTraceback (most recent call last):\n'
+                '  File "test_build_graph.py", line 230, in test_failed_stages\n'
+                '    self.run_make(ok=False)\nAssertionError: 0 == 0 : cargo build\n' +
+                'verbose command output\n' * 100 + '=' * 70 +
+                '\nFAIL: test_static_inputs (test_build_graph.ArtifactGraph)\n' +
+                '-' * 70 + '\nAssertionError: old != new\n' + '-' * 70 + '\n')
+        report = '\n'.join(runner.failure_excerpt(text))
+        self.assertIn('FAIL: test_failed_stages', report)
+        self.assertIn('line 230', report)
+        self.assertIn('self.run_make(ok=False)', report)
+        self.assertIn('FAIL: test_static_inputs', report)
+        self.assertIn('AssertionError: old != new', report)
+        self.assertNotIn('verbose command output', report)
+        self.assertLess(len(report.splitlines()), 10)
+
     def test_failure_before_verbose_cleanup_is_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = Path(directory)
