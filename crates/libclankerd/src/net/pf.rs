@@ -42,7 +42,7 @@ fn invoke(request: serde_json::Value) -> Result<()> {
     let mut child = Command::new(controller)
         .args(["launch", "pf"])
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| Error::unavailable(format!("starting native PF controller: {error}")))?;
@@ -54,9 +54,16 @@ fn invoke(request: serde_json::Value) -> Result<()> {
     let output = child.wait_with_output()?;
     written?;
     if !output.status.success() {
+        // The authorization session forwards the privileged child's stdout and
+        // stderr over one stream, which the launcher writes to stdout.
+        let diagnostic = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         return Err(Error::unavailable(format!(
             "cannot apply native network policy: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            diagnostic.trim()
         )));
     }
     Ok(())
