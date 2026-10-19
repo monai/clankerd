@@ -19,6 +19,20 @@ LICENSE_FILES := $(addprefix $(LICENSES)/texts/,$(addsuffix .txt,$(LICENSE_INPUT
 METADATA_PACKAGES := $(foreach input,$(INPUTS),$(if $(wildcard $(WORK)/packages/$(input)/package-metadata),$(input)))
 PACKAGE_METADATA := $(addprefix $(LICENSES)/guest/,$(addsuffix /.stamp,$(METADATA_PACKAGES)))
 
+# Make 3.81 can miss updates within one second. find compares nanoseconds;
+# check every Cargo output, but leave an unchanged installed executable alone.
+.PHONY: check-executable-times
+check-executable-times:
+
+define skip_unchanged_executable
+if [ -f "$@" ]; then \
+    newer=$$(find $(foreach prerequisite,$(filter-out check-executable-times,$^),"$(prerequisite)") -prune -newer "$@" -print) || exit 1; \
+    [ -n "$$newer" ] || exit 0; \
+fi
+endef
+
+$(HOST_PROGRAMS) $(GUEST)/usr/sbin/clankerd-guestd: check-executable-times
+
 host-libraries-install: $(HOST_LIBRARIES)
 
 artifact-install: $(HOST_PROGRAMS) $(HOST_LIBRARIES) $(GUEST_FILES) \
@@ -34,8 +48,9 @@ $(STAGE) $(HOST) $(HOST)/lib $(LICENSES) $(LICENSES)/texts $(LICENSES)/guest: | 
 	mkdir -p "$@"
 
 $(HOST_PROGRAMS): $(HOST)/%: $(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/% build-support/artifact.mk | $(HOST)
-	install -m 755 "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/$(@F)" "$@.tmp"
-	rcodesign sign --binary-identifier "io.clankerd.$(@F)" $(SIGN_FLAGS) "$@.tmp" || { rm -f "$@.tmp"; exit 1; }
+	@set -e; $(skip_unchanged_executable); \
+	install -m 755 "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/$(@F)" "$@.tmp"; \
+	rcodesign sign --binary-identifier "io.clankerd.$(@F)" $(SIGN_FLAGS) "$@.tmp" || { rm -f "$@.tmp"; exit 1; }; \
 	mv -f "$@.tmp" "$@"
 
 $(HOST)/clankerd-vmspawn: SIGN_FLAGS := -e crates/clankerd-vmspawn/entitlements.plist
@@ -60,7 +75,8 @@ $(GUEST_FILES): $(GUEST)/%: $(WORK)/management/% | $(STAGE)/.management-installe
 	mv -f "$@.tmp" "$@"
 
 $(GUEST)/usr/sbin/clankerd-guestd: $(CARGO_TARGET_DIR)/$(GUEST_TARGET)/release/clankerd-guestd $(STAGE)/.management-installed
-	install -m 755 "$<" "$@"
+	@set -e; $(skip_unchanged_executable); \
+	install -m 755 "$(CARGO_TARGET_DIR)/$(GUEST_TARGET)/release/clankerd-guestd" "$@"
 
 $(STAGE)/inputs.mk: $(INPUT_LOCK) | $(STAGE)
 	install -m 644 "$<" "$@"

@@ -115,10 +115,15 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
   temporary.write_bytes(data)
   temporary.chmod(0o755)
   temporary.replace(out/name)
+  if os.environ.get('CARGO_MTIME_NS'):
+   timestamp=int(os.environ['CARGO_MTIME_NS'])
+   os.utime(out/name, ns=(timestamp,timestamp))
 ''')
         cargo.chmod(0o755)
         signer = tools / 'rcodesign'
-        signer.write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo fixture; else [ -z "$FAIL_SIGN" ]; fi\n')
+        signer.write_text('#!/bin/sh\n'
+                          'if [ -n "$GRAPH_SIGN_LOG" ]; then printf "%s\\n" "$*" >> "$GRAPH_SIGN_LOG"; fi\n'
+                          'if [ "$1" = --version ]; then echo fixture; else [ -z "$FAIL_SIGN" ]; fi\n')
         signer.chmod(0o755)
         self.log = self.root / 'cargo.log'
         self.env = dict(os.environ, PATH=str(tools)+os.pathsep+os.environ['PATH'], GRAPH_LOG=str(self.log))
@@ -139,6 +144,27 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         return {str(path.relative_to(root)): (path.lstat().st_mtime_ns,
                 os.readlink(path) if path.is_symlink() else path.read_bytes())
                 for path in root.rglob('*') if path.is_file() or path.is_symlink()}
+
+    def test_subsecond_cargo_update_is_installed_and_warm_build_does_not_sign(self):
+        import time
+        self.run_make()
+        installed = self.root / 'build/artifact/darwin-arm64/vmctl'
+        now = time.time_ns()
+        timestamp = now - (now % 1_000_000_000) // 2
+        os.utime(installed, ns=(timestamp, timestamp))
+        signing_log = self.root / 'signing.log'
+        environment = dict(self.env, HOST_PAYLOAD='subsecond update',
+                           CARGO_MTIME_NS=str(timestamp + 1), GRAPH_SIGN_LOG=str(signing_log))
+        self.run_make(env=environment)
+        source = self.root / 'cargo/aarch64-apple-darwin/release/vmctl'
+        self.assertEqual(source.stat().st_mtime_ns, timestamp + 1)
+        self.assertEqual(installed.read_bytes(), source.read_bytes())
+        self.assertIn('io.clankerd.vmctl', signing_log.read_text())
+        before = self.artifact_state()
+        signing_log.write_text('')
+        self.run_make(env=environment)
+        self.assertEqual(self.artifact_state(), before)
+        self.assertEqual(signing_log.read_text(), '')
 
     def test_cargo_is_consulted_and_unchanged_executables_reuse_the_artifact(self):
         self.run_make()

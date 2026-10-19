@@ -30,7 +30,8 @@ def observe(path):
 
 try:
     case.setUp()
-    environment = dict(case.env, MAKEFLAGS='--debug=v')
+    signing_log = case.root / 'signing.log'
+    environment = dict(case.env, MAKEFLAGS='--debug=v', GRAPH_SIGN_LOG=str(signing_log))
     source = case.root / 'cargo/aarch64-apple-darwin/release/vmctl'
     installed = case.root / 'build/artifact/darwin-arm64/vmctl'
     version = subprocess.run(['make', '--version'], env=environment,
@@ -50,6 +51,7 @@ try:
         log.write(version)
         for step, (name, overrides) in enumerate(runs, 2):
             before_source, before_installed = observe(source), observe(installed)
+            signing_log.write_text('')
             result = subprocess.run(case.args, cwd=case.root,
                                     env=dict(environment, **overrides),
                                     text=True, capture_output=True)
@@ -59,8 +61,7 @@ try:
             log.write(json.dumps({'exit': result.returncode,
                 'before_source': before_source, 'after_source': after_source,
                 'before_installed': before_installed, 'after_installed': after_installed}) + '\n')
-            signing = any('rcodesign sign' in line and 'io.clankerd.vmctl' in line
-                          for line in trace.splitlines())
+            signing = 'io.clankerd.vmctl' in signing_log.read_text()
             if step >= 5 and result.returncode == 0 and after_source and after_installed:
                 if after_source['sha256'] == after_installed['sha256']:
                     same_second = (after_source['mtime_ns'] // 1_000_000_000 ==
