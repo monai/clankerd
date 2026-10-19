@@ -9,6 +9,28 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+class MakeFreshness(unittest.TestCase):
+    def test_file_dependencies_compare_full_timestamps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'Makefile').write_text('output: source\n\tcp source output\n')
+            source, output = root / 'source', root / 'output'
+            source.write_text('fixture source')
+            output.write_text('fixture output')
+            epoch = 1700000000000000000
+            for source_offset, output_offset, expected in [
+                (0, 0, 0), (100000000, 200000000, 0),
+                (200000000, 100000000, 1), (1000000000, 0, 1),
+                (0, 1000000000, 0),
+            ]:
+                with self.subTest(source=source_offset, output=output_offset):
+                    os.utime(source, ns=(epoch + source_offset,) * 2)
+                    os.utime(output, ns=(epoch + output_offset,) * 2)
+                    result = subprocess.run(['make', '--question', 'output'], cwd=root,
+                                            text=True, capture_output=True)
+                    self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+
+
 class BinaryInputs(unittest.TestCase):
     def test_verified_input_is_reused_and_corruption_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:

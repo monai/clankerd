@@ -1,4 +1,7 @@
 .DEFAULT_GOAL := build
+ifneq ($(MAKE_VERSION),4.4.1)
+$(error GNU Make 4.4.1 required; run mise install, then mise exec -- make)
+endif
 .PHONY: build clean
 
 # mise install supplies the pinned toolchain; all build phases run in one context.
