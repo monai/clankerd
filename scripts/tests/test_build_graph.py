@@ -110,6 +110,7 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
     return struct.pack('<III',code,size,header)+bytes(header-12)+data+bytes(size-header-len(data))
    commands=command(0xc,24,'@rpath/libkrun.1.dylib')+command(0x8000001c,12,'@executable_path/lib')
   data=struct.pack('<8I',0xfeedfacf,0x100000c,0,2,2 if commands else 0,len(commands),0,0)+commands+os.environ.get('HOST_PAYLOAD','').encode()
+  if name=='vmctl' and os.environ.get('INVALID_HOST'): data=b'invalid Mach-O'
  if not (out/name).exists() or (out/name).read_bytes()!=data:
   temporary=out/(name+'.'+str(os.getpid()))
   temporary.write_bytes(data)
@@ -149,9 +150,10 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         import time
         self.run_make()
         installed = self.root / 'build/artifact/darwin-arm64/vmctl'
+        staged = next((self.root / 'build/work').glob('*/artifact/darwin-arm64/vmctl'))
         now = time.time_ns()
         timestamp = now - (now % 1_000_000_000) // 2
-        os.utime(installed, ns=(timestamp, timestamp))
+        os.utime(staged, ns=(timestamp, timestamp))
         signing_log = self.root / 'signing.log'
         environment = dict(self.env, HOST_PAYLOAD='subsecond update',
                            CARGO_MTIME_NS=str(timestamp + 1), GRAPH_SIGN_LOG=str(signing_log))
@@ -218,13 +220,116 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         self.assertFalse((work / 'management').exists())
         self.assertFalse((self.root / 'build/artifact').exists())
 
-    def test_build_installs_into_an_ordinary_directory(self):
+    def test_build_rejects_an_existing_output_directory(self):
         output = self.root / 'build/artifact'
         output.mkdir(parents=True)
         (output / 'user-file').write_text('fixture user data')
-        self.run_make()
+        self.run_make(ok=False)
         self.assertFalse(output.is_symlink())
         self.assertEqual((output / 'user-file').read_text(), 'fixture user data')
+
+    def test_publication_rejects_an_unrelated_symlink(self):
+        output = self.root / 'build/artifact'
+        output.parent.mkdir()
+        unrelated = self.root / 'unrelated'
+        unrelated.mkdir()
+        (unrelated / 'user-file').write_text('fixture user data')
+        output.symlink_to(unrelated)
+        self.run_make(ok=False)
+        self.assertEqual(output.resolve(strict=True), unrelated)
+        self.assertEqual((unrelated / 'user-file').read_text(), 'fixture user data')
+
+    def test_publication_keeps_complete_bundles_and_reuses_the_warm_bundle(self):
+        self.run_make()
+        output = self.root / 'build/artifact'
+        self.assertTrue(output.is_symlink())
+        previous = output.resolve(strict=True)
+        original = self.artifact_state()
+        self.run_make()
+        self.assertEqual(output.resolve(strict=True), previous)
+        self.assertEqual(self.artifact_state(), original)
+        self.run_make(env=dict(self.env, HOST_PAYLOAD='new host', GUEST_PAYLOAD='new guest'))
+        self.assertNotEqual(output.resolve(strict=True), previous)
+        self.assertTrue((output / 'darwin-arm64/vmctl').read_bytes().endswith(b'new host'))
+        self.assertEqual((output / 'linux-arm64/management/usr/sbin/clankerd-guestd').read_bytes(),
+                         b'compiled guestnew guest')
+        for name, (mtime, content) in original.items():
+            path = previous / name
+            self.assertEqual(path.lstat().st_mtime_ns, mtime)
+            self.assertEqual(os.readlink(path) if path.is_symlink() else path.read_bytes(), content)
+
+    def test_failed_publication_preserves_the_bundle_and_cleans_the_candidate(self):
+        import shlex
+        import shutil
+        self.run_make()
+        output = self.root / 'build/artifact'
+        previous = output.resolve(strict=True)
+        original = self.artifact_state()
+        bundles = set((self.root / 'build/artifact.bundles').iterdir())
+        mover = self.root / 'tools/mv'
+        mover.write_text('#!/bin/sh\nfor destination do :; done\n'
+                         'if [ "$destination" = build/artifact ]; then exit 1; fi\n'
+                         'exec ' + shlex.quote(shutil.which('mv')) + ' "$@"\n')
+        mover.chmod(0o755)
+        self.run_make(ok=False, env=dict(self.env, HOST_PAYLOAD='new host', GUEST_PAYLOAD='new guest'))
+        self.assertEqual(output.resolve(strict=True), previous)
+        self.assertEqual(self.artifact_state(), original)
+        self.assertEqual(set((self.root / 'build/artifact.bundles').iterdir()), bundles)
+        self.assertFalse(list((self.root / 'build').glob('artifact.bundle.*.link')))
+
+    def test_failed_audit_does_not_publish_changed_host_or_guest_files(self):
+        self.run_make()
+        output = self.root / 'build/artifact'
+        previous = output.resolve(strict=True)
+        original = self.artifact_state()
+        self.run_make(ok=False, env=dict(self.env, INVALID_HOST='1', GUEST_PAYLOAD='new guest'))
+        staged = next((self.root / 'build/work').glob('*/artifact'))
+        self.assertEqual((staged / 'darwin-arm64/vmctl').read_bytes(), b'invalid Mach-O')
+        self.assertEqual((staged / 'linux-arm64/management/usr/sbin/clankerd-guestd').read_bytes(),
+                         b'compiled guestnew guest')
+        self.assertEqual(output.resolve(strict=True), previous)
+        self.assertEqual(self.artifact_state(), original)
+        self.run_make(env=dict(self.env, GUEST_PAYLOAD='new guest'))
+        self.assertNotEqual(output.resolve(strict=True), previous)
+
+    def test_interrupted_publication_preserves_the_bundle_and_cleans_the_candidate(self):
+        import shlex
+        import shutil
+        import signal
+        import time
+        self.run_make()
+        output = self.root / 'build/artifact'
+        previous = output.resolve(strict=True)
+        original = self.artifact_state()
+        bundles = set((self.root / 'build/artifact.bundles').iterdir())
+        marker = self.root / 'publishing'
+        mover = self.root / 'tools/mv'
+        mover.write_text('#!/bin/sh\nfor destination do :; done\n'
+                         'if [ "$destination" = build/artifact ]; then '
+                         'touch ' + shlex.quote(str(marker)) + '; sleep 30; fi\n'
+                         'exec ' + shlex.quote(shutil.which('mv')) + ' "$@"\n')
+        mover.chmod(0o755)
+        process = subprocess.Popen(self.args, cwd=self.root,
+            env=dict(self.env, HOST_PAYLOAD='new host', GUEST_PAYLOAD='new guest'),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            deadline = time.monotonic() + 10
+            while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertTrue(marker.exists())
+            self.assertEqual(output.resolve(strict=True), previous)
+            self.assertEqual(self.artifact_state(), original)
+        finally:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            process.communicate(timeout=10)
+        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(output.resolve(strict=True), previous)
+        self.assertEqual(self.artifact_state(), original)
+        self.assertEqual(set((self.root / 'build/artifact.bundles').iterdir()), bundles)
+        self.assertFalse(list((self.root / 'build').glob('artifact.bundle.*.link')))
 
     def test_failed_build_stages_preserve_the_published_artifact(self):
         self.run_make()

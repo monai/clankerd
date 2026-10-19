@@ -14,7 +14,7 @@ or interface be preserved for compatibility.
 |---|---|---|
 | `Makefile` | Exact locked inputs, hash verification before use; Cargo owns Rust freshness and packaging consumes its executable outputs | `test_build_graph.py`: verification, Cargo delegation, compiled/input changes, warm reuse, missing output |
 | `extract-binary.py` | Keep files and guest links within the destination; retain APK scripts as metadata without execution | `test_binary_extraction.py`: guest links/modes, metadata, path/link traversal |
-| `Makefile`, `build-support/artifact.mk` | Make owns packaging freshness through file prerequisites and plain stamps; failed signing does not replace its target file | `test_build_graph.py`: signing/hash/compiler failures, interrupted compilation, warm reuse and ordinary output directories |
+| `Makefile`, `build-support/artifact.mk` | Make owns packaging freshness through file prerequisites and plain stamps; complete audited bundles are published through an atomic symlink rename | `test_build_graph.py`: signing/hash/compiler/audit/publication failures, interrupted compilation/publication, warm reuse and retained complete bundles |
 | `assemble-management.py` | Preserve package paths/modes/links; overlay checked-in management identities, locked passwords and DHCP files; reject missing, non-executable or foreign programs | `test_management.py`: layout, fixed filesystem policy, invalid inputs; `test_build_graph.py`: static-input rebuild scope |
 | `build-support/artifact.mk` | Explicit installed and signed outputs; one guest filesystem under `linux-arm64/management`; no flat executable copies or root aliases | `test_build_graph.py`: completed artifact layout, signing failure and warm reuse; signed cross-build |
 | `guest_environment::place` | Copy and validate the same management filesystem for every VM execution context | `libclankerd/tests/vmspawn.rs`, `vmspawn_populator.rs`; native management/boot gates |
@@ -88,8 +88,9 @@ locked package metadata. Make supplies that metadata directly to Cargo. Make and
 build freshness mechanisms; the earlier generation and inventory cache has
 been removed.
 
-The user-supplied full native PASS at `build/acceptance-20261018T164230Z` validates
-the preceding implementation. It does not validate this interface/layout cleanup.
+The user-supplied full native PASS at `build/acceptance-20261019T133840Z` validates
+the implementation before atomic final-bundle publication. It does not validate
+the new publication layout.
 Run the current consolidated entry point on the Mac:
 
 ```bash

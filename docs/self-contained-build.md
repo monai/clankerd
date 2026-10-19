@@ -26,7 +26,8 @@ Make exposes these outputs under `BUILD_ROOT/<execution OS>-<execution arch>`:
 | `management/.stamp` | Guest packages and explicit provisioning recipe |
 | `host-libraries/.stamp` | Host bottles, Mach-O import closure and relocation |
 | `cargo/<target>/release/<program>` | Cargo owns source dependencies and compilation; Make consumes the executable outputs |
-| `build/artifact/` | Ordinary installed outputs, provenance, licenses, signing and import audit |
+| `artifact/` inside the work directory | Incremental installation, provenance, licenses, signing and import audit |
+| `build/artifact` | Published symlink to a complete, audited bundle under `build/artifact.bundles/` |
 
 Cargo is invoked on every build and decides whether compilation is needed.
 Make does not scan Rust sources or maintain source-hash manifests. Unchanged
@@ -36,15 +37,33 @@ there are no intermediate host/guest Rust staging directories.
 
 Make uses file prerequisites and ordinary timestamp stamps for directory
 assembly. Cargo owns compiler freshness. There are no environment fingerprints,
-content inventories, recipe receipts, generation directories, or custom build
-cache locks. Downloads use curl and shasum; `make verify-inputs` explicitly
+content inventories, recipe receipts, or custom build cache locks. Apple's Make
+3.81 misses some subsecond changes, so file recipes use the system `find -newer`
+to check prerequisites at nanosecond precision before doing work.
+Downloads use curl and shasum; `make verify-inputs` explicitly
 rechecks retained archives. A corrupt input fails checksum verification when
 extracted; remove the named archive to download it again.
 
-`build/artifact` is a regular directory. Signing uses temporary files and
-renames each file into place only after success. A failed build can leave
-unfinished intermediate work; there is no whole-bundle rollback or arbitrary
-corruption repair. Make repairs missing declared file targets. Use `make clean`
+`build/artifact` is a relative symlink. Make installs and signs incrementally in
+the work directory's `artifact/` tree and audits it before publication. When
+outputs change, Make copies the completed tree to a fresh bundle directory and
+atomically renames a temporary symlink over `build/artifact`. A failed assembly,
+signature, audit, copy or pre-switch rename leaves the previous bundle published.
+The final copy preserves file permissions, timestamps and internal symlinks.
+An unchanged warm build neither copies nor switches the published bundle.
+
+Published bundle directories are never updated by subsequent builds. Previous
+bundles remain available until `make clean`, including for readers that resolved
+the published symlink before a switch. A reader needing a stable tree across
+multiple file accesses must resolve the symlink once and use that bundle path.
+This is an atomic path switch, not a filesystem transaction across separately
+opened paths or a power-loss durability guarantee.
+
+Existing ordinary publication directories and unrelated symlinks are rejected;
+remove the old `build/artifact` directory once before using this layout. There is
+no automatic migration. Make repairs missing declared staging outputs and
+republishes when a declared published file is missing. It does not perform
+arbitrary corruption repair. Use `make clean`
 when switching SDKs/signing tools or changing the packaging output set. Cargo
 handles its own compiler, profile and Rust flag changes. Run independent Make
 processes with distinct `BUILD_ROOT`, `DOWNLOADS`, and `RUST_OUT` paths;
@@ -87,7 +106,8 @@ privilege-gated paths may skip when the container lacks mount capabilities.
 `mise exec -- make lint` runs formatting and clippy. The graph suite uses real
 Make, extraction and assembly with compiler/signing fixtures at tool boundaries.
 It covers warm reuse, source and declaration changes, missing outputs, corrupt
-inputs, an incorrect hash, failed signing, interruption and parallel invocations.
+inputs, an incorrect hash, failed signing/audit/publication, interruption before
+the publication switch, retention of old bundles and parallel Make recipes.
 
 Run the integrated acceptance on the macOS 15 Apple Silicon host:
 
@@ -116,7 +136,8 @@ artifact dependencies.
 
 Linux cross-builds establish assembly, linking and signing, not Apple API
 behavior. The complete native matrix passed on Apple Silicon macOS 15.8.1 in
-`build/acceptance-20261018T164230Z`, as reported by the user. See
+`build/acceptance-20261019T133840Z`, as reported by the user. That run predates
+atomic final-bundle publication; the current layout requires a fresh native run. See
 [self-contained-build-review.md](self-contained-build-review.md) for the retained
 Mac evidence location and covered gates. Host sleep/wake, independent LAN-peer
 coverage, and external IPv6 remain unverified unless actually exercised.

@@ -69,9 +69,9 @@ rsync -rlpcn --delete --itemize-changes build/artifact/ "$OUT/" > "$evidence/rel
 test ! -s "$evidence/relocation-diff.txt"
 # A warm build must retain installed files and their modification times.
 step 'Verify unchanged warm build'
-find build/artifact -type f -exec stat -f '%N %m' {} + | sort > "$evidence/before-warm.txt"
+find -H build/artifact -type f -exec stat -f '%N %m' {} + | sort > "$evidence/before-warm.txt"
 make -j"${BUILD_JOBS:-4}" build
-find build/artifact -type f -exec stat -f '%N %m' {} + | sort > "$evidence/after-warm.txt"
+find -H build/artifact -type f -exec stat -f '%N %m' {} + | sort > "$evidence/after-warm.txt"
 cmp "$evidence/before-warm.txt" "$evidence/after-warm.txt"
 rsync -rlpcn --delete --itemize-changes build/artifact/ "$OUT/" > "$evidence/relocation-diff.txt"
 test ! -s "$evidence/relocation-diff.txt"

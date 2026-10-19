@@ -1,7 +1,7 @@
 # Install completed Cargo and package outputs using Make's file dependencies.
 .DEFAULT_GOAL := artifact-install
 .DELETE_ON_ERROR:
-.PHONY: artifact-install host-libraries-install check-output
+.PHONY: artifact-install artifact-publish host-libraries-install check-output check-publication
 ifndef STAGE
 $(error STAGE must name an artifact output directory)
 endif
@@ -22,11 +22,48 @@ PACKAGE_METADATA := $(addprefix $(LICENSES)/guest/,$(addsuffix /.stamp,$(METADAT
 
 host-libraries-install: $(HOST_LIBRARIES)
 
-artifact-install: $(HOST_PROGRAMS) $(HOST_LIBRARIES) $(GUEST_FILES) \
+ARTIFACT_FILES := $(HOST_PROGRAMS) $(HOST_LIBRARIES) $(GUEST_FILES) \
                  $(GUEST)/usr/sbin/clankerd-guestd $(STAGE)/inputs.mk \
                  $(STAGE)/.host-licenses $(LICENSE_FILES) $(PACKAGE_METADATA) \
                  $(LICENSES)/alpine-base-installed
+
+artifact-install: $(ARTIFACT_FILES)
 	python3 scripts/verify-host-artifact.py "$(STAGE)"
+
+ifneq ($(PUBLISH),)
+ifeq ($(shell uname -s),Darwin)
+PUBLISH_MV := mv -fh
+else
+PUBLISH_MV := mv -fT
+endif
+
+check-publication:
+	@test ! -e "$(PUBLISH)" || test -L "$(PUBLISH)" || { echo 'Publication path must be absent or a bundle symlink; remove the old output directory first: $(PUBLISH)' >&2; exit 1; }
+	@if [ -L "$(PUBLISH)" ]; then \
+	    case "$$(readlink "$(PUBLISH)")" in "$(notdir $(PUBLISH)).bundles/bundle."*) ;; \
+	    *) echo 'Publication path points outside its bundle directory: $(PUBLISH)' >&2; exit 1;; esac; \
+	fi
+
+artifact-publish: $(PUBLISH)/.published
+.PRECIOUS: $(PUBLISH)/.published
+
+# Audit the working tree before copying it; never change a published bundle.
+$(PUBLISH)/.published: $(ARTIFACT_FILES) $(STAGE)/.management-installed build-support/artifact.mk check-file-times | artifact-install check-publication
+	@set -e; missing=; \
+	for file in $(patsubst $(STAGE)/%,$(PUBLISH)/%,$(ARTIFACT_FILES)); do \
+	    if [ ! -e "$$file" ] && [ ! -L "$$file" ]; then missing=1; break; fi; \
+	done; \
+	if [ -z "$$missing" ]; then $(skip_unchanged); fi; \
+	mkdir -p "$(PUBLISH).bundles"; \
+	bundle=$$(mktemp -d "$(PUBLISH).bundles/bundle.XXXXXX"); \
+	link="$(PUBLISH).$${bundle##*/}.link"; target="$(notdir $(PUBLISH)).bundles/$${bundle##*/}"; \
+	trap 'rm -f "$$link"; if [ "$$(readlink "$(PUBLISH)" 2>/dev/null || :)" != "$$target" ]; then rm -rf "$$bundle"; fi' 0; \
+	trap 'exit 1' 1 2 15; \
+	cp -pRP "$(STAGE)/." "$$bundle/"; \
+	touch "$$bundle/.published"; \
+	ln -s "$$target" "$$link"; \
+	$(PUBLISH_MV) "$$link" "$(PUBLISH)"
+endif
 
 check-output:
 	@test ! -L "$(STAGE)" || { echo 'Artifact output must be an ordinary directory' >&2; exit 1; }

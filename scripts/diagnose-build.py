@@ -103,7 +103,7 @@ try:
                     print(f'  Source and previous installation in same second={same_second}')
             decisions = [line.strip().replace(str(case.root), '<fixture>')
                          for line in trace.splitlines()
-                         if 'build/artifact/darwin-arm64/vmctl' in line and (
+                         if '/artifact/darwin-arm64/vmctl' in line and (
                              ('Prerequisite' in line and '/cargo/' in line)
                              or 'No need' in line or 'Must remake' in line)]
             for line in decisions[-3:]:

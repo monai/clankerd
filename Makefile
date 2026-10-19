@@ -81,7 +81,7 @@ $(GUEST_EXECUTABLE): cargo-guest
 LICENSE_ARCHIVES := $(foreach input,$(LICENSE_INPUTS),$(DOWNLOADS)/$(input)-$($(input)_SHA256).archive)
 
 build: $(LICENSE_ARCHIVES) $(HOST_EXECUTABLES) $(GUEST_EXECUTABLE) $(WORK)/management/.stamp $(WORK)/host-libraries/.stamp
-	+$(MAKE) --no-print-directory -f build-support/artifact.mk STAGE="$(RUST_OUT)" WORK="$(WORK)" INPUT_LOCK="$(INPUT_LOCK)" DOWNLOADS="$(DOWNLOADS)" HOST_TARGET="$(HOST_TARGET)" GUEST_TARGET="$(GUEST_TARGET)"
+	+$(MAKE) --no-print-directory -f build-support/artifact.mk artifact-publish STAGE="$(WORK)/artifact" PUBLISH="$(RUST_OUT)" WORK="$(WORK)" INPUT_LOCK="$(INPUT_LOCK)" DOWNLOADS="$(DOWNLOADS)" HOST_TARGET="$(HOST_TARGET)" GUEST_TARGET="$(GUEST_TARGET)"
 
 .PHONY: test-libraries
 test-libraries: $(WORK)/host-libraries/.stamp
