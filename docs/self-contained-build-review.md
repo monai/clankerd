@@ -26,7 +26,7 @@ or interface be preserved for compatibility.
 | native authorization | Runtime-owned authorization; no installed executable or sudoers rule; transport and VMM remain unprivileged | native private-authorization, management ownership and revoked-credential recovery checks |
 | PF | Caller/executable/socket ownership; mark each native bridge and deny cross-bridge egress; same-network membership remains usable | `clankerd-network::pf` ownership/rule tests; native-prefix routed packet/counter/lifecycle gate |
 | recovery | Exact selected configuration and prefix survive attachment replacement; no automatic-prefix substitution | `libclankerd/tests/net_recovery.rs`; native recovery/lifetimes/prefix gates |
-| Rust test runner | Compatible tools and selected artifact; explicit local test inputs; no loader-path injection | `test_rust_test.py`, Linux suite, native unit/bind entry points |
+| Developer checks and coverage | Direct Cargo test/lint commands independent of artifact production; selected signed bundle for opt-in native checks; consistent coverage instrumentation | `test_developer_checks.py`, `test_rust_coverage.py`, Linux suite, native unit/bind entry points |
 | acceptance process evidence | Recorded PID must belong to the requesting nonroot user and map bundled executable/libraries | `test_accept_vm_process.py`: owner/mapping classes; native management gate |
 | gate runner | Retain logs/status, bounded cleanup, same authorizing terminal session, independent signal group | `test_acceptance_gates.py`: subprocess/session/timeout contracts |
 | gate cleanup | Workload exit preserves management; removal stops only the recorded network process | boot-gate fixture; real process lifecycle checks; native boot gate |

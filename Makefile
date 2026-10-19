@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := build
-.PHONY: build test test-linux test-native lint coverage coverage-setup clean
+.PHONY: build clean
 
 # mise install supplies the pinned toolchain; all build phases run in one context.
 # Binary distribution inputs and each assembly phase are real graph nodes.
@@ -78,32 +78,11 @@ build: $(WORK)/artifact/.complete
 ifeq ($(BUILD_CONTEXT),Linux-aarch64)
 $(WORK)/linux-test-tools/.complete: $(WORK)/management/.complete build-support/linux-test-tools/run-tool $(PHASE_TOOLS) FORCE
 	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- sh -ec 'mkdir -p "$$1"; install -m 755 build-support/linux-test-tools/run-tool "$$1/run-tool"; ln -s "$(abspath $(WORK)/management)" "$$1/management"; for tool in mke2fs e2fsck resize2fs debugfs; do ln -s run-tool "$$1/$$tool"; done' sh '{out}'
-TEST_PREREQUISITES := $(WORK)/linux-test-tools/.complete
-TEST_ENV := CLANKERD_TEST_TOOLS=$(abspath $(WORK)/linux-test-tools)
+LINUX_TEST_PREREQUISITES := $(WORK)/linux-test-tools/.complete
+LINUX_TEST_ENV := CLANKERD_TEST_TOOLS=$(abspath $(WORK)/linux-test-tools)
 endif
 
-ifeq ($(shell uname -s),Darwin)
-TEST_PREREQUISITES := build
-endif
-
-test: $(TEST_PREREQUISITES)
-	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
-	$(TEST_ENV) python3 scripts/rust-test.py test
-
-test-linux:
-	python3 scripts/rust-test.py test-linux
-
-test-native:
-	python3 scripts/rust-test.py test-native
-
-lint:
-	python3 scripts/rust-test.py lint
-
-coverage: coverage-setup
-	python3 scripts/rust-test.py coverage
-
-coverage-setup:
-	python3 scripts/rust-test.py coverage-setup
+include build-support/checks.mk
 
 clean:
 	rm -rf build target

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native Rust checks and Linux integration/coverage orchestration."""
+"""Collect Linux coverage, including instrumented helper processes."""
 from contextlib import contextmanager
 import json
 import os
@@ -12,7 +12,6 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
-COVERAGE_TOOLCHAIN = "nightly-2026-10-08"
 SYSTEM_TOOL_DIRS = ("/usr/sbin", "/sbin", "/usr/bin")
 
 
@@ -80,7 +79,7 @@ def linux_test_environment(env):
 
 
 def coverage(env):
-    toolchain = env.get("RUST_COVERAGE_TOOLCHAIN", COVERAGE_TOOLCHAIN)
+    toolchain = env["RUST_COVERAGE_TOOLCHAIN"]
     metadata = json.loads(cargo("metadata", "--format-version=1", "--no-deps", "--locked",
                                 env=env, capture=True, toolchain=toolchain).stdout)
     target = Path(env.get("CARGO_LLVM_COV_TARGET_DIR",
@@ -113,60 +112,14 @@ def coverage(env):
     cargo("llvm-cov", "report", "--html", "--output-dir", str(out), env=env, toolchain=toolchain)
 
 
-def main(operation, system=None):
-    system = system or platform.system()
-    if system not in ("Linux", "Darwin"):
-        raise RuntimeError(f"Unsupported test host: {system}")
-    env = os.environ.copy()
-    if env.get("BUILD_JOBS"):
-        env["CARGO_BUILD_JOBS"] = env["BUILD_JOBS"]
-    if operation == "coverage-setup":
-        linux_required(system)
-        subprocess.run(["rustup", "toolchain", "install", env.get("RUST_COVERAGE_TOOLCHAIN", COVERAGE_TOOLCHAIN),
-                        "--profile", "minimal", "--component", "llvm-tools-preview"], check=True)
-    elif operation == "coverage":
-        linux_required(system)
-        with linux_test_environment(env) as test_env:
-            coverage(test_env)
-    elif operation == "test-native":
-        if system != "Darwin":
-            raise RuntimeError("Native VM tests require Apple Silicon macOS and signed helpers from make build")
-        bundle = Path(env.get("OUT", env.get("RUST_OUT", str(ROOT / "build/rust"))))
-        if not bundle.is_absolute():
-            bundle = ROOT / bundle
-        env["RUST_OUT"] = str(bundle)
-        subprocess.run(["make", "build"],
-                       cwd=ROOT, env=env, check=True)
-        env["OUT"] = env["RUST_OUT"]
-        cargo("test", "--locked", "-p", "vmctl", "--test", "native_bind_semantics",
-              "--", "--ignored", "--test-threads=1", env=env)
-    elif operation == "lint":
-        cargo("fmt", "--check", env=env)
-        selection = ["--workspace"] + (["--exclude", "clankerd-guestd"] if system == "Darwin" else [])
-        cargo("clippy", "--locked", *selection, "--all-targets", "--", "-D", "warnings", env=env)
-    elif operation in ("test", "test-linux"):
-        if operation == "test-linux":
-            linux_required(system)
-        if system == "Linux":
-            with linux_test_environment(env) as test_env:
-                cargo("test", "--locked", "--workspace", env=prebuild(test_env))
-        else:
-            bundle = Path(env.get("RUST_OUT", str(ROOT / "build/rust"))).resolve()
-            env = dict(env, OUT=str(bundle))
-            print("Running native Mac unit and host-only integration checks; Linux guest suite: make test-linux.", flush=True)
-            cargo("test", "--locked", "--workspace", "--exclude", "clankerd-guestd", "--lib", "--bins", env=env)
-            for package, tests in (("clankerd-proto", ["spawn"]), ("libkrun-sys", ["errors"]),
-                                   ("vmctl", ["version", "smoke_script", "native_bind_semantics"])):
-                selection = [arg for name in tests for arg in ("--test", name)]
-                cargo("test", "--locked", "-p", package, *selection, env=env)
-    else:
-        raise RuntimeError(f"Unknown operation: {operation}")
+def main(system=None):
+    linux_required(system or platform.system())
+    with linux_test_environment(os.environ.copy()) as env:
+        coverage(env)
 
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) != 2:
-            raise RuntimeError("Usage: rust-test.py test|test-linux|test-native|lint|coverage|coverage-setup")
-        main(sys.argv[1])
+        main()
     except (RuntimeError, subprocess.CalledProcessError) as error:
         sys.exit(str(error))

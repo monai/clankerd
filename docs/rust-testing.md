@@ -8,8 +8,8 @@ in `mise.toml`. It measures LLVM line, region, function and branch coverage.
 [LLVM continuous profiles](https://clang.llvm.org/docs/SourceBasedCodeCoverage.html)
 retain counters when tests kill helper processes;
 this is compiler instrumentation, with no profiling code in production sources.
-Branch instrumentation requires nightly Rust; `scripts/rust-test.py` pins a separate
-coverage toolchain without changing the production compiler.
+Branch instrumentation requires nightly Rust; `build-support/checks.mk` pins a
+separate coverage toolchain without changing the production compiler.
 
 ```sh
 mise install
@@ -44,22 +44,27 @@ then mounts its ext4 filesystem and unpacks the image. It requires root,
 loop devices and mount permissions; uid 0 alone is insufficient in a restricted
 container. [Linux loop-device documentation](https://man7.org/linux/man-pages/man4/loop.4.html).
 
-`make test` chooses tests for the execution host once. On Linux it prebuilds
-clankerd-guestd and clankerd-vmspawn, then runs the workspace suite. On macOS
+`build-support/checks.mk` declares developer commands separately from artifact
+production. `make test` runs Python contract tests and direct Cargo tests; it
+does not build the distributable bundle. `make test-scripts` and `make test-rust`
+select either suite independently. On Linux, Cargo runs the workspace suite.
+Test fixtures build their executable helpers through Cargo when needed. On macOS
 it runs host unit tests, protocol/libkrun integration tests, and CLI version
 and smoke-script checks. Guest integration tests execute a local Linux guest
 process and therefore require Linux; run `mise exec -- make test-linux` in a
-Linux context. The runner reports this distinction explicitly. Mac lint checks
-all host targets and excludes the Linux-only guest package.
+Linux context. Mac lint checks all host targets and excludes the Linux-only
+guest package. Lint invokes `cargo fmt` and `cargo clippy` directly.
 
-Orchestrated tests receive `CLANKERD_TEST_BINARIES`, a JSON map of helper names
-to Cargo-reported executable paths. Direct `cargo test` remains supported:
-the helper falls back to one cached, locked Cargo build per executable per test
-process. Coverage instruments the helper prebuild and the test run with the
+Coverage alone uses `scripts/rust-coverage.py` to pass `CLANKERD_TEST_BINARIES`,
+a JSON map of helper names to Cargo-reported executable paths. Ordinary Cargo
+tests use one cached, locked helper build per executable per test process.
+Coverage instruments the helper prebuild and the test run with the
 same llvm-cov environment, and preserves `CARGO_LLVM_COV_TARGET_DIR` across
 collection and every report.
 
 Linux tests require native e2fsprogs (`apt-get install e2fsprogs` on Debian/Ubuntu).
-The runner resolves these tools before compilation and reports missing prerequisites.
-`CLANKERD_TEST_TOOLS` is authoritative when set; it must contain executable tools
+On ARM64 Linux, Make supplies tools from the packaged management filesystem;
+other Linux hosts use their native tools. The coverage runner validates tool
+availability before compilation. `CLANKERD_TEST_TOOLS` is authoritative when set;
+it must contain executable tools
 for the test machine, which may differ from the shipped ARM64 guest target.

@@ -6,12 +6,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-SPEC = importlib.util.spec_from_file_location("rust_test", Path(__file__).parents[1] / "rust-test.py")
+SPEC = importlib.util.spec_from_file_location("rust_coverage", Path(__file__).parents[1] / "rust-coverage.py")
 runner = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runner)
 
 
-class RunnerTests(unittest.TestCase):
+class CoverageTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -39,46 +39,16 @@ elif "build" in args:
             tool = tools / name
             tool.write_text("#!/bin/sh\nexit 0\n")
             tool.chmod(0o755)
-        make = self.root / "make"
-        make.write_text('''#!/usr/bin/env python3
-import json, os, sys
-with open(os.environ["RECORD"], "a") as log:
-    log.write(json.dumps({"args": ["make", *sys.argv[1:]], "env": dict(os.environ)}) + "\\n")
-''')
-        make.chmod(0o755)
         env = {"CLANKERD_TEST_TOOLS": str(tools), "CARGO": str(self.fake), "RECORD": str(self.log),
                "META_TARGET": str(self.root / "configured-target"),
                "PATH": str(self.root)+os.pathsep+os.environ["PATH"],
-               "COVERAGE_OUT": str(self.root / "reports")}
+               "COVERAGE_OUT": str(self.root / "reports"), "RUST_COVERAGE_TOOLCHAIN": "nightly-2026-10-08"}
         self.environment = patch.dict(os.environ, env, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
 
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()]
-
-    def test_native_vm_checks_use_the_selected_completed_bundle(self):
-        bundle = str(self.root / "native-bundle")
-        with patch.dict(os.environ, {"OUT": bundle}):
-            runner.main("test-native", "Darwin")
-        build, test = self.calls()
-        self.assertEqual(build["env"]["RUST_OUT"], bundle)
-        self.assertEqual(test["env"]["OUT"], bundle)
-        self.assertIn("--ignored", test["args"])
-
-    def test_native_vm_checks_reject_non_macos_before_launching_tools(self):
-        with self.assertRaisesRegex(RuntimeError, "Native VM tests require"):
-            runner.main("test-native", "Linux")
-        self.assertFalse(self.log.exists())
-
-    def test_linux_prebuild_paths_reach_suite(self):
-        runner.main("test", "Linux")
-        build, test = self.calls()
-        self.assertEqual(build["args"][0], "build")
-        self.assertIn("--locked", build["args"])
-        self.assertEqual(test["args"], ["test", "--locked", "--workspace"])
-        self.assertEqual(json.loads(test["env"]["CLANKERD_TEST_BINARIES"]),
-                         {name: "/resolved/" + name for name in ["clankerd-guestd", "clankerd-vmspawn"]})
 
     def test_path_tools_are_published_to_rust_harness(self):
         env = {"PATH": str(self.root / "tools")}
@@ -100,24 +70,19 @@ with open(os.environ["RECORD"], "a") as log:
 
     def test_missing_linux_tools_fail_before_cargo(self):
         with patch.dict(os.environ, {"CLANKERD_TEST_TOOLS": str(self.root / "missing")}):
-            for operation in ("test", "coverage"):
-                with self.assertRaisesRegex(RuntimeError, "Install native e2fsprogs"):
-                    runner.main(operation, "Linux")
+            with self.assertRaisesRegex(RuntimeError, "Install native e2fsprogs"):
+                runner.main("Linux")
         self.assertFalse(self.log.exists())
 
-    def test_mac_never_builds_local_linux_guest(self):
-        runner.main("test", "Darwin")
-        calls = self.calls()
-        self.assertIn("--exclude", calls[0]["args"])
-        self.assertTrue(all(call["args"][0] == "test" for call in calls))
-        self.assertFalse(any("CLANKERD_TEST_BINARIES" in call["env"] for call in calls))
+    def test_coverage_rejects_non_linux_before_launching_tools(self):
         with self.assertRaisesRegex(RuntimeError, "Linux execution context"):
-            runner.main("test-linux", "Darwin")
+            runner.main("Darwin")
+        self.assertFalse(self.log.exists())
 
     def test_coverage_directory_and_instrumentation_survive_all_phases(self):
         custom = self.root / "custom coverage"
         with patch.dict(os.environ, {"CARGO_LLVM_COV_TARGET_DIR": str(custom)}):
-            runner.main("coverage", "Linux")
+            runner.main("Linux")
         calls = self.calls()
         for call in calls[1:]:
             self.assertEqual(call["env"]["CARGO_LLVM_COV_TARGET_DIR"], str(custom))
