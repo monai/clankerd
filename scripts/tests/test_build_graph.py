@@ -101,7 +101,7 @@ out=Path(os.environ['CARGO_TARGET_DIR'])/args[args.index('--target')+1]/'release
 out.mkdir(parents=True,exist_ok=True)
 for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspawn','clankerd-network']):
  if kind=='guest':
-  (out/name).write_text('compiled guest')
+  data=b'compiled guest'+os.environ.get('GUEST_PAYLOAD','').encode()
  else:
   commands=b''
   if name=='clankerd-vmspawn':
@@ -109,8 +109,12 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
     data=value.encode()+bytes([0]);size=(header+len(data)+7)//8*8
     return struct.pack('<III',code,size,header)+bytes(header-12)+data+bytes(size-header-len(data))
    commands=command(0xc,24,'@rpath/libkrun.1.dylib')+command(0x8000001c,12,'@executable_path/lib')
-  (out/name).write_bytes(struct.pack('<8I',0xfeedfacf,0x100000c,0,2,2 if commands else 0,len(commands),0,0)+commands)
- (out/name).chmod(0o755)
+  data=struct.pack('<8I',0xfeedfacf,0x100000c,0,2,2 if commands else 0,len(commands),0,0)+commands+os.environ.get('HOST_PAYLOAD','').encode()
+ if not (out/name).exists() or (out/name).read_bytes()!=data:
+  temporary=out/(name+'.'+str(os.getpid()))
+  temporary.write_bytes(data)
+  temporary.chmod(0o755)
+  temporary.replace(out/name)
 ''')
         cargo.chmod(0o755)
         signer = tools / 'rcodesign'
@@ -134,47 +138,43 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
             self.assertNotEqual(result.returncode, 0, result.stdout+result.stderr)
         return result
 
-    def test_warm_build_missing_output_and_changed_rust_have_the_correct_rebuild_scope(self):
+    def test_cargo_is_consulted_and_unchanged_executables_reuse_the_artifact(self):
         self.run_make()
         artifact = self.root / 'build/rust'
-        self.assertTrue((artifact / 'linux-arm64/management/sbin/dhcpcd').is_file())
-        self.assertEqual({p.name for p in (artifact / 'linux-arm64').iterdir()}, {'management'})
         management = artifact / 'linux-arm64/management'
+        self.assertEqual({p.name for p in (artifact / 'linux-arm64').iterdir()}, {'management'})
         self.assertTrue((management / 'usr/sbin/clankerd-guestd').is_file())
         self.assertFalse(any(p.is_file() or p.is_symlink() for p in management.iterdir()))
         original = artifact.resolve()
-        calls = self.log.read_text()
         self.run_make()
-        self.assertEqual(self.log.read_text(), calls)
         self.assertEqual(artifact.resolve(), original)
-        (artifact / 'linux-arm64/management/sbin/dhcpcd').unlink()
+        calls = self.log.read_text().splitlines()
+        self.assertEqual(sorted(calls), ['guest', 'guest', 'host', 'host'])
+        source = self.root / 'crates/libclankerd/src/unused.rs'
+        source.write_text('fixture source addition')
         self.run_make()
-        self.assertTrue((artifact / 'linux-arm64/management/sbin/dhcpcd').is_file())
-        self.assertEqual(self.log.read_text(), calls)
-        (self.root / 'crates/libclankerd/src/lib.rs').write_text('changed host source')
+        source.unlink()
         self.run_make()
-        self.assertEqual(self.log.read_text(), calls+'host\n')
-        calls = self.log.read_text()
-        (self.root / 'crates/libclankerd/src/lib.rs').unlink()
+        self.assertEqual(artifact.resolve(), original,
+                         'Cargo outputs, rather than source inventory, determine repackaging')
+        executable = self.root / 'cargo/aarch64-apple-darwin/release/vmctl'
+        executable.unlink()
         self.run_make()
-        self.assertEqual(self.log.read_text(), calls+'host\n')
-        calls = self.log.read_text()
-        restored = self.root / 'crates/libclankerd/src/lib.rs'
-        restored.write_text('restored source')
-        os.utime(restored, ns=(1, 1))
+        self.assertTrue(executable.is_file())
+        (management / 'sbin/dhcpcd').unlink()
         self.run_make()
-        self.assertEqual(self.log.read_text(), calls+'host\n')
+        self.assertTrue((management / 'sbin/dhcpcd').is_file())
+        self.assertFalse(list((self.root / 'build/self-contained').glob('*/host-inputs.json')))
+        self.assertFalse(list((self.root / 'build/self-contained').glob('*/guest-inputs.json')))
 
     def test_static_management_inputs_rebuild_the_filesystem_without_recompiling(self):
         self.run_make()
         artifact = self.root / 'build/rust'
-        calls = self.log.read_text()
         config = self.root / 'build-support/management-rootfs/etc/clankerd/dhcpcd.conf'
         config.write_text('duid ll\nnoipv4ll\n# fixture policy\n')
         self.run_make()
         self.assertEqual((artifact / 'linux-arm64/management/etc/clankerd/dhcpcd.conf').read_text(),
                          'duid ll\nnoipv4ll\n# fixture policy\n')
-        self.assertEqual(self.log.read_text(), calls)
 
     def test_signed_test_libraries_do_not_require_rust_or_guest_artifacts(self):
         import platform
@@ -195,12 +195,13 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         self.assertFalse(output.is_symlink())
         self.assertEqual((output / 'user-file').read_text(), 'fixture user data')
 
-    def test_failed_signing_and_corrupt_input_preserve_the_published_artifact(self):
+    def test_failed_build_stages_preserve_the_published_artifact(self):
         self.run_make()
         artifact = self.root / 'build/rust'
         original = artifact.resolve()
-        (self.root / 'crates/libclankerd/src/lib.rs').write_text('changed host source')
-        self.run_make(ok=False, env=dict(self.env, FAIL_SIGN='1'))
+        self.run_make(ok=False, env=dict(self.env, FAIL_CARGO='1'))
+        self.assertEqual(artifact.resolve(), original)
+        self.run_make(ok=False, env=dict(self.env, HOST_PAYLOAD='changed host', FAIL_SIGN='1'))
         self.assertEqual(artifact.resolve(), original)
         self.assertTrue((artifact / 'darwin-arm64/vmctl').read_bytes().startswith(bytes.fromhex('cffaedfe')))
         archive = next((self.root / 'build/self-contained/downloads').glob('base-*.archive'))
@@ -208,24 +209,27 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         self.run_make(ok=False)
         self.assertEqual(artifact.resolve(), original)
 
-    def test_changed_guest_source_and_declared_binary_rebuild_only_affected_outputs(self):
+    def test_changed_cargo_output_and_locked_package_update_the_artifact(self):
         import gzip
         self.run_make()
-        calls = self.log.read_text()
-        (self.root / 'crates/clankerd-guestd/src/main.rs').write_text('changed guest')
-        self.run_make()
-        self.assertEqual(self.log.read_text(), calls+'guest\n')
-        calls = self.log.read_text()
+        artifact = self.root / 'build/rust'
+        original = artifact.resolve()
+        host = (artifact / 'darwin-arm64/vmctl').read_bytes()
+        env = dict(self.env, GUEST_PAYLOAD='changed guest')
+        self.run_make(env=env)
+        self.assertNotEqual(artifact.resolve(), original)
+        self.assertEqual((artifact / 'darwin-arm64/vmctl').read_bytes(), host)
+        self.assertEqual((artifact / 'linux-arm64/management/usr/sbin/clankerd-guestd').read_bytes(),
+                         b'compiled guestchanged guest')
         package = self.source / 'base.tar.gz'
         old = hashlib.sha256(package.read_bytes()).hexdigest()
         package.write_bytes(gzip.compress(gzip.decompress(package.read_bytes()), mtime=123))
         new = hashlib.sha256(package.read_bytes()).hexdigest()
         self.lock.write_text(self.lock.read_text().replace(old, new))
-        previous = (self.root / 'build/rust').resolve()
-        self.run_make()
-        self.assertEqual(self.log.read_text(), calls)
-        self.assertNotEqual((self.root / 'build/rust').resolve(), previous)
-        self.assertIn(new, (self.root / 'build/rust/inputs.mk').read_text())
+        previous = artifact.resolve()
+        self.run_make(env=env)
+        self.assertNotEqual(artifact.resolve(), previous)
+        self.assertIn(new, (artifact / 'inputs.mk').read_text())
 
     def test_concurrent_builds_and_interrupted_compilation_never_publish_partial_outputs(self):
         import signal
@@ -237,7 +241,6 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
                 self.assertEqual(process.returncode, 0, output.decode())
         artifact = self.root / 'build/rust'
         original = artifact.resolve()
-        (self.root / 'crates/libclankerd/src/lib.rs').write_text('recompile')
         marker = self.root / 'compiling'
         process = subprocess.Popen(self.args, cwd=self.root, env=dict(self.env, BLOCK_CARGO=str(marker)),
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
@@ -253,7 +256,7 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
                 pass
             process.communicate(timeout=10)
         self.assertEqual(artifact.resolve(), original)
-        self.run_make()
+        self.run_make(env=dict(self.env, HOST_PAYLOAD="completed host"))
         self.assertNotEqual(artifact.resolve(), original)
 
     def test_an_incorrect_declared_hash_cannot_publish_an_archive_or_artifact(self):

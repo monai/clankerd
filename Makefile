@@ -20,7 +20,8 @@ ATOMIC := $(PYTHON) scripts/atomic-directory.py
 PHASE_TOOLS := scripts/atomic-directory.py scripts/artifact-tree.py Makefile
 HOST_TARGET := aarch64-apple-darwin
 GUEST_TARGET := aarch64-unknown-linux-musl
-RUST_INPUTS := Cargo.toml Cargo.lock $(shell find crates -type f -name '*.rs' -o -name '*.toml' -o -name '*.tbd' -o -name '*.c' -o -name '*.h' -o -name '*.plist')
+HOST_EXECUTABLES := $(addprefix $(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/,vmctl clankerd-vmspawn clankerd-network)
+GUEST_EXECUTABLE := $(CARGO_TARGET_DIR)/$(GUEST_TARGET)/release/clankerd-guestd
 ifeq ($(shell uname -s),Darwin)
 HOST_CARGO := cargo build
 HOST_SDK := $(shell xcrun --sdk macosx --show-sdk-path)
@@ -54,23 +55,23 @@ $(WORK)/host-libraries/.complete: $(addsuffix /.complete,$(HOST_PACKAGES)) scrip
 $(WORK)/configuration.json: scripts/build-configuration.py FORCE
 	@$(PYTHON) scripts/build-configuration.py $@ "$(HOST_SDK)" "$(CARGO_TARGET_DIR)"
 
-RUST_HOST_INPUTS := $(filter-out crates/clankerd-guestd/%,$(RUST_INPUTS))
-RUST_GUEST_INPUTS := $(filter Cargo.toml Cargo.lock crates/clankerd-guestd/% crates/clankerd-proto/%,$(RUST_INPUTS))
-$(WORK)/host-inputs.json: $(RUST_HOST_INPUTS) scripts/record-build-inputs.py FORCE
-	@$(PYTHON) scripts/record-build-inputs.py $@ $(RUST_HOST_INPUTS)
-$(WORK)/guest-inputs.json: $(RUST_GUEST_INPUTS) scripts/record-build-inputs.py FORCE
-	@$(PYTHON) scripts/record-build-inputs.py $@ $(RUST_GUEST_INPUTS)
+.PHONY: cargo-host cargo-guest
+cargo-host: $(WORK)/host-libraries/.complete $(WORK)/configuration.json
+	+PKG_CONFIG_PATH="$(realpath $(WORK)/host-libraries/pkgconfig)" PKG_CONFIG_LIBDIR="$(realpath $(WORK)/host-libraries/pkgconfig)" PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_SYSROOT_DIR=/ SDKROOT="$(HOST_SDK)" $(HOST_CARGO) --locked --release --target $(HOST_TARGET) -p vmctl -p clankerd-vmspawn -p clankerd-network
 
-$(WORK)/host-rust/.complete: $(WORK)/host-libraries/.complete $(WORK)/configuration.json $(WORK)/host-inputs.json $(RUST_HOST_INPUTS) $(PHASE_TOOLS) FORCE
-	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- sh -ec 'PKG_CONFIG_PATH="$(realpath $(WORK)/host-libraries/pkgconfig)" PKG_CONFIG_LIBDIR="$(realpath $(WORK)/host-libraries/pkgconfig)" PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_SYSROOT_DIR=/ SDKROOT="$(HOST_SDK)" $(HOST_CARGO) --locked --release --target $(HOST_TARGET) -p vmctl -p clankerd-vmspawn -p clankerd-network; mkdir -p "$$1"; cp "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/vmctl" "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/clankerd-vmspawn" "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/clankerd-network" "$$1/"' sh '{out}'
+cargo-guest: $(WORK)/configuration.json
+	+cargo build --locked --release --target $(GUEST_TARGET) --config 'target.$(GUEST_TARGET).linker="rust-lld"' -p clankerd-guestd
 
-$(WORK)/guest-rust/.complete: $(WORK)/configuration.json $(WORK)/guest-inputs.json $(RUST_GUEST_INPUTS) $(PHASE_TOOLS) FORCE
-	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- sh -ec 'cargo build --locked --release --target $(GUEST_TARGET) --config target.$(GUEST_TARGET).linker=\"rust-lld\" -p clankerd-guestd; mkdir -p "$$1"; cp "$(CARGO_TARGET_DIR)/$(GUEST_TARGET)/release/clankerd-guestd" "$$1/"' sh '{out}'
+$(HOST_EXECUTABLES): cargo-host
+	@test -f "$@"
+
+$(GUEST_EXECUTABLE): cargo-guest
+	@test -f "$@"
 
 LICENSE_ARCHIVES := $(foreach input,$(LICENSE_INPUTS),$(DOWNLOADS)/$(input)-$($(input)_SHA256).archive)
 
-$(WORK)/artifact/.complete: $(LICENSE_ARCHIVES) $(WORK)/host-rust/.complete $(WORK)/guest-rust/.complete $(WORK)/management/.complete $(WORK)/host-libraries/.complete $(INPUT_LOCK) build-support/artifact.mk scripts/verify-host-artifact.py crates/clankerd-vmspawn/entitlements.plist $(PHASE_TOOLS) FORCE
-	+@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- $(MAKE) --no-print-directory -f build-support/artifact.mk STAGE='{out}' WORK="$(WORK)" INPUT_LOCK="$(INPUT_LOCK)" DOWNLOADS="$(DOWNLOADS)"
+$(WORK)/artifact/.complete: $(LICENSE_ARCHIVES) $(HOST_EXECUTABLES) $(GUEST_EXECUTABLE) $(WORK)/management/.complete $(WORK)/host-libraries/.complete $(INPUT_LOCK) build-support/artifact.mk scripts/verify-host-artifact.py crates/clankerd-vmspawn/entitlements.plist $(PHASE_TOOLS) FORCE
+	+@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- $(MAKE) --no-print-directory -f build-support/artifact.mk STAGE='{out}' WORK="$(WORK)" INPUT_LOCK="$(INPUT_LOCK)" DOWNLOADS="$(DOWNLOADS)" HOST_TARGET="$(HOST_TARGET)" GUEST_TARGET="$(GUEST_TARGET)"
 
 build: $(WORK)/artifact/.complete
 	@$(PYTHON) scripts/publish-artifact.py $(WORK)/artifact $(RUST_OUT)

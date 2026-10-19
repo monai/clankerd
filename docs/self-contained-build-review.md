@@ -12,7 +12,7 @@ or interface be preserved for compatibility.
 
 | Unit | Current contract | Tests / observations |
 |---|---|---|
-| `Makefile`, `binary-input.py` | Exact locked inputs, hash verification before use, dependency-scoped rebuilds | `test_build_graph.py`: verification, source/input changes, warm reuse, missing output |
+| `Makefile`, `binary-input.py` | Exact locked inputs, hash verification before use; Cargo owns Rust freshness and packaging consumes its executable outputs | `test_build_graph.py`: verification, Cargo delegation, compiled/input changes, warm reuse, missing output |
 | `extract-binary.py` | Keep files and guest links within the destination; retain APK scripts as metadata without execution | `test_binary_extraction.py`: guest links/modes, metadata, path/link traversal |
 | `atomic-directory.py`, `publish-artifact.py` | Publish complete generations atomically; failures retain the current generation; never migrate an existing directory | `test_build_graph.py`: signing/hash failures, concurrent/interrupted builds, unowned-directory rejection |
 | `assemble-management.py` | Preserve package paths/modes/links; overlay checked-in management identities, locked passwords and DHCP files; reject missing, non-executable or foreign programs | `test_management.py`: layout, fixed filesystem policy, invalid inputs; `test_build_graph.py`: static-input rebuild scope |

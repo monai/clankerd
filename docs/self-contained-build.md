@@ -25,11 +25,16 @@ Make exposes these outputs under `BUILD_ROOT/<execution OS>-<execution arch>`:
 | `packages/<input>/.complete` | Verified binary extraction, paths and permissions |
 | `management/.complete` | Guest packages and explicit provisioning recipe |
 | `host-libraries/.complete` | Host bottles, Mach-O import closure and relocation |
-| `host-rust/.complete` | Cargo host compilation, host sources and build configuration |
-| `guest-rust/.complete` | Cargo guest compilation, guest/protocol sources and build configuration |
+| `cargo/<target>/release/<program>` | Cargo owns source dependencies and compilation; Make consumes the executable outputs |
 | `artifact/.complete` | Completed phases, provenance, licenses, final signing and import audit |
 
-Each phase owns its output and publishes a private generation only after its
+Cargo is invoked on every build and decides whether compilation is needed.
+Make does not scan Rust sources or maintain source-hash manifests. Unchanged
+executables retain their timestamps, so an unchanged Cargo build does not
+reinstall or resign the artifact. Installation consumes Cargo outputs directly;
+there are no intermediate host/guest Rust staging directories.
+
+Each packaging phase owns its output and publishes a private generation only after its
 recipe succeeds. Content inventories detect missing or damaged files, modes and
 symlinks. Cross-process locks serialize publication. Failed steps preserve the
 previous artifact; abandoned private directories have no public completion

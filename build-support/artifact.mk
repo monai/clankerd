@@ -28,8 +28,8 @@ artifact-install: $(HOST_PROGRAMS) $(HOST_LIBRARIES) \
 $(STAGE) $(HOST) $(HOST)/lib $(LICENSES) $(LICENSES)/texts $(LICENSES)/guest:
 	mkdir -p "$@"
 
-$(HOST_PROGRAMS): $(HOST)/%: $(WORK)/host-rust/% | $(HOST)
-	install -m 755 "$(WORK)/host-rust/$(@F)" "$@"
+$(HOST_PROGRAMS): $(HOST)/%: $(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/% | $(HOST)
+	install -m 755 "$(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/$(@F)" "$@"
 	rcodesign sign --binary-identifier "io.clankerd.$(@F)" $(SIGN_FLAGS) "$@"
 
 $(HOST)/clankerd-vmspawn: SIGN_FLAGS := -e crates/clankerd-vmspawn/entitlements.plist
@@ -44,7 +44,7 @@ $(GUEST): $(WORK)/management/.complete
 	cp -pRP "$(WORK)/management/." "$@/"
 	rm "$@/.complete"
 
-$(GUEST)/usr/sbin/clankerd-guestd: $(WORK)/guest-rust/clankerd-guestd | $(GUEST)
+$(GUEST)/usr/sbin/clankerd-guestd: $(CARGO_TARGET_DIR)/$(GUEST_TARGET)/release/clankerd-guestd | $(GUEST)
 	install -m 755 "$<" "$@"
 
 $(STAGE)/inputs.mk: $(INPUT_LOCK) | $(STAGE)
