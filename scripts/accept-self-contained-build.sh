@@ -52,8 +52,6 @@ step() {
 }
 step 'Host and source evidence'
 sw_vers
-make --version | head -n 1
-command -v make
 git rev-parse HEAD > "$evidence/commit.txt"
 git diff HEAD -- crates scripts Makefile build-support > "$evidence/worktree.diff"
 # Parse and link the stub with Apple's linker before the expensive Cargo build.

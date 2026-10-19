@@ -1,7 +1,6 @@
 # Self-contained artifact
 
-Run `mise install`, then `mise exec -- make -j4 build`. GNU Make 4.4.1 is pinned
-alongside Cargo; Apple's older system Make is not supported. Python 3.12+ is a build
+Run `mise install`, then `mise exec -- make -j4 build`. Python 3.12+ is a build
 prerequisite. `pkg-config` is a build tool prerequisite for linking the locked
 host liblzma; its absence fails configuration rather than selecting a source
 build. Apple Silicon macOS builds require Apple's command-line SDK;

@@ -26,7 +26,7 @@ mise install
 mise exec -- make build
 ```
 
-GNU Make 4.4.1 (pinned in mise), Python 3.12+, and platform build tools are required. The build runs natively on
+Python 3.12+ and platform build tools are required. The build runs natively on
 Apple Silicon macOS or cross-builds on Linux (ARM64 or x86_64). On macOS, install
 Apple's command-line SDK. No Homebrew runtime dependencies are required.
 
