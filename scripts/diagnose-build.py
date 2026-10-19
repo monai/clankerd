@@ -35,17 +35,20 @@ try:
     installed = case.root / 'build/artifact/darwin-arm64/vmctl'
     version = subprocess.run(['make', '--version'], env=environment,
                              text=True, capture_output=True, check=True).stdout
-    print(f'[1/4] {platform.system()} {platform.machine()}; {version.splitlines()[0]}')
+    runs = [
+        ('initial build', {}),
+        ('changed host, signing forced to fail',
+         {'HOST_PAYLOAD': 'changed host', 'FAIL_SIGN': '1'}),
+        ('changed host, signing allowed', {'HOST_PAYLOAD': 'completed host'}),
+    ] + [(f'repeated update {attempt}', {'HOST_PAYLOAD': f'host update {attempt}'})
+         for attempt in range(1, 13)]
+    total = len(runs) + 1
+    print(f'[1/{total}] {platform.system()} {platform.machine()}; {version.splitlines()[0]}')
     print(f'Make: {shutil.which("make", path=environment["PATH"])}')
     print(f'Evidence: {evidence}')
     with (evidence / 'make.log').open('w') as log:
         log.write(version)
-        for step, name, overrides in [
-            (2, 'initial build', {}),
-            (3, 'changed host, signing forced to fail',
-             {'HOST_PAYLOAD': 'changed host', 'FAIL_SIGN': '1'}),
-            (4, 'changed host, signing allowed', {'HOST_PAYLOAD': 'completed host'}),
-        ]:
+        for step, (name, overrides) in enumerate(runs, 2):
             before_source, before_installed = observe(source), observe(installed)
             result = subprocess.run(case.args, cwd=case.root,
                                     env=dict(environment, **overrides),
@@ -58,7 +61,14 @@ try:
                 'before_installed': before_installed, 'after_installed': after_installed}) + '\n')
             signing = any('rcodesign sign' in line and 'io.clankerd.vmctl' in line
                           for line in trace.splitlines())
-            print(f'[{step}/4] {name}: exit={result.returncode}; signing command={signing}')
+            if step >= 5 and result.returncode == 0 and after_source and after_installed:
+                if after_source['sha256'] == after_installed['sha256']:
+                    same_second = (after_source['mtime_ns'] // 1_000_000_000 ==
+                                   before_installed['mtime_ns'] // 1_000_000_000)
+                    print(f'[{step}/{total}] {name}: matching output; '
+                          f'signing={signing}; same second={same_second}')
+                    continue
+            print(f'[{step}/{total}] {name}: exit={result.returncode}; signing command={signing}')
             print(f'  Cargo output changed={before_source != after_source}; '
                   f'installed changed={before_installed != after_installed}')
             if after_source and after_installed:
@@ -66,6 +76,10 @@ try:
                       f'installed={after_installed["mtime_ns"]}')
                 print(f'  sha256: source={after_source["sha256"][:12]} '
                       f'installed={after_installed["sha256"][:12]}')
+                if before_installed:
+                    same_second = (after_source['mtime_ns'] // 1_000_000_000 ==
+                                   before_installed['mtime_ns'] // 1_000_000_000)
+                    print(f'  Source and previous installation in same second={same_second}')
             decisions = [line.strip().replace(str(case.root), '<fixture>')
                          for line in trace.splitlines()
                          if 'build/artifact/darwin-arm64/vmctl' in line and (
@@ -75,6 +89,10 @@ try:
                 print('  ' + line[:180])
             if step == 2 and result.returncode:
                 print('Initial build failed; remaining observations cannot be collected. See make.log.')
+                break
+            if step >= 4 and (result.returncode or not after_source or not after_installed
+                              or after_source['sha256'] != after_installed['sha256']):
+                print('Update did not install matching output; full trace retained in make.log.')
                 break
 finally:
     case.doCleanups()
