@@ -12,7 +12,7 @@ test-scripts:
 
 ifeq ($(CHECK_SYSTEM),Darwin)
 MAC_TEST_ENV = RUSTFLAGS="$(RUSTFLAGS) -C link-arg=-Wl,-rpath,$(realpath $(WORK)/test-libraries/darwin-arm64/lib)"
-test-rust: $(WORK)/test-libraries/.complete
+test-rust: test-libraries
 	+$(MAC_TEST_ENV) cargo test --locked --workspace --exclude clankerd-guestd --lib --bins
 	+$(MAC_TEST_ENV) cargo test --locked -p clankerd-proto --test spawn
 	+$(MAC_TEST_ENV) cargo test --locked -p libkrun-sys --test errors

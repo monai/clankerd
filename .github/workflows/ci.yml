@@ -65,13 +65,13 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: clankerd-rust
-          path: build/rust/**
+          path: build/artifact/**
 
       - name: Package
         run: |
           mkdir -p dist
           for target in darwin-arm64 linux-arm64; do
-            tar -C "build/rust/$target" -czf "dist/clankerd-$target.tar.gz" .
+            tar -C "build/artifact/$target" -czf "dist/clankerd-$target.tar.gz" .
           done
           (cd dist && sha256sum *.tar.gz > SHA256SUMS)
 

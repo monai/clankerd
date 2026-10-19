@@ -15,17 +15,13 @@ class DeveloperChecks(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
-        (self.root / 'build-support/management-rootfs').mkdir(parents=True)
-        shutil.copy2(ROOT / 'Makefile', self.root / 'Makefile')
+        (self.root / 'build-support').mkdir()
         shutil.copy2(ROOT / 'build-support/checks.mk', self.root / 'build-support/checks.mk')
         # Supply the signed-library producer at its Make boundary. Production
         # installation and signing are exercised by test_build_graph.py.
         (self.root / 'Makefile').write_text('WORK := work\ninclude build-support/checks.mk\n'
-            '$(WORK)/test-libraries/.complete:\n'
-            '\tmkdir -p "$(WORK)/test-libraries/darwin-arm64/lib"\n'
-            '\ttouch "$@"\n')
-        (self.root / 'build-support/inputs.mk').write_text('INPUTS :=\n')
-        (self.root / 'crates').mkdir()
+            'test-libraries:\n'
+            '\tmkdir -p "$(WORK)/test-libraries/darwin-arm64/lib"\n')
         self.log = self.root / 'cargo.jsonl'
         cargo = self.root / 'cargo'
         cargo.write_text('''#!/usr/bin/env python3

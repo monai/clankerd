@@ -7,13 +7,13 @@
 # runners cannot run VMs); a self-hosted runner can call it as is.
 #
 #   scripts/m2-smoke-test.sh
-#   IMAGE=ghcr.io/monai/clankers:slim OUT=build/rust scripts/m2-smoke-test.sh
+#   IMAGE=ghcr.io/monai/clankers:slim OUT=build/artifact scripts/m2-smoke-test.sh
 #
 # Environment (all optional):
 #   IMAGE               image under test (default ghcr.io/monai/clankers:slim)
 #   ALT_IMAGE           a second image for the "change the image, keep the
 #                       volume" step (default debian:bookworm-slim)
-#   OUT                 build output directory (default build/rust)
+#   OUT                 build output directory (default build/artifact)
 #   VMCTL               use this vmctl as is; skips the macOS and build checks
 #   SMOKE_TIMEOUT       seconds to wait for dockerd and for services (default 120)
 #
@@ -26,7 +26,7 @@
 set -Eeuo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-out=${OUT:-$root/build/rust}
+out=${OUT:-$root/build/artifact}
 image=${IMAGE:-ghcr.io/monai/clankers:slim}
 alt_image=${ALT_IMAGE:-debian:bookworm-slim}
 timeout_s=${SMOKE_TIMEOUT:-120}

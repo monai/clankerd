@@ -9,8 +9,8 @@ vmctl run -d --bridge-interface en0 --name lan python:3.13-alpine python3 -m htt
 Find vmnet-supported physical interfaces with the bundled native executable:
 
 ```sh
-build/rust/darwin-arm64/clankerd-network authorize
-build/rust/darwin-arm64/clankerd-network launch --list-shared-interfaces
+build/artifact/darwin-arm64/clankerd-network authorize
+build/artifact/darwin-arm64/clankerd-network launch --list-shared-interfaces
 ```
 
 The chosen interface is stored in `host_config.bridge_interface` and reported by

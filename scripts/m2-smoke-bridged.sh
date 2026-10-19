@@ -4,7 +4,7 @@ set -Eeuo pipefail
 [ "$(uname -s)" = Darwin ] || { echo 'Requires the Mac host' >&2; exit 1; }
 [ "$(sw_vers -productVersion | cut -d. -f1)" = 15 ] || { echo 'Requires macOS 15' >&2; exit 1; }
 root=$(cd "$(dirname "$0")/.." && pwd)
-out=${OUT:-$root/build/rust}
+out=${OUT:-$root/build/artifact}
 vmctl=$out/darwin-arm64/vmctl
 export VMNET_TEST_REAL_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn
 export CLANKERD_VMSPAWN=$root/scripts/fixtures/vmnet-family-filter.py

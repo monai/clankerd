@@ -63,15 +63,18 @@ python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 step 'Build artifact (long-running: about 1–10 minutes; cold downloads may take longer)'
 make -j"${BUILD_JOBS:-4}" build
 step 'Copy and verify relocated artifact'
-python3 scripts/artifact-tree.py check build/rust
-cp -R build/rust/. "$evidence/bundle"
+cp -pRP build/artifact/. "$evidence/bundle"
 export OUT=$evidence/bundle
-python3 scripts/artifact-tree.py check "$OUT"
-# A warm build must keep both the generation and every completed file unchanged.
+rsync -rlpcn --delete --itemize-changes build/artifact/ "$OUT/" > "$evidence/relocation-diff.txt"
+test ! -s "$evidence/relocation-diff.txt"
+# A warm build must retain installed files and their modification times.
 step 'Verify unchanged warm build'
-cp build/rust/.complete "$evidence/before-warm.json"
+find build/artifact -type f -exec stat -f '%N %m' {} + | sort > "$evidence/before-warm.txt"
 make -j"${BUILD_JOBS:-4}" build
-cmp build/rust/.complete "$evidence/before-warm.json"
+find build/artifact -type f -exec stat -f '%N %m' {} + | sort > "$evidence/after-warm.txt"
+cmp "$evidence/before-warm.txt" "$evidence/after-warm.txt"
+rsync -rlpcn --delete --itemize-changes build/artifact/ "$OUT/" > "$evidence/relocation-diff.txt"
+test ! -s "$evidence/relocation-diff.txt"
 step 'Apple SDK, signatures, and host library audit'
 # Compile the owned native transport against Apple's real headers too.
 xcrun clang -fblocks -Wall -Wextra -Werror -mmacosx-version-min=15.0 -c \

@@ -11,7 +11,7 @@ required_files = sys.argv[separator+1:]
 def overlay(source, target):
     target.mkdir(parents=True, exist_ok=True)
     for path in source.iterdir():
-        if path.name in {'.complete', 'package-metadata'}:
+        if path.name in {'.stamp', 'package-metadata'}:
             continue
         destination = target / path.name
         if path.is_symlink():
@@ -44,5 +44,5 @@ for required in required_files:
     if data.startswith(b'\x7fELF') and (data[4]!=2 or int.from_bytes(data[18:20], 'little')!=183):
         raise RuntimeError('guest binary is not AArch64: ' + required)
 # Runtime ownership is root in libkrun's UID mapping; host build owns no devices.
-for path in out.rglob('.complete'):
+for path in out.rglob('.stamp'):
     path.unlink()

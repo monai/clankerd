@@ -88,7 +88,7 @@ if '--version' in args:
 kind='guest' if 'aarch64-unknown-linux-musl' in args else 'host'
 if kind=='host':
  libdir=Path(subprocess.check_output(['pkg-config','--variable=libdir','liblzma'],text=True).strip())
- expected=next(Path('build/self-contained').glob('*/host-libraries/lib/liblzma.5.dylib'))
+ expected=next(Path('build/work').glob('*/host-libraries/lib/liblzma.5.dylib'))
  assert (libdir/'liblzma.dylib').resolve()==expected.resolve()
  assert (libdir/'liblzma.dylib').is_file()
 with open(os.environ['GRAPH_LOG'],'a') as stream: stream.write(kind+'\\n')
@@ -120,14 +120,10 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         signer = tools / 'rcodesign'
         signer.write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo fixture; else [ -z "$FAIL_SIGN" ]; fi\n')
         signer.chmod(0o755)
-        for name in ['rustc', 'zig']:
-            tool = tools / name
-            tool.write_text('#!/bin/sh\necho fixture\n')
-            tool.chmod(0o755)
         self.log = self.root / 'cargo.log'
         self.env = dict(os.environ, PATH=str(tools)+os.pathsep+os.environ['PATH'], GRAPH_LOG=str(self.log))
         self.args = ['make', '--no-print-directory', '-j4', 'build', f'INPUT_LOCK={self.lock}',
-                     'BUILD_ROOT=build/self-contained', 'DOWNLOADS=build/self-contained/downloads',
+                     'BUILD_ROOT=build/work', 'DOWNLOADS=build/work/downloads',
                      f'CARGO_TARGET_DIR={self.root / "cargo"}']
 
     def run_make(self, ok=True, env=None):
@@ -138,16 +134,22 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
             self.assertNotEqual(result.returncode, 0, result.stdout+result.stderr)
         return result
 
+    def artifact_state(self):
+        root = self.root / 'build/artifact'
+        return {str(path.relative_to(root)): (path.lstat().st_mtime_ns,
+                os.readlink(path) if path.is_symlink() else path.read_bytes())
+                for path in root.rglob('*') if path.is_file() or path.is_symlink()}
+
     def test_cargo_is_consulted_and_unchanged_executables_reuse_the_artifact(self):
         self.run_make()
-        artifact = self.root / 'build/rust'
+        artifact = self.root / 'build/artifact'
         management = artifact / 'linux-arm64/management'
         self.assertEqual({p.name for p in (artifact / 'linux-arm64').iterdir()}, {'management'})
         self.assertTrue((management / 'usr/sbin/clankerd-guestd').is_file())
         self.assertFalse(any(p.is_file() or p.is_symlink() for p in management.iterdir()))
-        original = artifact.resolve()
+        original = self.artifact_state()
         self.run_make()
-        self.assertEqual(artifact.resolve(), original)
+        self.assertEqual(self.artifact_state(), original)
         calls = self.log.read_text().splitlines()
         self.assertEqual(sorted(calls), ['guest', 'guest', 'host', 'host'])
         source = self.root / 'crates/libclankerd/src/unused.rs'
@@ -155,7 +157,7 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         self.run_make()
         source.unlink()
         self.run_make()
-        self.assertEqual(artifact.resolve(), original,
+        self.assertEqual(self.artifact_state(), original,
                          'Cargo outputs, rather than source inventory, determine repackaging')
         executable = self.root / 'cargo/aarch64-apple-darwin/release/vmctl'
         executable.unlink()
@@ -164,12 +166,12 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         (management / 'sbin/dhcpcd').unlink()
         self.run_make()
         self.assertTrue((management / 'sbin/dhcpcd').is_file())
-        self.assertFalse(list((self.root / 'build/self-contained').glob('*/host-inputs.json')))
-        self.assertFalse(list((self.root / 'build/self-contained').glob('*/guest-inputs.json')))
+        self.assertFalse(list((self.root / 'build/work').glob('*/host-inputs.json')))
+        self.assertFalse(list((self.root / 'build/work').glob('*/guest-inputs.json')))
 
     def test_static_management_inputs_rebuild_the_filesystem_without_recompiling(self):
         self.run_make()
-        artifact = self.root / 'build/rust'
+        artifact = self.root / 'build/artifact'
         config = self.root / 'build-support/management-rootfs/etc/clankerd/dhcpcd.conf'
         config.write_text('duid ll\nnoipv4ll\n# fixture policy\n')
         self.run_make()
@@ -179,45 +181,45 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
     def test_signed_test_libraries_do_not_require_rust_or_guest_artifacts(self):
         import platform
         context = platform.system() + '-' + platform.machine()
-        self.args[3] = f'build/self-contained/{context}/test-libraries/.complete'
+        self.args[3] = 'test-libraries'
         self.run_make()
-        work = self.root / 'build/self-contained' / context
+        work = self.root / 'build/work' / context
         self.assertTrue((work / 'test-libraries/darwin-arm64/lib/libkrun.1.dylib').is_file())
         self.assertFalse(self.log.exists())
         self.assertFalse((work / 'management').exists())
-        self.assertFalse((self.root / 'build/rust').exists())
+        self.assertFalse((self.root / 'build/artifact').exists())
 
-    def test_publication_rejects_an_unowned_directory(self):
-        output = self.root / 'build/rust'
+    def test_build_installs_into_an_ordinary_directory(self):
+        output = self.root / 'build/artifact'
         output.mkdir(parents=True)
         (output / 'user-file').write_text('fixture user data')
-        self.run_make(ok=False)
+        self.run_make()
         self.assertFalse(output.is_symlink())
         self.assertEqual((output / 'user-file').read_text(), 'fixture user data')
 
     def test_failed_build_stages_preserve_the_published_artifact(self):
         self.run_make()
-        artifact = self.root / 'build/rust'
-        original = artifact.resolve()
+        artifact = self.root / 'build/artifact'
+        original = self.artifact_state()
         self.run_make(ok=False, env=dict(self.env, FAIL_CARGO='1'))
-        self.assertEqual(artifact.resolve(), original)
+        self.assertEqual(self.artifact_state(), original)
         self.run_make(ok=False, env=dict(self.env, HOST_PAYLOAD='changed host', FAIL_SIGN='1'))
-        self.assertEqual(artifact.resolve(), original)
+        self.assertEqual(self.artifact_state(), original)
         self.assertTrue((artifact / 'darwin-arm64/vmctl').read_bytes().startswith(bytes.fromhex('cffaedfe')))
-        archive = next((self.root / 'build/self-contained/downloads').glob('base-*.archive'))
+        archive = next((self.root / 'build/work/downloads').glob('base-*.archive'))
         archive.write_bytes(b'corrupt')
         self.run_make(ok=False)
-        self.assertEqual(artifact.resolve(), original)
+        self.assertEqual(self.artifact_state(), original)
 
     def test_changed_cargo_output_and_locked_package_update_the_artifact(self):
         import gzip
         self.run_make()
-        artifact = self.root / 'build/rust'
-        original = artifact.resolve()
+        artifact = self.root / 'build/artifact'
+        original = self.artifact_state()
         host = (artifact / 'darwin-arm64/vmctl').read_bytes()
         env = dict(self.env, GUEST_PAYLOAD='changed guest')
         self.run_make(env=env)
-        self.assertNotEqual(artifact.resolve(), original)
+        self.assertNotEqual(self.artifact_state(), original)
         self.assertEqual((artifact / 'darwin-arm64/vmctl').read_bytes(), host)
         self.assertEqual((artifact / 'linux-arm64/management/usr/sbin/clankerd-guestd').read_bytes(),
                          b'compiled guestchanged guest')
@@ -226,21 +228,17 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         package.write_bytes(gzip.compress(gzip.decompress(package.read_bytes()), mtime=123))
         new = hashlib.sha256(package.read_bytes()).hexdigest()
         self.lock.write_text(self.lock.read_text().replace(old, new))
-        previous = artifact.resolve()
+        previous = self.artifact_state()
         self.run_make(env=env)
-        self.assertNotEqual(artifact.resolve(), previous)
+        self.assertNotEqual(self.artifact_state(), previous)
         self.assertIn(new, (artifact / 'inputs.mk').read_text())
 
-    def test_concurrent_builds_and_interrupted_compilation_never_publish_partial_outputs(self):
+    def test_interrupted_compilation_does_not_replace_installed_outputs(self):
         import signal
         import time
-        with subprocess.Popen(self.args, cwd=self.root, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as first, \
-             subprocess.Popen(self.args, cwd=self.root, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as second:
-            results = [(process, process.communicate(timeout=30)[0]) for process in [first, second]]
-            for process, output in results:
-                self.assertEqual(process.returncode, 0, output.decode())
-        artifact = self.root / 'build/rust'
-        original = artifact.resolve()
+        self.run_make()
+        artifact = self.root / 'build/artifact'
+        original = self.artifact_state()
         marker = self.root / 'compiling'
         process = subprocess.Popen(self.args, cwd=self.root, env=dict(self.env, BLOCK_CARGO=str(marker)),
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
@@ -255,19 +253,19 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
             except ProcessLookupError:
                 pass
             process.communicate(timeout=10)
-        self.assertEqual(artifact.resolve(), original)
+        self.assertEqual(self.artifact_state(), original)
         self.run_make(env=dict(self.env, HOST_PAYLOAD="completed host"))
-        self.assertNotEqual(artifact.resolve(), original)
+        self.assertNotEqual(self.artifact_state(), original)
 
     def test_an_incorrect_declared_hash_cannot_publish_an_archive_or_artifact(self):
         self.run_make()
-        original = (self.root / 'build/rust').resolve()
+        original = self.artifact_state()
         archive = self.source / 'base.tar.gz'
         old = hashlib.sha256(archive.read_bytes()).hexdigest()
         self.lock.write_text(self.lock.read_text().replace(old, 'f'*64))
         self.run_make(ok=False)
-        self.assertFalse(list((self.root / 'build/self-contained/downloads').glob('base-'+'f'*64+'.archive')))
-        self.assertEqual((self.root / 'build/rust').resolve(), original)
+        self.assertFalse(list((self.root / 'build/work/downloads').glob('base-'+'f'*64+'.archive')))
+        self.assertEqual(self.artifact_state(), original)
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
 
 /// Cargo is the source of truth for executable paths, including instrumented builds.
 pub fn build_binary(package: &str) -> PathBuf {
@@ -16,14 +15,6 @@ pub fn build_binary(package: &str) -> PathBuf {
             "prebuilt executable missing: {}",
             path.display()
         );
-        return path.clone();
-    }
-    static BUILT: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
-    let mut built = BUILT
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap();
-    if let Some(path) = built.get(package) {
         return path.clone();
     }
     let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
@@ -52,7 +43,7 @@ pub fn build_binary(package: &str) -> PathBuf {
         .output()
         .expect("run cargo build");
     assert!(output.status.success(), "building {package} failed");
-    let path = String::from_utf8(output.stdout)
+    String::from_utf8(output.stdout)
         .unwrap()
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
@@ -63,7 +54,5 @@ pub fn build_binary(package: &str) -> PathBuf {
                 None
             }
         })
-        .unwrap_or_else(|| panic!("cargo reported no executable for {package}"));
-    built.insert(package.to_owned(), path.clone());
-    path
+        .unwrap_or_else(|| panic!("cargo reported no executable for {package}"))
 }

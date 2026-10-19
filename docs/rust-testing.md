@@ -50,7 +50,7 @@ does not build the distributable bundle. `make test-scripts` and `make test-rust
 select either suite independently. On Linux, Cargo runs the workspace suite.
 Test fixtures build their executable helpers through Cargo when needed. On macOS
 the test graph installs and signs the pinned host dylibs, then links test
-executables with a test-only rpath to that library generation. No guest image,
+executables with a test-only rpath to that library directory. No guest image,
 product executable, or published bundle is required for ordinary Mac tests.
 The Mac suite runs host unit tests, protocol/libkrun integration tests, and CLI version
 and smoke-script checks. Guest integration tests execute a local Linux guest
@@ -60,7 +60,7 @@ guest package. Lint invokes `cargo fmt` and `cargo clippy` directly.
 
 Coverage alone uses `scripts/rust-coverage.py` to pass `CLANKERD_TEST_BINARIES`,
 a JSON map of helper names to Cargo-reported executable paths. Ordinary Cargo
-tests use one cached, locked helper build per executable per test process.
+tests ask Cargo for helper binaries when needed; Cargo owns their reuse.
 Coverage instruments the helper prebuild and the test run with the
 same llvm-cov environment, and preserves `CARGO_LLVM_COV_TARGET_DIR` across
 collection and every report.

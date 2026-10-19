@@ -27,7 +27,9 @@ impl NativeShare {
         );
         let out = std::env::var_os("OUT")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../build/rust"));
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../build/artifact")
+            });
         for binary in [
             "darwin-arm64/clankerd-vmspawn",
             "linux-arm64/management/usr/sbin/clankerd-guestd",

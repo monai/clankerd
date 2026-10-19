@@ -3,7 +3,7 @@
 # See docs/libkrun-first-boot.md. Exits non-zero on the first failed check.
 #
 #   scripts/m2-boot-check.sh [boot|image|volume|net|all]   (default: all)
-#   OUT=build/rust IMAGE=ghcr.io/monai/clankers:slim scripts/m2-boot-check.sh
+#   OUT=build/artifact IMAGE=ghcr.io/monai/clankers:slim scripts/m2-boot-check.sh
 #
 # boot  (ticket 03): the guest's root is only the boot directory
 #       (clankerd-guestd + workload.json), so the "command" is guestd itself,
@@ -24,7 +24,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 mode=${1:-all}
-out=${OUT:-$root/build/rust}
+out=${OUT:-$root/build/artifact}
 image=${IMAGE:-ghcr.io/monai/clankers:slim}
 vmctl=$out/darwin-arm64/vmctl
 export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn

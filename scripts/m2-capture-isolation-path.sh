@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 [ "$(uname -s)" = Darwin ] || { echo 'Requires the Mac host' >&2; exit 1; }
 root=$(cd "$(dirname "$0")/.." && pwd)
-out=${OUT:-$root/build/rust}
+out=${OUT:-$root/build/artifact}
 vmctl=$out/darwin-arm64/vmctl
 export CLANKERD_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn CLANKERD_GUEST_ROOT=$out/linux-arm64/management
 work=$(mktemp -d /tmp/clankerd-isolation-path.XXXXXX)

@@ -21,12 +21,12 @@ Make exposes these outputs under `BUILD_ROOT/<execution OS>-<execution arch>`:
 
 | Output | Prerequisites and responsibility |
 | --- | --- |
-| `downloads/<input>-<sha>.archive` | Locked URL; full hash verified on every invocation |
-| `packages/<input>/.complete` | Verified binary extraction, paths and permissions |
-| `management/.complete` | Guest packages and explicit provisioning recipe |
-| `host-libraries/.complete` | Host bottles, Mach-O import closure and relocation |
+| `downloads/<input>-<sha>.archive` | Locked URL; checksum verified before download publication and extraction |
+| `packages/<input>/.stamp` | Verified binary extraction, paths and permissions |
+| `management/.stamp` | Guest packages and explicit provisioning recipe |
+| `host-libraries/.stamp` | Host bottles, Mach-O import closure and relocation |
 | `cargo/<target>/release/<program>` | Cargo owns source dependencies and compilation; Make consumes the executable outputs |
-| `artifact/.complete` | Completed phases, provenance, licenses, final signing and import audit |
+| `build/artifact/` | Ordinary installed outputs, provenance, licenses, signing and import audit |
 
 Cargo is invoked on every build and decides whether compilation is needed.
 Make does not scan Rust sources or maintain source-hash manifests. Unchanged
@@ -34,15 +34,22 @@ executables retain their timestamps, so an unchanged Cargo build does not
 reinstall or resign the artifact. Installation consumes Cargo outputs directly;
 there are no intermediate host/guest Rust staging directories.
 
-Each packaging phase owns its output and publishes a private generation only after its
-recipe succeeds. Content inventories detect missing or damaged files, modes and
-symlinks. Cross-process locks serialize publication. Failed steps preserve the
-previous artifact; abandoned private directories have no public completion
-record. `build/rust` points to a completed immutable generation; `RUST_OUT` changes
-that publication path. Copy its **contents** to relocate it. `BUILD_ROOT` and
-`CARGO_TARGET_DIR` select isolated build/cache directories. Corrupt cached
-archives fail closed; remove the named archive to retry the download. Old
-complete generations remain available until `make clean`.
+Make uses file prerequisites and ordinary timestamp stamps for directory
+assembly. Cargo owns compiler freshness. There are no environment fingerprints,
+content inventories, recipe receipts, generation directories, or custom build
+cache locks. Downloads use curl and shasum; `make verify-inputs` explicitly
+rechecks retained archives. A corrupt input fails checksum verification when
+extracted; remove the named archive to download it again.
+
+`build/artifact` is a regular directory. Signing uses temporary files and
+renames each file into place only after success. A failed build can leave
+unfinished intermediate work; there is no whole-bundle rollback or arbitrary
+corruption repair. Make repairs missing declared file targets. Use `make clean`
+when switching SDKs/signing tools or changing the packaging output set. Cargo
+handles its own compiler, profile and Rust flag changes. Run independent Make
+processes with distinct `BUILD_ROOT`, `DOWNLOADS`, and `RUST_OUT` paths;
+`make -j` handles parallel work within one build. `CARGO_TARGET_DIR` selects
+Cargo's own build directory. No additional cache decides whether a phase runs.
 
 The workload's `/run` is a separate tmpfs created on each boot. Runtime PID files
 and sockets expire at reboot; the image filesystem and data volumes persist.

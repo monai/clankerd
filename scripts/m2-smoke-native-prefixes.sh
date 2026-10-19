@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 [ "$(uname -s)" = Darwin ] || { echo 'Requires the Mac host' >&2; exit 1; }
 root=$(cd "$(dirname "$0")/.." && pwd)
-out=${OUT:-$root/build/rust}
+out=${OUT:-$root/build/artifact}
 vmctl=$out/darwin-arm64/vmctl
 work=$(mktemp -d /tmp/clankerd-prefix-guests.XXXXXX)
 export CLANKERD_STATE_DIR=$work/state CLANKERD_RUNTIME_DIR=$work/run

@@ -41,7 +41,7 @@ pub struct VmspawnPopulator {
 
 impl VmspawnPopulator {
     /// `vmspawn` is the host launcher; `guest_root` is the packaged management
-    /// filesystem, e.g. `build/rust/linux-arm64/management`.
+    /// filesystem, e.g. `build/artifact/linux-arm64/management`.
     pub fn new(vmspawn: impl Into<PathBuf>, guest_root: impl Into<PathBuf>) -> Self {
         VmspawnPopulator {
             vmspawn: vmspawn.into(),

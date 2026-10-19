@@ -35,13 +35,15 @@ Cargo compilation, host library relocation, artifact assembly and signing.
 Exact binary versions, URLs, SHA256 hashes, architectures and licenses are
 locked in `build-support/inputs.mk`; builds never resolve latest versions.
 
-The relocatable signed artifact at `build/rust` contains Mac host executables
+The relocatable signed artifact at `build/artifact` contains Mac host executables
 and libraries under `darwin-arm64`, and guestd plus its complete management
 filesystem under `linux-arm64`. Package metadata and license texts accompany it.
-Publication switches to a completed generation only after signing succeeds.
-Warm builds validate content and reuse unchanged outputs. `RUST_OUT` selects the
-publication path, `BUILD_ROOT` selects isolated phase outputs/caches, and
-`CARGO_TARGET_DIR` selects Cargo intermediates. `make build` is the artifact build entry point.
+Cargo tracks compilation and Make tracks installed file prerequisites.
+`build/artifact` is a regular directory; each signed file replaces its previous
+version only after signing succeeds. `RUST_OUT` selects this directory,
+`BUILD_ROOT` selects Make intermediates, and `CARGO_TARGET_DIR` selects Cargo
+intermediates. No custom build cache or environment fingerprinting is used.
+`make build` is the artifact build entry point.
 
 Host networking uses bundled clankerd-owned Apple vmnet and PF code.
 Administrator authorization uses ordinary sudo authentication. The VM and
@@ -60,7 +62,7 @@ artifacts and native evidence requirements.
 ## Run a machine
 
 ```sh
-vmctl=build/rust/darwin-arm64/vmctl
+vmctl=build/artifact/darwin-arm64/vmctl
 "$vmctl" machine create --name sandbox debian:trixie
 "$vmctl" machine start sandbox
 "$vmctl" machine exec -it sandbox /bin/bash
