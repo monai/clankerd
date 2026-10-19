@@ -163,6 +163,12 @@ The Linux test tools use one checked-in launcher with tool-name symlinks,
 and a management-root link selected by Make. The DinD Dockerfile/entrypoint
 live under `images/dind/`; the smoke Compose project is a checked-in fixture.
 
+`build-support/artifact.mk` declares installed programs, dylibs, guest files,
+and license outputs. Its recipes invoke `install`, `cp`, and `rcodesign`
+directly; the VMM target declares its entitlements. The main graph supplies
+completed inputs and publishes the staging tree only after installation,
+signing, and the host import audit succeed.
+
 `--guest-root DIR` / `CLANKERD_GUEST_ROOT` selects that complete filesystem.
 `--network-executable PATH` / `CLANKERD_NETWORK` selects the native transport.
 The build and runtime accept their current contracts only: no flat tool layout,

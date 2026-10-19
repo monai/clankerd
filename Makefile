@@ -69,8 +69,8 @@ $(WORK)/guest-rust/.complete: $(WORK)/configuration.json $(WORK)/guest-inputs.js
 
 LICENSE_ARCHIVES := $(foreach input,$(LICENSE_INPUTS),$(DOWNLOADS)/$(input)-$($(input)_SHA256).archive)
 
-$(WORK)/artifact/.complete: $(LICENSE_ARCHIVES) $(WORK)/host-rust/.complete $(WORK)/guest-rust/.complete $(WORK)/management/.complete $(WORK)/host-libraries/.complete $(INPUT_LOCK) scripts/assemble-artifact.py scripts/verify-host-artifact.py crates/clankerd-vmspawn/entitlements.plist $(PHASE_TOOLS) FORCE
-	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- $(PYTHON) scripts/assemble-artifact.py '{out}' $(WORK) $(INPUT_LOCK) $(foreach input,$(LICENSE_INPUTS),$(input)=$(DOWNLOADS)/$(input)-$($(input)_SHA256).archive)
+$(WORK)/artifact/.complete: $(LICENSE_ARCHIVES) $(WORK)/host-rust/.complete $(WORK)/guest-rust/.complete $(WORK)/management/.complete $(WORK)/host-libraries/.complete $(INPUT_LOCK) build-support/artifact.mk scripts/verify-host-artifact.py crates/clankerd-vmspawn/entitlements.plist $(PHASE_TOOLS) FORCE
+	+@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- $(MAKE) --no-print-directory -f build-support/artifact.mk STAGE='{out}' WORK="$(WORK)" INPUT_LOCK="$(INPUT_LOCK)" DOWNLOADS="$(DOWNLOADS)"
 
 build: $(WORK)/artifact/.complete
 	@$(PYTHON) scripts/publish-artifact.py $(WORK)/artifact $(RUST_OUT)
