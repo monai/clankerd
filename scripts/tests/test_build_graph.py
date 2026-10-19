@@ -176,6 +176,17 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
                          'duid ll\nnoipv4ll\n# fixture policy\n')
         self.assertEqual(self.log.read_text(), calls)
 
+    def test_signed_test_libraries_do_not_require_rust_or_guest_artifacts(self):
+        import platform
+        context = platform.system() + '-' + platform.machine()
+        self.args[3] = f'build/self-contained/{context}/test-libraries/.complete'
+        self.run_make()
+        work = self.root / 'build/self-contained' / context
+        self.assertTrue((work / 'test-libraries/darwin-arm64/lib/libkrun.1.dylib').is_file())
+        self.assertFalse(self.log.exists())
+        self.assertFalse((work / 'management').exists())
+        self.assertFalse((self.root / 'build/rust').exists())
+
     def test_publication_rejects_an_unowned_directory(self):
         output = self.root / 'build/rust'
         output.mkdir(parents=True)

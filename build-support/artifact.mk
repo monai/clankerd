@@ -1,7 +1,7 @@
 # Install one private staging tree. The main graph supplies completed inputs;
 # publication happens only after this Make invocation succeeds.
 .DEFAULT_GOAL := artifact-install
-.PHONY: artifact-install
+.PHONY: artifact-install host-libraries-install
 ifndef STAGE
 $(error STAGE must name a private artifact staging directory)
 endif
@@ -16,6 +16,8 @@ HOST_LIBRARIES := $(addprefix $(HOST)/lib/,$(notdir $(wildcard $(WORK)/host-libr
 LICENSE_FILES := $(addprefix $(LICENSES)/texts/,$(addsuffix .txt,$(LICENSE_INPUTS)))
 METADATA_PACKAGES := $(foreach input,$(INPUTS),$(if $(wildcard $(WORK)/packages/$(input)/package-metadata),$(input)))
 PACKAGE_METADATA := $(addprefix $(LICENSES)/guest/,$(METADATA_PACKAGES))
+
+host-libraries-install: $(HOST_LIBRARIES)
 
 artifact-install: $(HOST_PROGRAMS) $(HOST_LIBRARIES) \
                  $(GUEST)/usr/sbin/clankerd-guestd $(STAGE)/inputs.mk \

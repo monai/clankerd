@@ -11,11 +11,12 @@ test-scripts:
 	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
 ifeq ($(CHECK_SYSTEM),Darwin)
-test-rust:
-	+cargo test --locked --workspace --exclude clankerd-guestd --lib --bins
-	+cargo test --locked -p clankerd-proto --test spawn
-	+cargo test --locked -p libkrun-sys --test errors
-	+cargo test --locked -p vmctl --test version --test smoke_script --test native_bind_semantics
+MAC_TEST_ENV = RUSTFLAGS="$(RUSTFLAGS) -C link-arg=-Wl,-rpath,$(realpath $(WORK)/test-libraries/darwin-arm64/lib)"
+test-rust: $(WORK)/test-libraries/.complete
+	+$(MAC_TEST_ENV) cargo test --locked --workspace --exclude clankerd-guestd --lib --bins
+	+$(MAC_TEST_ENV) cargo test --locked -p clankerd-proto --test spawn
+	+$(MAC_TEST_ENV) cargo test --locked -p libkrun-sys --test errors
+	+$(MAC_TEST_ENV) cargo test --locked -p vmctl --test version --test smoke_script --test native_bind_semantics
 
 test-native: RUST_OUT := $(if $(OUT),$(OUT),$(RUST_OUT))
 test-native: build

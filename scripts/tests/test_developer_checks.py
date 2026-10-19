@@ -18,6 +18,12 @@ class DeveloperChecks(unittest.TestCase):
         (self.root / 'build-support/management-rootfs').mkdir(parents=True)
         shutil.copy2(ROOT / 'Makefile', self.root / 'Makefile')
         shutil.copy2(ROOT / 'build-support/checks.mk', self.root / 'build-support/checks.mk')
+        # Supply the signed-library producer at its Make boundary. Production
+        # installation and signing are exercised by test_build_graph.py.
+        (self.root / 'Makefile').write_text('WORK := work\ninclude build-support/checks.mk\n'
+            '$(WORK)/test-libraries/.complete:\n'
+            '\tmkdir -p "$(WORK)/test-libraries/darwin-arm64/lib"\n'
+            '\ttouch "$@"\n')
         (self.root / 'build-support/inputs.mk').write_text('INPUTS :=\n')
         (self.root / 'crates').mkdir()
         self.log = self.root / 'cargo.jsonl'
@@ -25,7 +31,8 @@ class DeveloperChecks(unittest.TestCase):
         cargo.write_text('''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ['CHECK_LOG'], 'a') as log:
-    log.write(json.dumps({'args': sys.argv[1:], 'out': os.environ.get('OUT')}) + '\\n')
+    log.write(json.dumps({'args': sys.argv[1:], 'out': os.environ.get('OUT'),
+                         'rustflags': os.environ.get('RUSTFLAGS', '')}) + '\\n')
 if os.environ.get('FAIL_CARGO') == sys.argv[1]:
     sys.exit(1)
 ''')
@@ -42,7 +49,7 @@ if os.environ.get('FAIL_CARGO') == sys.argv[1]:
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
-    def test_ordinary_rust_checks_need_no_artifact_or_build_tools(self):
+    def test_ordinary_rust_checks_do_not_build_the_product_artifact(self):
         for system in ['Linux', 'Darwin']:
             for target in ['test-rust', 'lint']:
                 with self.subTest(system=system, target=target):
@@ -52,6 +59,7 @@ if os.environ.get('FAIL_CARGO') == sys.argv[1]:
         self.assertTrue(all(call['args'][0] in {'test', 'fmt', 'clippy'} for call in self.calls()))
 
     def test_linux_suite_and_mac_selection_match_the_execution_host(self):
+        self.env['RUSTFLAGS'] = '-C debuginfo=1'
         result = self.run_make('test-rust', 'Linux')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls()[-1]['args'], ['test', '--locked', '--workspace'])
@@ -62,6 +70,9 @@ if os.environ.get('FAIL_CARGO') == sys.argv[1]:
         self.assertIn('--exclude', calls[0]['args'])
         self.assertIn('clankerd-guestd', calls[0]['args'])
         self.assertFalse(any('--ignored' in call['args'] for call in calls))
+        libraries = (self.root / 'work/test-libraries/darwin-arm64/lib').resolve()
+        self.assertTrue(all(f'-Wl,-rpath,{libraries}' in call['rustflags'] for call in calls))
+        self.assertTrue(all('-C debuginfo=1' in call['rustflags'] for call in calls))
 
     def test_wrong_host_native_and_guest_checks_fail_without_launching_cargo(self):
         for target, system in [('test-native', 'Linux'), ('test-linux', 'Darwin')]:

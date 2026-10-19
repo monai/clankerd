@@ -49,7 +49,10 @@ production. `make test` runs Python contract tests and direct Cargo tests; it
 does not build the distributable bundle. `make test-scripts` and `make test-rust`
 select either suite independently. On Linux, Cargo runs the workspace suite.
 Test fixtures build their executable helpers through Cargo when needed. On macOS
-it runs host unit tests, protocol/libkrun integration tests, and CLI version
+the test graph installs and signs the pinned host dylibs, then links test
+executables with a test-only rpath to that library generation. No guest image,
+product executable, or published bundle is required for ordinary Mac tests.
+The Mac suite runs host unit tests, protocol/libkrun integration tests, and CLI version
 and smoke-script checks. Guest integration tests execute a local Linux guest
 process and therefore require Linux; run `mise exec -- make test-linux` in a
 Linux context. Mac lint checks all host targets and excludes the Linux-only

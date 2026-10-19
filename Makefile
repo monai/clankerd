@@ -75,6 +75,9 @@ $(WORK)/artifact/.complete: $(LICENSE_ARCHIVES) $(WORK)/host-rust/.complete $(WO
 build: $(WORK)/artifact/.complete
 	@$(PYTHON) scripts/publish-artifact.py $(WORK)/artifact $(RUST_OUT)
 
+$(WORK)/test-libraries/.complete: $(WORK)/host-libraries/.complete $(INPUT_LOCK) build-support/artifact.mk $(PHASE_TOOLS) FORCE
+	+@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- $(MAKE) --no-print-directory -f build-support/artifact.mk host-libraries-install STAGE='{out}' WORK="$(WORK)" INPUT_LOCK="$(INPUT_LOCK)" DOWNLOADS="$(DOWNLOADS)"
+
 ifeq ($(BUILD_CONTEXT),Linux-aarch64)
 $(WORK)/linux-test-tools/.complete: $(WORK)/management/.complete build-support/linux-test-tools/run-tool $(PHASE_TOOLS) FORCE
 	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- sh -ec 'mkdir -p "$$1"; install -m 755 build-support/linux-test-tools/run-tool "$$1/run-tool"; ln -s "$(abspath $(WORK)/management)" "$$1/management"; for tool in mke2fs e2fsck resize2fs debugfs; do ln -s run-tool "$$1/$$tool"; done' sh '{out}'
