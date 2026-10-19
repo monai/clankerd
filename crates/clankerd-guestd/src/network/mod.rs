@@ -53,15 +53,12 @@ pub fn setup(config: &NetworkConfig) -> Result<(), String> {
     // dhcpcd owns RA/SLAAC in userspace, disables kernel accept_ra/autoconf,
     // and remains able to process RA packets while Docker forwarding is enabled.
     // Stable DUID-LL derives from the machine's stable unique MAC, not image state.
-    fs::write("/run/clankerd/network/dhcpcd.conf",
-        "duid ll\nnoipv4ll\nnosyslog\ntimeout 0\noption domain_name_servers, domain_search\noption dhcp6_name_servers, dhcp6_domain_search\n")
-        .map_err(|error|error.to_string())?;
     let mut command = Command::new("/sbin/dhcpcd");
     command
         .args([
             "-B",
             "-f",
-            "/run/clankerd/network/dhcpcd.conf",
+            "/etc/clankerd/dhcpcd.conf",
             "-c",
             "/usr/lib/clankerd/network-hook",
             &config.interface,

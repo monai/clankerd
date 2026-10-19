@@ -42,9 +42,11 @@ $(foreach input,$(INPUTS),$(eval $(call binary_input,$(input))))
 verify-inputs: $(foreach input,$(INPUTS),$(DOWNLOADS)/$(input)-$($(input)_SHA256).archive)
 GUEST_PACKAGES := $(addprefix $(WORK)/packages/,$(GUEST_INPUTS))
 HOST_PACKAGES := $(addprefix $(WORK)/packages/,$(HOST_INPUTS))
+MANAGEMENT_ROOTFS := build-support/management-rootfs
+MANAGEMENT_FILES := $(shell find $(MANAGEMENT_ROOTFS))
 
-$(WORK)/management/.complete: $(addsuffix /.complete,$(GUEST_PACKAGES)) scripts/assemble-management.py $(PHASE_TOOLS) FORCE
-	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- $(PYTHON) scripts/assemble-management.py '{out}' $(GUEST_PACKAGES) --required $(GUEST_REQUIRED)
+$(WORK)/management/.complete: $(addsuffix /.complete,$(GUEST_PACKAGES)) $(MANAGEMENT_FILES) scripts/assemble-management.py $(PHASE_TOOLS) FORCE
+	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- $(PYTHON) scripts/assemble-management.py '{out}' $(MANAGEMENT_ROOTFS) $(GUEST_PACKAGES) --required $(GUEST_REQUIRED)
 
 $(WORK)/host-libraries/.complete: $(addsuffix /.complete,$(HOST_PACKAGES)) scripts/relocate-host.py $(PHASE_TOOLS) FORCE
 	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- $(PYTHON) scripts/relocate-host.py '{out}' $(HOST_PACKAGES) --required $(HOST_REQUIRED)
@@ -74,8 +76,8 @@ build: $(WORK)/artifact/.complete
 	@$(PYTHON) scripts/publish-artifact.py $(WORK)/artifact $(RUST_OUT)
 
 ifeq ($(BUILD_CONTEXT),Linux-aarch64)
-$(WORK)/linux-test-tools/.complete: $(WORK)/management/.complete scripts/linux-test-tools.py $(PHASE_TOOLS) FORCE
-	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- $(PYTHON) scripts/linux-test-tools.py $(WORK)/management '{out}'
+$(WORK)/linux-test-tools/.complete: $(WORK)/management/.complete build-support/linux-test-tools/run-tool $(PHASE_TOOLS) FORCE
+	@$(ATOMIC) $(@D) $(filter-out FORCE,$^) -- sh -ec 'mkdir -p "$$1"; install -m 755 build-support/linux-test-tools/run-tool "$$1/run-tool"; ln -s "$(abspath $(WORK)/management)" "$$1/management"; for tool in mke2fs e2fsck resize2fs debugfs; do ln -s run-tool "$$1/$$tool"; done' sh '{out}'
 TEST_PREREQUISITES := $(WORK)/linux-test-tools/.complete
 TEST_ENV := CLANKERD_TEST_TOOLS=$(abspath $(WORK)/linux-test-tools)
 endif

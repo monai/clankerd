@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+if [ -e /.clankerdenv ]; then
+    clankerd-dockerd
+    exec "$@"
+fi
+exec /usr/local/bin/dockerd-entrypoint.sh "$@"

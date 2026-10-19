@@ -46,6 +46,7 @@ class ArtifactGraph(unittest.TestCase):
         self.root = Path(self.temporary.name)
         shutil.copy2(ROOT / 'Makefile', self.root / 'Makefile')
         shutil.copytree(ROOT / 'scripts', self.root / 'scripts', ignore=shutil.ignore_patterns('__pycache__'))
+        shutil.copytree(ROOT / 'build-support', self.root / 'build-support')
         for name in ['Cargo.toml', 'Cargo.lock', 'crates/clankerd-vmspawn/entitlements.plist',
                      'crates/clankerd-guestd/src/main.rs', 'crates/libclankerd/src/lib.rs']:
             path = self.root / name
@@ -163,6 +164,17 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         os.utime(restored, ns=(1, 1))
         self.run_make()
         self.assertEqual(self.log.read_text(), calls+'host\n')
+
+    def test_static_management_inputs_rebuild_the_filesystem_without_recompiling(self):
+        self.run_make()
+        artifact = self.root / 'build/rust'
+        calls = self.log.read_text()
+        config = self.root / 'build-support/management-rootfs/etc/clankerd/dhcpcd.conf'
+        config.write_text('duid ll\nnoipv4ll\n# fixture policy\n')
+        self.run_make()
+        self.assertEqual((artifact / 'linux-arm64/management/etc/clankerd/dhcpcd.conf').read_text(),
+                         'duid ll\nnoipv4ll\n# fixture policy\n')
+        self.assertEqual(self.log.read_text(), calls)
 
     def test_publication_rejects_an_unowned_directory(self):
         output = self.root / 'build/rust'

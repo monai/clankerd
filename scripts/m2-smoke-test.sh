@@ -205,19 +205,9 @@ else
 fi
 
 step "compose project with a user-defined network (long-running: downloads may take 1–5 minutes)"
-guest 'mkdir -p /tmp/proj && cat > /tmp/proj/compose.yaml <<EOF2
-services:
-  web:
-    image: nginx:alpine
-    networks: [appnet]
-  client:
-    image: busybox
-    command: sleep infinity
-    networks: [appnet]
-networks:
-  appnet: {}
-EOF2
-docker compose -p proj -f /tmp/proj/compose.yaml up -d'
+"$vmctl" exec -i smoke sh -c 'mkdir -p /tmp/proj && cat > /tmp/proj/compose.yaml' \
+  < "$root/scripts/fixtures/docker-compose.yaml"
+guest 'docker compose -p proj -f /tmp/proj/compose.yaml up -d'
 guest 'docker compose -p proj -f /tmp/proj/compose.yaml exec -T client wget -qO- http://web | grep -q "Welcome to nginx"' \
   || fail "compose services cannot reach each other by name"
 guest 'docker network inspect proj_appnet >/dev/null' || fail "the user-defined network is missing"

@@ -143,5 +143,5 @@ LICENSE_INPUTS := license_MIT license_BSD_2_Clause license_BSD_3_Clause license_
 INPUTS += $(LICENSE_INPUTS)
 
 # Required runtime contents, interpreted relative to the assembled phase root.
-GUEST_REQUIRED := bin/sh sbin/dhcpcd sbin/mke2fs sbin/e2fsck usr/sbin/resize2fs usr/sbin/debugfs lib/ld-musl-aarch64.so.1 etc/passwd etc/group etc/mke2fs.conf
+GUEST_REQUIRED := bin/sh sbin/dhcpcd sbin/mke2fs sbin/e2fsck usr/sbin/resize2fs usr/sbin/debugfs lib/ld-musl-aarch64.so.1 etc/passwd etc/group etc/shadow etc/mke2fs.conf etc/clankerd/dhcpcd.conf usr/lib/clankerd/network-hook
 HOST_REQUIRED := lib/libkrun.1.dylib lib/libkrunfw.5.dylib lib/libepoxy.0.dylib lib/libvirglrenderer.1.dylib lib/libMoltenVK.dylib lib/libfdt.1.dylib lib/liblzma.5.dylib

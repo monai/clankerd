@@ -152,6 +152,17 @@ paths. Runtime configuration is `etc/clankerd/workload.json`. No executable or
 tool alias is placed at the filesystem root, and no standalone guestd copy is
 published under `linux-arm64`.
 
+`build-support/management-rootfs/` owns the management account databases,
+locked passwords, DHCP policy, and executable network hook. These checked-in
+files overlay distribution defaults; dhcpcd always uses UID/GID 101. Networking
+reads `/etc/clankerd/dhcpcd.conf` directly instead of generating configuration
+under `/run`. Machine addresses, leases, resolver data, and hostname remain
+runtime state.
+
+The Linux test tools use one checked-in launcher with tool-name symlinks,
+and a management-root link selected by Make. The DinD Dockerfile/entrypoint
+live under `images/dind/`; the smoke Compose project is a checked-in fixture.
+
 `--guest-root DIR` / `CLANKERD_GUEST_ROOT` selects that complete filesystem.
 `--network-executable PATH` / `CLANKERD_NETWORK` selects the native transport.
 The build and runtime accept their current contracts only: no flat tool layout,

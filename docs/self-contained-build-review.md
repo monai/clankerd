@@ -15,7 +15,7 @@ or interface be preserved for compatibility.
 | `Makefile`, `binary-input.py` | Exact locked inputs, hash verification before use, dependency-scoped rebuilds | `test_build_graph.py`: verification, source/input changes, warm reuse, missing output |
 | `extract-binary.py` | Keep files and guest links within the destination; retain APK scripts as metadata without execution | `test_binary_extraction.py`: guest links/modes, metadata, path/link traversal |
 | `atomic-directory.py`, `publish-artifact.py` | Publish complete generations atomically; failures retain the current generation; never migrate an existing directory | `test_build_graph.py`: signing/hash failures, concurrent/interrupted builds, unowned-directory rejection |
-| `assemble-management.py` | Preserve packaged filesystem paths/modes/links; provision DHCP account/chroot/hook; reject missing, non-executable or foreign programs | `test_management.py`: layout, provisioning, invalid inputs |
+| `assemble-management.py` | Preserve package paths/modes/links; overlay checked-in management identities, locked passwords and DHCP files; reject missing, non-executable or foreign programs | `test_management.py`: layout, fixed filesystem policy, invalid inputs; `test_build_graph.py`: static-input rebuild scope |
 | `assemble-artifact.py` | One guest filesystem under `linux-arm64/management`; no flat executable copies or root aliases | `test_build_graph.py`: completed artifact layout; signed cross-build |
 | `guest_environment::place` | Copy and validate the same management filesystem for every VM execution context | `libclankerd/tests/vmspawn.rs`, `vmspawn_populator.rs`; native management/boot gates |
 | `rootdisk`, `volume` | Execute packaged `sbin/mke2fs` and `usr/sbin/resize2fs`; preserve disk and volume behavior | guestd volume unit tests, `seam_b.rs`, libclankerd image/population tests; native boot/Docker gates |
@@ -74,7 +74,7 @@ foreign architecture, dropped permissions) and native PF (foreign owner, wrong
 socket, inverted cross-network policy) are rejected by their contract tests.
 LLVM line/branch coverage and Python line/branch coverage were run; privileged
 Apple API/PF paths require actual native observations rather than Linux coverage.
-Results: 361 Rust tests pass (7 native-only tests ignored on Linux), 33 Python
+Caretaker checkpoint results: 361 Rust tests pass (7 native-only tests ignored on Linux), 33 Python
 tests pass, strict clippy and formatting pass, the complete ARM64 cross-build
 signs and passes the host import audit, and a warm build emits no work while
 retaining the generation. Full Rust line/branch coverage is 73.62% / 61.98%;

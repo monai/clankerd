@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 SCRIPT = Path(__file__).parents[1] / 'assemble-management.py'
+ROOTFS = Path(__file__).parents[2] / 'build-support/management-rootfs'
 
 
 class ManagementFilesystem(unittest.TestCase):
@@ -30,7 +31,7 @@ class ManagementFilesystem(unittest.TestCase):
 
     def assemble(self, required=('sbin/mke2fs', 'usr/sbin/resize2fs')):
         return subprocess.run([sys.executable, str(SCRIPT), str(self.root / 'output'),
-                               str(self.package), '--required', *required],
+                               str(ROOTFS), str(self.package), '--required', *required],
                               text=True, capture_output=True)
 
     def test_package_paths_contents_links_and_permissions_are_preserved(self):
@@ -43,19 +44,24 @@ class ManagementFilesystem(unittest.TestCase):
         self.assertEqual(os.readlink(out / 'lib/alias.so'), 'library.so')
         self.assertEqual({p.name for p in out.iterdir()}, {'etc', 'bin', 'sbin', 'usr', 'lib', 'var', 'run'})
 
-    def test_account_and_hook_provisioning_uses_available_identity_and_explicit_mode(self):
+    def test_management_policy_overrides_package_accounts_with_fixed_locked_identities(self):
         result = self.assemble()
         self.assertEqual(result.returncode, 0, result.stderr)
         out = self.root / 'output'
         account = next(line.split(':') for line in (out / 'etc/passwd').read_text().splitlines()
                        if line.startswith('dhcpcd:'))
-        self.assertNotIn(account[2], {'0', '100', '101'})
-        self.assertEqual(account[2], account[3])
-        self.assertIn(f'dhcpcd:x:{account[2]}:', (out / 'etc/group').read_text())
+        self.assertEqual(account[2:4], ['101', '101'])
+        self.assertIn('dhcpcd:x:101:', (out / 'etc/group').read_text())
+        self.assertNotIn('fixture:', (out / 'etc/passwd').read_text())
+        self.assertNotIn('fixture:', (out / 'etc/group').read_text())
+        self.assertEqual((out / 'etc/shadow').stat().st_mode & 0o777, 0o600)
+        self.assertTrue(all(line.split(':')[1] == '!'
+                            for line in (out / 'etc/shadow').read_text().splitlines()))
         self.assertTrue((out / 'var/lib/dhcpcd').is_dir())
         hook = out / 'usr/lib/clankerd/network-hook'
         self.assertEqual(hook.read_text(), '#!/bin/sh\nexec /usr/sbin/clankerd-guestd network-hook\n')
         self.assertTrue(hook.stat().st_mode & 0o111)
+        self.assertIn('duid ll\n', (out / 'etc/clankerd/dhcpcd.conf').read_text())
 
     def test_required_programs_reject_missing_files_and_foreign_architectures(self):
         for content in [None, b'\x7fELF' + bytes([2]) + bytes(13) + bytes([62, 0])]:

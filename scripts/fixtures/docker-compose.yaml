@@ -1,0 +1,10 @@
+services:
+  web:
+    image: nginx:alpine
+    networks: [appnet]
+  client:
+    image: busybox
+    command: sleep infinity
+    networks: [appnet]
+networks:
+  appnet: {}
