@@ -236,7 +236,7 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         (unrelated / 'user-file').write_text('fixture user data')
         output.symlink_to(unrelated)
         self.run_make(ok=False)
-        self.assertEqual(output.resolve(strict=True), unrelated)
+        self.assertEqual(output.resolve(strict=True), unrelated.resolve(strict=True))
         self.assertEqual((unrelated / 'user-file').read_text(), 'fixture user data')
 
     def test_publication_keeps_complete_bundles_and_reuses_the_warm_bundle(self):
