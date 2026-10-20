@@ -1,6 +1,6 @@
 //! libkrun 1.19.x bindings and a single safe entry point, [`boot`].
 //!
-//! On macOS the crate links the artifact's bundled `libkrun` (see `build.rs`). Everywhere
+//! On macOS the native linker resolves installed `libkrun` (see `build.rs`). Everywhere
 //! else [`boot`] fails with [`ErrorKind::Unsupported`], so the workspace builds
 //! and its tests run on Linux.
 //!
