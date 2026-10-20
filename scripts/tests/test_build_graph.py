@@ -10,6 +10,93 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class BinaryInputs(unittest.TestCase):
+    def test_independent_make_processes_can_share_the_download_directory(self):
+        self.check_concurrent_downloads(fail_one=False)
+
+    def test_failed_download_cannot_remove_another_process_verified_archive(self):
+        self.check_concurrent_downloads(fail_one=True)
+
+    def check_concurrent_downloads(self, fail_one):
+        import shutil
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            source = work / 'binary.tar.gz'
+            source.write_bytes(b'concurrent download fixture\n')
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()
+            lock = work / 'inputs.mk'
+            lock.write_text(f'INPUTS := fixture\nfixture_URL := {source.as_uri()}\n'
+                            f'fixture_SHA256 := {digest}\n')
+            bad_source = work / 'bad.tar.gz'
+            bad_source.write_bytes(b'incorrect download\n')
+            bad_lock = work / 'bad-inputs.mk'
+            bad_lock.write_text(lock.read_text().replace(source.as_uri(), bad_source.as_uri()))
+            tools = work / 'tools'
+            tools.mkdir()
+            curl = tools / 'curl'
+            curl.write_text('#!/usr/bin/env python3\n'
+                'import os,subprocess,sys,time\nfrom pathlib import Path\n'
+                f'subprocess.run([{shutil.which("curl")!r}]+sys.argv[1:],check=True)\n'
+                f'gate=Path({str(work)!r})\n'
+                '(gate/(str(os.getpid())+".ready")).touch()\n'
+                'deadline=time.monotonic()+10\n'
+                'while not (gate/"release").exists():\n'
+                ' if time.monotonic()>deadline: sys.exit("download barrier timed out")\n'
+                ' time.sleep(.01)\n'
+                'if sys.argv[-1].endswith("/bad.tar.gz"):\n'
+                f' while not (gate/"downloads/fixture-{digest}.archive").exists():\n'
+                '  if time.monotonic()>deadline: sys.exit("peer publication timed out")\n'
+                '  time.sleep(.01)\n')
+            curl.chmod(0o755)
+            environment = dict(os.environ, PATH=str(tools)+os.pathsep+os.environ['PATH'])
+            downloads = work / 'downloads'
+            commands = [['make', '--no-print-directory', 'verify-inputs',
+                         f'INPUT_LOCK={selected}', f'DOWNLOADS={downloads}']
+                        for selected in (lock, bad_lock if fail_one else lock)]
+            processes = [subprocess.Popen(command, cwd=ROOT, env=environment,
+                         text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                         for command in commands]
+            try:
+                deadline = time.monotonic() + 10
+                while len(list(work.glob('*.ready'))) < 2 and time.monotonic() < deadline:
+                    if any(process.poll() is not None for process in processes):
+                        break
+                    time.sleep(.01)
+                self.assertEqual(len(list(work.glob('*.ready'))), 2,
+                                 'Both downloads must overlap before publication')
+                self.assertFalse(list(downloads.glob('*.archive')))
+                (work / 'release').touch()
+                results = [(process, process.communicate(timeout=10)[0]) for process in processes]
+                for index, (process, output) in enumerate(results):
+                    if fail_one and index == 1:
+                        self.assertNotEqual(process.returncode, 0, output)
+                    else:
+                        self.assertEqual(process.returncode, 0, output)
+                self.assertEqual((downloads / f'fixture-{digest}.archive').read_bytes(),
+                                 source.read_bytes())
+                self.assertEqual(len(list(downloads.iterdir())), 1)
+            finally:
+                (work / 'release').touch()
+                for process in processes:
+                    if process.poll() is None:
+                        process.terminate()
+                    process.communicate(timeout=10)
+
+    def test_wrong_hash_leaves_no_published_archive_or_temporary_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            source = work / 'binary.tar.gz'
+            source.write_bytes(b'wrong hash fixture\n')
+            lock = work / 'inputs.mk'
+            lock.write_text(f'INPUTS := fixture\nfixture_URL := {source.as_uri()}\n'
+                            f'fixture_SHA256 := {"0" * 64}\n')
+            downloads = work / 'downloads'
+            result = subprocess.run(['make', '--no-print-directory', 'verify-inputs',
+                f'INPUT_LOCK={lock}', f'DOWNLOADS={downloads}'], cwd=ROOT,
+                text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(list(downloads.iterdir()), [])
+
     def test_verified_input_is_reused_and_corruption_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)

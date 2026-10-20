@@ -40,7 +40,10 @@ assembly. Cargo owns compiler freshness. There are no environment fingerprints,
 content inventories, recipe receipts, or custom build cache locks. Apple's Make
 3.81 misses some subsecond changes, so file recipes use the system `find -newer`
 to check prerequisites at nanosecond precision before doing work.
-Downloads use curl and shasum; `make verify-inputs` explicitly
+Downloads use curl and shasum with unique temporary files and atomic renames;
+independent Make processes may share `DOWNLOADS`. Failed downloads remove their
+own temporary file and cannot remove another process's verified archive.
+`make verify-inputs` explicitly
 rechecks retained archives. A corrupt input fails checksum verification when
 extracted; remove the named archive to download it again.
 
@@ -66,7 +69,7 @@ republishes when a declared published file is missing. It does not perform
 arbitrary corruption repair. Use `make clean`
 when switching SDKs/signing tools or changing the packaging output set. Cargo
 handles its own compiler, profile and Rust flag changes. Run independent Make
-processes with distinct `BUILD_ROOT`, `DOWNLOADS`, and `RUST_OUT` paths;
+processes with distinct `BUILD_ROOT` and `RUST_OUT` paths; they may share `DOWNLOADS`.
 `make -j` handles parallel work within one build. `CARGO_TARGET_DIR` selects
 Cargo's own build directory. No additional cache decides whether a phase runs.
 

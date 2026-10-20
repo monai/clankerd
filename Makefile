@@ -32,12 +32,17 @@ endif
 
 .PHONY: verify-inputs
 
+# A failing downloader must not let Make delete a peer's verified archive.
 define binary_input
+.PRECIOUS: $(DOWNLOADS)/$(1)-$($(1)_SHA256).archive
 $(DOWNLOADS)/$(1)-$($(1)_SHA256).archive:
-	mkdir -p "$$(@D)"
-	curl --fail --location --retry 3 $(if $(findstring https://ghcr.io/,$($(1)_URL)),-H 'Authorization: Bearer QQ==') --output "$$@.tmp" '$($(1)_URL)'
-	printf '%s  %s\n' '$($(1)_SHA256)' "$$@.tmp" | shasum -a 256 -c -
-	mv -f "$$@.tmp" "$$@"
+	@set -e; mkdir -p "$$(@D)"; \
+	temporary=$$$$(mktemp "$$@.tmp.XXXXXX"); \
+	trap 'rm -f "$$$$temporary"' 0; \
+	trap 'exit 1' 1 2 15; \
+	curl --fail --location --retry 3 $(if $(findstring https://ghcr.io/,$($(1)_URL)),-H 'Authorization: Bearer QQ==') --output "$$$$temporary" '$($(1)_URL)'; \
+	printf '%s  %s\n' '$($(1)_SHA256)' "$$$$temporary" | shasum -a 256 -c -; \
+	mv -f "$$$$temporary" "$$@"
 $(WORK)/packages/$(1)/.stamp: $(DOWNLOADS)/$(1)-$($(1)_SHA256).archive scripts/extract-binary.py Makefile check-file-times
 	@set -e; $$(skip_unchanged); \
 	printf '%s  %s\n' '$($(1)_SHA256)' "$$<" | shasum -a 256 -c -; \
