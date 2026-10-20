@@ -64,9 +64,6 @@ case "$mode" in boot | image | volume | net | all) ;; *) fail "usage: $0 [boot|i
 
 step "prerequisites"
 [ "$(uname -sm)" = "Darwin arm64" ] || fail "run this on the Apple Silicon Mac"
-for f in "$out/darwin-arm64/lib/libkrun.1.dylib" "$out/darwin-arm64/lib/libkrunfw.5.dylib"; do
-  [ -e "$f" ] || fail "$f missing: run make build"
-done
 for f in "$vmctl" "$CLANKERD_VMSPAWN" "$CLANKERD_GUEST_ROOT/usr/sbin/clankerd-guestd"; do
   [ -x "$f" ] || fail "$f missing: run make build"
 done

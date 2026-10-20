@@ -1,0 +1,9 @@
+# Installed liblzma is required; never run lzma-sys's source-build fallback.
+[target.aarch64-apple-darwin.lzma]
+rustc-link-lib = ["lzma"]
+
+[target.aarch64-unknown-linux-gnu.lzma]
+rustc-link-lib = ["lzma"]
+
+[target.x86_64-unknown-linux-gnu.lzma]
+rustc-link-lib = ["lzma"]

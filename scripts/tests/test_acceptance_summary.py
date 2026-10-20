@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 SPEC = importlib.util.spec_from_file_location(
-    'acceptance_summary', Path(__file__).parents[1] / 'summarize-self-contained-build.py')
+    'acceptance_summary', Path(__file__).parents[1] / 'summarize-native-build.py')
 runner = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runner)
 

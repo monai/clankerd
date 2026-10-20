@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Included in accept-self-contained-build.sh: stopped edits, reimage and data retention.
+# Included in accept-native-build.sh: stopped edits, reimage and data retention.
 set -Eeuo pipefail
 [ "$(uname -s)" = Darwin ] || { echo 'Requires the Mac host' >&2; exit 1; }
 root=$(cd "$(dirname "$0")/.." && pwd)

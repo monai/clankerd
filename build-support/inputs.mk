@@ -1,4 +1,4 @@
-# Locked distribution binaries; host=arm64 macOS 15, guest=aarch64 Linux musl.
+# Locked guest distribution binaries: aarch64 Linux musl.
 alpine_URL := https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/aarch64/alpine-minirootfs-3.24.2-aarch64.tar.gz
 alpine_SHA256 := 9bf70a7f18ea44094cbb5f70c58f9af129c8214745743db0e68e5502cc2ce773
 alpine_VERSION := 3.24.2
@@ -47,37 +47,8 @@ guest_musl_URL := https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/musl-
 guest_musl_SHA256 := 5e9674b7f41152fe2119093b5cb4c13eaaadb19c2d5422b2d7267913e663ee6e
 guest_musl_VERSION := 1.2.6-r2
 guest_musl_LICENSE := MIT
-host_libkrun_URL := https://github.com/libkrun/homebrew-krun/releases/download/libkrun-1.19.6/libkrun-1.19.6.arm64_sequoia.bottle.tar.gz
-host_libkrun_SHA256 := a6ba0f7f8bb68c011b49499eb6e5596dbb553a56e22ebd3b423fa56cea1fafaf
-host_libkrun_VERSION := 1.19.6
-host_libkrun_LICENSE := "Apache-2.0"
-host_libkrunfw_URL := https://github.com/libkrun/homebrew-krun/releases/download/libkrunfw-5.6.2/libkrunfw-5.6.2.arm64_sequoia.bottle.tar.gz
-host_libkrunfw_SHA256 := 6451c91cb70be00769b8af5a76115dc07ea51f97e668388a4648ee7e12e44f55
-host_libkrunfw_VERSION := 5.6.2
-host_libkrunfw_LICENSE := all_of: ["GPL-2.0-only", "LGPL-2.1-only"]
-host_virglrenderer_krun_URL := https://github.com/libkrun/homebrew-krun/releases/download/virglrenderer-krun-0.10.4e/virglrenderer-krun-0.10.4e.arm64_sequoia.bottle.tar.gz
-host_virglrenderer_krun_SHA256 := aa075ef1bbebbeda21663cae2e882cc15469a90a63083ab9612559b5a8fc45da
-host_virglrenderer_krun_VERSION := 0.10.4e
-host_virglrenderer_krun_LICENSE := "MIT"
-host_dtc_URL := https://ghcr.io/v2/homebrew/core/dtc/blobs/sha256:2b800aed01f5ebfc9cbb685536ad1625d1d702ab850bd34639865d3457c4f2e8
-host_dtc_SHA256 := 2b800aed01f5ebfc9cbb685536ad1625d1d702ab850bd34639865d3457c4f2e8
-host_dtc_VERSION := 1.8.1
-host_dtc_LICENSE := GPL-2.0-or-later OR BSD-2-Clause
-host_libepoxy_URL := https://ghcr.io/v2/homebrew/core/libepoxy/blobs/sha256:8567ad4e5598374741b4762cbbff1a2aa57cf97947b4742304c49613b0abd419
-host_libepoxy_SHA256 := 8567ad4e5598374741b4762cbbff1a2aa57cf97947b4742304c49613b0abd419
-host_libepoxy_VERSION := 1.5.10
-host_libepoxy_LICENSE := MIT
-host_molten_vk_URL := https://ghcr.io/v2/homebrew/core/molten-vk/blobs/sha256:fb4d355feaf8f36631695721b1ea2ac2e63cfdced0f3044c85ed8e6305a9acbc
-host_molten_vk_SHA256 := fb4d355feaf8f36631695721b1ea2ac2e63cfdced0f3044c85ed8e6305a9acbc
-host_molten_vk_VERSION := 1.4.2
-host_molten_vk_LICENSE := Apache-2.0
-host_xz_URL := https://ghcr.io/v2/homebrew/core/xz/blobs/sha256:c2724c0db0398134694b8366d30d14f4de376115fb54c559c331d5fd0474af76
-host_xz_SHA256 := c2724c0db0398134694b8366d30d14f4de376115fb54c559c331d5fd0474af76
-host_xz_VERSION := 5.8.4
-host_xz_LICENSE := 0BSD AND GPL-2.0-or-later
-INPUTS := alpine guest_busybox guest_busybox_binsh guest_dhcpcd guest_e2fsprogs guest_e2fsprogs_extra guest_e2fsprogs_libs guest_libblkid guest_libcom_err guest_libeconf guest_libuuid guest_musl host_libkrun host_libkrunfw host_virglrenderer_krun host_dtc host_libepoxy host_molten_vk host_xz
 GUEST_INPUTS := alpine guest_busybox guest_busybox_binsh guest_dhcpcd guest_e2fsprogs guest_e2fsprogs_extra guest_e2fsprogs_libs guest_libblkid guest_libcom_err guest_libeconf guest_libuuid guest_musl
-HOST_INPUTS := host_libkrun host_libkrunfw host_virglrenderer_krun host_dtc host_libepoxy host_molten_vk host_xz
+INPUTS := $(GUEST_INPUTS)
 
 license_MIT_URL := https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt
 license_MIT_SHA256 := b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5
@@ -144,4 +115,3 @@ INPUTS += $(LICENSE_INPUTS)
 
 # Required runtime contents, interpreted relative to the assembled phase root.
 GUEST_REQUIRED := bin/sh sbin/dhcpcd sbin/mke2fs sbin/e2fsck usr/sbin/resize2fs usr/sbin/debugfs lib/ld-musl-aarch64.so.1 etc/passwd etc/group etc/shadow etc/mke2fs.conf etc/clankerd/dhcpcd.conf usr/lib/clankerd/network-hook
-HOST_REQUIRED := lib/libkrun.1.dylib lib/libkrunfw.5.dylib lib/libepoxy.0.dylib lib/libvirglrenderer.1.dylib lib/libMoltenVK.dylib lib/libfdt.1.dylib lib/liblzma.5.dylib

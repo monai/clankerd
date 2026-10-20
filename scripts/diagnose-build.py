@@ -26,7 +26,7 @@ if sys.argv[1:] == ['--regressions']:
           f'{result.testsRun} tests; {len(result.failures)} failures; {len(result.errors)} errors')
     if not result.wasSuccessful():
         summary_spec = importlib.util.spec_from_file_location(
-            'acceptance_summary', root / 'scripts/summarize-self-contained-build.py')
+            'acceptance_summary', root / 'scripts/summarize-native-build.py')
         summary = importlib.util.module_from_spec(summary_spec)
         summary_spec.loader.exec_module(summary)
         for line in summary.failure_excerpt(log_path.read_text()):

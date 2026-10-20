@@ -1,4 +1,4 @@
-"""Acceptance evidence must prove an unprivileged VMM and bundled dependencies."""
+"""Acceptance evidence must prove an unprivileged VMM and installed dependencies."""
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -16,7 +16,7 @@ class VmProcessEvidence(unittest.TestCase):
         for owner in (0, 500, 501):
             with self.subTest(owner=owner), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                mappings = f'Path: {root}/darwin-arm64/clankerd-vmspawn\n{root}/darwin-arm64/lib/libkrun.1.dylib\n'
+                mappings = f'Path: {root}/darwin-arm64/clankerd-vmspawn\n/system-libraries/libkrun.1.dylib\n'
                 with patch.object(runner.os, 'getuid', return_value=501), patch.object(
                         runner.subprocess, 'check_output', side_effect=[f'123 {owner}\n', mappings]):
                     if owner == 501:
@@ -27,11 +27,11 @@ class VmProcessEvidence(unittest.TestCase):
                             runner.verify(123, root, root)
                     self.assertEqual((root / 'process-123.log').read_text(), f'123 {owner}\n')
 
-    def test_mapping_evidence_requires_the_bundle_executable_and_libraries(self):
+    def test_mapping_evidence_requires_the_executable_and_libkrun(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for mappings in ['', '/opt/homebrew/lib/libkrun.dylib', '/usr/local/Cellar/libkrun.dylib',
-                             f'{root}/darwin-arm64/clankerd-vmspawn', f'{root}/darwin-arm64/lib/libkrun.1.dylib']:
+            for mappings in ['', '/system-libraries/libkrun.dylib',
+                             f'{root}/darwin-arm64/clankerd-vmspawn', f'/system-libraries/libkrun.1.dylib']:
                 with self.subTest(mappings=mappings), patch.object(runner.os, 'getuid', return_value=501), patch.object(
                         runner.subprocess, 'check_output', side_effect=['123 501\n', mappings]):
                     with self.assertRaises(AssertionError):

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify the machine's recorded VMM PID rather than matching ps command text."""
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -16,9 +17,8 @@ def verify(pid, bundle, evidence):
     mappings = subprocess.check_output(
         ['/usr/bin/vmmap', '-w', str(pid)], text=True, stderr=subprocess.STDOUT)
     (evidence / f'vmmap-{pid}.log').write_text(mappings)
-    assert '/opt/homebrew/' not in mappings and '/usr/local/Cellar/' not in mappings, mappings
     assert str(bundle / 'darwin-arm64/clankerd-vmspawn') in mappings, mappings
-    assert str(bundle / 'darwin-arm64/lib/libkrun') in mappings, mappings
+    assert re.search(r'/libkrun(?:\.\d+)*\.dylib(?:\s|$)', mappings), mappings
 
 
 if __name__ == '__main__':

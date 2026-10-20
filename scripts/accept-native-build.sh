@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One native entry point: build, relocate, inspect, and exercise the artifact.
+# One native entry point: build, inspect, and exercise the artifact.
 set -Eeuo pipefail
 # Bash can otherwise read later lines from a checkout edited during a long run.
 if [ "${1:-}" != --acceptance-script-snapshot ]; then
@@ -15,16 +15,16 @@ evidence=${EVIDENCE_DIR:-$root/build/acceptance-$(date -u +%Y%m%dT%H%M%SZ)}
 mkdir -p "$evidence"
 evidence=$(cd "$evidence" && pwd)
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$root/build/acceptance-cargo-Darwin-arm64}
-# Runtime checks must inherit no dependency paths or earlier experiment overlays.
+# Runtime checks inherit the system loader environment.
 for variable in $(env | cut -d= -f1); do
-  case "$variable" in DYLD_*|CLANKERD_NETWORK|CLANKERD_VMSPAWN|CLANKERD_GUEST_ROOT|CLANKERD_NETWORK_PF|CLANKERD_BOOT_DIR_ROOT|CLANKERD_DEV_GUESTD|CLANKERD_VMSPAWN_DEV_LOCAL) unset "$variable";; esac
+  case "$variable" in CLANKERD_NETWORK|CLANKERD_VMSPAWN|CLANKERD_GUEST_ROOT|CLANKERD_NETWORK_PF|CLANKERD_BOOT_DIR_ROOT|CLANKERD_DEV_GUESTD|CLANKERD_VMSPAWN_DEV_LOCAL) unset "$variable";; esac
 done
 printf 'Evidence: %s\n' "$evidence"
 exec 3>&1
 if [ "${ACCEPTANCE_VERBOSE:-0}" = 1 ]; then
   exec > >(tee "$evidence/acceptance.log") 2>&1
 else
-  exec > >(tee "$evidence/acceptance.log" | python3 scripts/summarize-self-contained-build.py --progress) 2>&1
+  exec > >(tee "$evidence/acceptance.log" | python3 scripts/summarize-native-build.py --progress) 2>&1
 fi
 finish() {
   status=$?
@@ -37,7 +37,7 @@ root=Path(sys.argv[1]); code=int(sys.argv[2]); results=root/'results.tsv'
     'gates':results.read_text().splitlines() if results.exists() else [],
     'management':json.loads((root/'management-result.json').read_text()) if (root/'management-result.json').exists() else None}, indent=2)+'\n')
 PYRESULT
-  python3 scripts/summarize-self-contained-build.py "$evidence" >&3 || true
+  python3 scripts/summarize-native-build.py "$evidence" >&3 || true
   echo "Evidence retained: $evidence"
   exit "$status"
 }
@@ -54,15 +54,11 @@ step 'Host and source evidence'
 sw_vers
 git rev-parse HEAD > "$evidence/commit.txt"
 git diff HEAD -- crates scripts Makefile build-support > "$evidence/worktree.diff"
-# Parse and link the stub with Apple's linker before the expensive Cargo build.
-printf 'extern int krun_create_ctx(void); int main(void) { return krun_create_ctx(); }\n' \
-  | xcrun clang -arch arm64 -x c - -L crates/libkrun-sys/stubs -lkrun \
-      -o "$evidence/libkrun-stub-check"
 step 'Script regressions (usually under 30 seconds)'
 python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 step 'Build artifact (long-running: about 1–10 minutes; cold downloads may take longer)'
 make -j"${BUILD_JOBS:-4}" build
-step 'Copy and verify relocated artifact'
+step 'Copy published artifact'
 cp -pRP build/artifact/. "$evidence/bundle"
 export OUT=$evidence/bundle
 rsync -rlpcn --delete --itemize-changes build/artifact/ "$OUT/" > "$evidence/relocation-diff.txt"
@@ -75,11 +71,11 @@ find -H build/artifact -type f -exec stat -f '%N %m' {} + | sort > "$evidence/af
 cmp "$evidence/before-warm.txt" "$evidence/after-warm.txt"
 rsync -rlpcn --delete --itemize-changes build/artifact/ "$OUT/" > "$evidence/relocation-diff.txt"
 test ! -s "$evidence/relocation-diff.txt"
-step 'Apple SDK, signatures, and host library audit'
+step 'Apple SDK, executable signatures, and native linkage'
 # Compile the owned native transport against Apple's real headers too.
 xcrun clang -fblocks -Wall -Wextra -Werror -mmacosx-version-min=15.0 -c \
   crates/clankerd-network/src/vmnet.c -o "$evidence/vmnet-sdk-check.o"
-for binary in "$OUT"/darwin-arm64/{vmctl,clankerd-vmspawn,clankerd-network} "$OUT"/darwin-arm64/lib/*.dylib; do
+for binary in "$OUT"/darwin-arm64/{vmctl,clankerd-vmspawn,clankerd-network}; do
   codesign --verify --strict "$binary"
   otool -L "$binary"
 done

@@ -17,11 +17,7 @@ class DeveloperChecks(unittest.TestCase):
         self.root = Path(self.directory.name)
         (self.root / 'build-support').mkdir()
         shutil.copy2(ROOT / 'build-support/checks.mk', self.root / 'build-support/checks.mk')
-        # Supply the signed-library producer at its Make boundary. Production
-        # installation and signing are exercised by test_build_graph.py.
-        (self.root / 'Makefile').write_text('WORK := work\ninclude build-support/checks.mk\n'
-            'test-libraries:\n'
-            '\tmkdir -p "$(WORK)/test-libraries/darwin-arm64/lib"\n')
+        (self.root / 'Makefile').write_text('WORK := work\ninclude build-support/checks.mk\n')
         self.log = self.root / 'cargo.jsonl'
         cargo = self.root / 'cargo'
         cargo.write_text('''#!/usr/bin/env python3
@@ -66,9 +62,7 @@ if os.environ.get('FAIL_CARGO') == sys.argv[1]:
         self.assertIn('--exclude', calls[0]['args'])
         self.assertIn('clankerd-guestd', calls[0]['args'])
         self.assertFalse(any('--ignored' in call['args'] for call in calls))
-        libraries = (self.root / 'work/test-libraries/darwin-arm64/lib').resolve()
-        self.assertTrue(all(f'-Wl,-rpath,{libraries}' in call['rustflags'] for call in calls))
-        self.assertTrue(all('-C debuginfo=1' in call['rustflags'] for call in calls))
+        self.assertTrue(all(call['rustflags'] == '-C debuginfo=1' for call in calls))
 
     def test_wrong_host_native_and_guest_checks_fail_without_launching_cargo(self):
         for target, system in [('test-native', 'Linux'), ('test-linux', 'Darwin')]:

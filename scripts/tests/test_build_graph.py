@@ -10,6 +10,21 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class BinaryInputs(unittest.TestCase):
+    @unittest.skipUnless(os.uname().sysname == 'Linux', 'Linux execution boundary')
+    def test_host_build_rejects_linux_before_invoking_cargo(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cargo = root / 'cargo'
+            marker = root / 'called'
+            cargo.write_text('#!/bin/sh\ntouch "' + str(marker) + '"\n')
+            cargo.chmod(0o755)
+            result = subprocess.run(['make', '--no-print-directory', 'cargo-host'],
+                cwd=ROOT, env=dict(os.environ, PATH=str(root)+os.pathsep+os.environ['PATH']),
+                capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('native Apple Silicon macOS', result.stderr)
+            self.assertFalse(marker.exists())
+
     def test_independent_make_processes_can_share_the_download_directory(self):
         self.check_concurrent_downloads(fail_one=False)
 
@@ -154,12 +169,9 @@ class ArtifactGraph(unittest.TestCase):
             'etc/group': b'root:x:0:\n', 'bin/sh': b'shell', 'sbin/dhcpcd': b'dhcp',
             'sbin/mke2fs': b'format', 'usr/sbin/resize2fs': b'grow', 'lib/ld-musl-aarch64.so.1': b'loader',
             'lib/apk/db/installed': b'fixture package database'})
-        dylib = struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 6, 0, 0, 0, 0)
-        host = archive('host.tar.gz', {'libkrun/1.19.6/lib/libkrun.1.19.6.dylib': dylib, 'xz/5.8.4/lib/liblzma.5.dylib': dylib, 'xz/5.8.4/lib/pkgconfig/liblzma.pc': b'Version: 5.8.4\n'})
         self.lock = self.root / 'inputs.mk'
-        self.lock.write_text('INPUTS := base host\nGUEST_INPUTS := base\nHOST_INPUTS := host\n' +
-            ''.join(f'{name}_URL := {path.as_uri()}\n{name}_SHA256 := {hashlib.sha256(path.read_bytes()).hexdigest()}\n'
-                    for name, path in [('base', base), ('host', host)]))
+        self.lock.write_text('INPUTS := base\nGUEST_INPUTS := base\n' +
+            f'base_URL := {base.as_uri()}\nbase_SHA256 := {hashlib.sha256(base.read_bytes()).hexdigest()}\n')
         tools = self.root / 'tools'
         tools.mkdir()
         cargo = tools / 'cargo'
@@ -173,11 +185,6 @@ for flags in (os.environ.get(name,'') for name in ('MAKEFLAGS','CARGO_MAKEFLAGS'
 if '--version' in args:
  print('fixture cargo'); sys.exit(0)
 kind='guest' if 'aarch64-unknown-linux-musl' in args else 'host'
-if kind=='host':
- libdir=Path(subprocess.check_output(['pkg-config','--variable=libdir','liblzma'],text=True).strip())
- expected=next(Path('build/work').glob('*/host-libraries/lib/liblzma.5.dylib'))
- assert (libdir/'liblzma.dylib').resolve()==expected.resolve()
- assert (libdir/'liblzma.dylib').is_file()
 with open(os.environ['GRAPH_LOG'],'a') as stream: stream.write(kind+'\\n')
 if os.environ.get('FAIL_CARGO'): sys.exit(1)
 if os.environ.get('BLOCK_CARGO'):
@@ -190,13 +197,7 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
  if kind=='guest':
   data=b'compiled guest'+os.environ.get('GUEST_PAYLOAD','').encode()
  else:
-  commands=b''
-  if name=='clankerd-vmspawn':
-   def command(code,header,value):
-    data=value.encode()+bytes([0]);size=(header+len(data)+7)//8*8
-    return struct.pack('<III',code,size,header)+bytes(header-12)+data+bytes(size-header-len(data))
-   commands=command(0xc,24,'@rpath/libkrun.1.dylib')+command(0x8000001c,12,'@executable_path/lib')
-  data=struct.pack('<8I',0xfeedfacf,0x100000c,0,2,2 if commands else 0,len(commands),0,0)+commands+os.environ.get('HOST_PAYLOAD','').encode()
+  data=struct.pack('<8I',0xfeedfacf,0x100000c,0,2,0,0,0,0)+os.environ.get('HOST_PAYLOAD','').encode()
   if name=='vmctl' and os.environ.get('INVALID_HOST'): data=b'invalid Mach-O'
  if not (out/name).exists() or (out/name).read_bytes()!=data:
   temporary=out/(name+'.'+str(os.getpid()))
@@ -213,10 +214,13 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
                           'if [ -n "$GRAPH_SIGN_LOG" ]; then printf "%s\\n" "$*" >> "$GRAPH_SIGN_LOG"; fi\n'
                           'if [ "$1" = --version ]; then echo fixture; else [ -z "$FAIL_SIGN" ]; fi\n')
         signer.chmod(0o755)
+        shell = tools / 'shell'
+        shell.write_text('#!/bin/sh\nif [ "$1" = -c ] && [ "$2" = "uname -sm" ]; then echo Darwin arm64; else exec /bin/sh "$@"; fi\n')
+        shell.chmod(0o755)
         self.log = self.root / 'cargo.log'
         self.env = dict(os.environ, PATH=str(tools)+os.pathsep+os.environ['PATH'], GRAPH_LOG=str(self.log))
         self.args = ['make', '--no-print-directory', '-j4', 'build', f'INPUT_LOCK={self.lock}',
-                     'BUILD_ROOT=build/work', 'DOWNLOADS=build/work/downloads',
+                     'BUILD_ROOT=build/work', 'DOWNLOADS=build/work/downloads', 'SHELL='+str(self.root / 'tools/shell'),
                      f'CARGO_TARGET_DIR={self.root / "cargo"}']
 
     def run_make(self, ok=True, env=None):
@@ -295,17 +299,6 @@ for name in (['clankerd-guestd'] if kind=='guest' else ['vmctl','clankerd-vmspaw
         self.run_make()
         self.assertEqual((artifact / 'linux-arm64/management/etc/clankerd/dhcpcd.conf').read_text(),
                          'duid ll\nnoipv4ll\n# fixture policy\n')
-
-    def test_signed_test_libraries_do_not_require_rust_or_guest_artifacts(self):
-        import platform
-        context = platform.system() + '-' + platform.machine()
-        self.args[3] = 'test-libraries'
-        self.run_make()
-        work = self.root / 'build/work' / context
-        self.assertTrue((work / 'test-libraries/darwin-arm64/lib/libkrun.1.dylib').is_file())
-        self.assertFalse(self.log.exists())
-        self.assertFalse((work / 'management').exists())
-        self.assertFalse((self.root / 'build/artifact').exists())
 
     def test_build_rejects_an_existing_output_directory(self):
         output = self.root / 'build/artifact'

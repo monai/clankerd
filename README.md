@@ -26,24 +26,25 @@ mise install
 mise exec -- make build
 ```
 
-Python 3.12+ and platform build tools are required. The build runs natively on
-Apple Silicon macOS or cross-builds on Linux (ARM64 or x86_64). On macOS, install
-Apple's command-line SDK. No Homebrew runtime dependencies are required.
+Python 3.12+, Apple's command-line SDK and installed host libraries are
+required on Apple Silicon macOS. Host executables build only on native macOS.
+Linux supports guest builds and developer tests.
 
-`Makefile` exposes verified downloads, package extraction, management assembly,
-Cargo compilation, host library relocation, artifact assembly and signing.
-Exact binary versions, URLs, SHA256 hashes, architectures and licenses are
-locked in `build-support/inputs.mk`; builds never resolve latest versions.
+The native linker resolves libkrun and liblzma; dyld resolves their runtime
+dependencies, including libkrunfw. Installed libraries must export the APIs used
+by the application. The build assumes no installation prefix or package manager
+and adds no library search paths. Missing libraries produce native linker or
+loader errors. liblzma source compilation is disabled for supported host targets.
 
-The relocatable signed artifact at `build/artifact` contains Mac host executables
-and libraries under `darwin-arm64`, and guestd plus its complete management
-filesystem under `linux-arm64`. Package metadata and license texts accompany it.
-Cargo tracks compilation and Make tracks installed file prerequisites.
-`build/artifact` is a regular directory; each signed file replaces its previous
-version only after signing succeeds. `RUST_OUT` selects this directory,
-`BUILD_ROOT` selects Make intermediates, and `CARGO_TARGET_DIR` selects Cargo
-intermediates. No custom build cache or environment fingerprinting is used.
-`make build` is the artifact build entry point.
+`Makefile` downloads verified guest inputs, assembles management, runs Cargo,
+signs clankerd's executables and atomically publishes `build/artifact` as a
+symlink to a complete immutable bundle. It contains host executables under
+`darwin-arm64` and guestd plus the Alpine management filesystem under
+`linux-arm64/management`, with guest package metadata and license texts.
+Guest versions and checksums are locked in `build-support/inputs.mk`.
+`RUST_OUT` selects the publication path, `BUILD_ROOT` selects Make intermediates,
+and `CARGO_TARGET_DIR` selects Cargo intermediates. Cargo owns compilation
+freshness and Make tracks installed file prerequisites.
 
 Host networking uses bundled clankerd-owned Apple vmnet and PF code.
 Administrator authorization uses ordinary sudo authentication. The VM and
@@ -53,11 +54,10 @@ or persistent configuration changes are needed.
 Run all Mac build/artifact checks and native gates with:
 
 ```sh
-mise exec -- bash scripts/accept-self-contained-build.sh
+mise exec -- bash scripts/accept-native-build.sh
 ```
 
-See [self-contained build](docs/self-contained-build.md) for graph checks,
-artifacts and native evidence requirements.
+See [native build](docs/native-build.md) for prerequisites and validation.
 
 ## Run a machine
 
@@ -100,7 +100,7 @@ Omitting `semantics`, including in saved configuration, always means simplified.
 The choice is independent of image `USER` and run/exec user overrides. It applies
 only to host bind mounts; machine disks and named volumes retain native Linux
 ownership. Read-only bind mounts are enforced by both libkrun and the guest mount.
-These semantics require libkrun 1.19.6 or newer in the 1.x API series.
+Installed libkrun must provide the virtio-fs API used by these attachments.
 
 Stopped-machine `update --mount-remove TARGET` and `--socket-remove TARGET`
 ensure the attachment is absent, succeeding when it was already absent.

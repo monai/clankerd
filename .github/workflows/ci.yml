@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Installs the pinned rust, zig, cargo-zigbuild and rcodesign from mise.toml
+      # Installs the pinned Rust tools and rcodesign from mise.toml
       - uses: jdx/mise-action@v3
         with:
           cache: true
@@ -30,7 +30,7 @@ jobs:
       - name: Install Linux test prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends e2fsprogs
+          sudo apt-get install -y --no-install-recommends e2fsprogs liblzma-dev
 
       - run: mise exec -- make lint
 
@@ -58,28 +58,6 @@ jobs:
           name: clankerd-rust-coverage
           path: build/coverage/**
 
-      # Cross-links the darwin binaries, builds the static musl guest binary,
-      # signs and publishes the completed bundle.
-      - run: mise exec -- make build
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: clankerd-rust
-          path: build/artifact/**
-
-      - name: Package
-        run: |
-          mkdir -p dist
-          for target in darwin-arm64 linux-arm64; do
-            tar -C "build/artifact/$target" -czf "dist/clankerd-$target.tar.gz" .
-          done
-          (cd dist && sha256sum *.tar.gz > SHA256SUMS)
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: clankerd
-          path: dist/*
-
   native-mac:
     runs-on: macos-15
     steps:
@@ -94,6 +72,24 @@ jobs:
           brew trust slp/krun
           brew install libkrun
       - run: mise exec -- make lint test build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: clankerd-rust
+          path: build/artifact/**
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          for target in darwin-arm64 linux-arm64; do
+            tar -C "build/artifact/$target" -czf "dist/clankerd-$target.tar.gz" .
+          done
+          (cd dist && shasum -a 256 *.tar.gz > SHA256SUMS)
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: clankerd
+          path: dist/*
+
       # Real VM boot checks require a hardware-capable Mac and run separately.
 
   release:

@@ -49,8 +49,7 @@ production. `make test` runs Python contract tests and direct Cargo tests; it
 does not build the distributable bundle. `make test-scripts` and `make test-rust`
 select either suite independently. On Linux, Cargo runs the workspace suite.
 Test fixtures build their executable helpers through Cargo when needed. On macOS
-the test graph installs and signs the pinned host dylibs, then links test
-executables with a test-only rpath to that library directory. No guest image,
+tests use installed host libraries through the native linker and dyld. No guest image,
 product executable, or published bundle is required for ordinary Mac tests.
 The Mac suite runs host unit tests, protocol/libkrun integration tests, and CLI version
 and smoke-script checks. Guest integration tests execute a local Linux guest
@@ -65,7 +64,7 @@ Coverage instruments the helper prebuild and the test run with the
 same llvm-cov environment, and preserves `CARGO_LLVM_COV_TARGET_DIR` across
 collection and every report.
 
-Linux tests require native e2fsprogs (`apt-get install e2fsprogs` on Debian/Ubuntu).
+Linux tests require installed liblzma development/linker files and native e2fsprogs (`apt-get install e2fsprogs` on Debian/Ubuntu).
 On ARM64 Linux, Make supplies tools from the packaged management filesystem;
 other Linux hosts use their native tools. The coverage runner validates tool
 availability before compilation. `CLANKERD_TEST_TOOLS` is authoritative when set;

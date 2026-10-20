@@ -14,8 +14,7 @@ class BootGate(unittest.TestCase):
             tools = work / 'tools'
             tools.mkdir()
             out = work / 'bundle'
-            for name in ['darwin-arm64/lib/libkrun.1.dylib', 'darwin-arm64/lib/libkrunfw.5.dylib',
-                         'darwin-arm64/clankerd-vmspawn', 'linux-arm64/management/usr/sbin/clankerd-guestd']:
+            for name in ['darwin-arm64/clankerd-vmspawn', 'linux-arm64/management/usr/sbin/clankerd-guestd']:
                 path = out / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.touch()
@@ -88,7 +87,7 @@ class GateRunner(unittest.TestCase):
 
 class ScriptSnapshot(unittest.TestCase):
     def test_entrypoint_finishes_from_memory_after_its_file_is_replaced(self):
-        prefix = (ROOT / 'scripts/accept-self-contained-build.sh').read_text().split('root=', 1)[0]
+        prefix = (ROOT / 'scripts/accept-native-build.sh').read_text().split('root=', 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / 'accept.sh'
             # Padding ensures the continuation cannot rely on Bash's small input buffer.

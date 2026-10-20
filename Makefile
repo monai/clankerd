@@ -2,7 +2,7 @@
 .PHONY: build clean
 
 # mise install supplies the pinned toolchain; all build phases run in one context.
-# Binary distribution inputs and each assembly phase are real graph nodes.
+# Guest distribution inputs and assembly phases are real graph nodes.
 BUILD_ROOT ?= build/work
 BUILD_CONTEXT := $(shell uname -s)-$(shell uname -m)
 WORK := $(BUILD_ROOT)/$(BUILD_CONTEXT)
@@ -22,13 +22,6 @@ HOST_TARGET := aarch64-apple-darwin
 GUEST_TARGET := aarch64-unknown-linux-musl
 HOST_EXECUTABLES := $(addprefix $(CARGO_TARGET_DIR)/$(HOST_TARGET)/release/,vmctl clankerd-vmspawn clankerd-network)
 GUEST_EXECUTABLE := $(CARGO_TARGET_DIR)/$(GUEST_TARGET)/release/clankerd-guestd
-ifeq ($(shell uname -s),Darwin)
-HOST_CARGO := cargo build
-HOST_SDK := $(shell xcrun --sdk macosx --show-sdk-path)
-else
-HOST_CARGO := cargo zigbuild
-HOST_SDK := $(abspath scripts/macos-sdk-stubs)
-endif
 
 .PHONY: verify-inputs
 
@@ -40,7 +33,7 @@ $(DOWNLOADS)/$(1)-$($(1)_SHA256).archive:
 	temporary=$$$$(mktemp "$$@.tmp.XXXXXX"); \
 	trap 'rm -f "$$$$temporary"' 0; \
 	trap 'exit 1' 1 2 15; \
-	curl --fail --location --retry 3 $(if $(findstring https://ghcr.io/,$($(1)_URL)),-H 'Authorization: Bearer QQ==') --output "$$$$temporary" '$($(1)_URL)'; \
+	curl --fail --location --retry 3 --output "$$$$temporary" '$($(1)_URL)'; \
 	printf '%s  %s\n' '$($(1)_SHA256)' "$$$$temporary" | shasum -a 256 -c -; \
 	mv -f "$$$$temporary" "$$@"
 $(WORK)/packages/$(1)/.stamp: $(DOWNLOADS)/$(1)-$($(1)_SHA256).archive scripts/extract-binary.py Makefile check-file-times
@@ -54,7 +47,6 @@ $(foreach input,$(INPUTS),$(eval $(call binary_input,$(input))))
 verify-inputs: $(foreach input,$(INPUTS),$(DOWNLOADS)/$(input)-$($(input)_SHA256).archive)
 	$(foreach input,$(INPUTS),printf '%s  %s\n' '$($(input)_SHA256)' '$(DOWNLOADS)/$(input)-$($(input)_SHA256).archive' | shasum -a 256 -c - && ) true
 GUEST_PACKAGES := $(addprefix $(WORK)/packages/,$(GUEST_INPUTS))
-HOST_PACKAGES := $(addprefix $(WORK)/packages/,$(HOST_INPUTS))
 MANAGEMENT_ROOTFS := build-support/management-rootfs
 MANAGEMENT_FILES := $(shell find $(MANAGEMENT_ROOTFS))
 
@@ -64,15 +56,10 @@ $(WORK)/management/.stamp: $(addsuffix /.stamp,$(GUEST_PACKAGES)) $(MANAGEMENT_F
 	$(PYTHON) scripts/assemble-management.py "$(@D)" $(MANAGEMENT_ROOTFS) $(GUEST_PACKAGES) --required $(GUEST_REQUIRED); \
 	touch "$@"
 
-$(WORK)/host-libraries/.stamp: $(addsuffix /.stamp,$(HOST_PACKAGES)) $(INPUT_LOCK) scripts/relocate-host.py Makefile check-file-times
-	@set -e; $(skip_unchanged); \
-	rm -rf "$(@D)"; \
-	$(PYTHON) scripts/relocate-host.py "$(@D)" $(HOST_PACKAGES) --required $(HOST_REQUIRED); \
-	touch "$@"
-
 .PHONY: cargo-host cargo-guest
-cargo-host: $(WORK)/host-libraries/.stamp
-	+PKG_CONFIG_PATH="$(abspath $(WORK)/host-libraries/pkgconfig)" PKG_CONFIG_LIBDIR="$(abspath $(WORK)/host-libraries/pkgconfig)" PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_SYSROOT_DIR=/ SDKROOT="$(HOST_SDK)" $(HOST_CARGO) --locked --release --target $(HOST_TARGET) -p vmctl -p clankerd-vmspawn -p clankerd-network
+cargo-host:
+	@test "$(shell uname -sm)" = 'Darwin arm64' || { echo 'Host executables require native Apple Silicon macOS' >&2; exit 1; }
+	+cargo build --locked --release --target $(HOST_TARGET) -p vmctl -p clankerd-vmspawn -p clankerd-network
 
 cargo-guest:
 	+cargo build --locked --release --target $(GUEST_TARGET) --config 'target.$(GUEST_TARGET).linker="rust-lld"' -p clankerd-guestd
@@ -85,12 +72,8 @@ $(GUEST_EXECUTABLE): cargo-guest
 
 LICENSE_ARCHIVES := $(foreach input,$(LICENSE_INPUTS),$(DOWNLOADS)/$(input)-$($(input)_SHA256).archive)
 
-build: $(LICENSE_ARCHIVES) $(HOST_EXECUTABLES) $(GUEST_EXECUTABLE) $(WORK)/management/.stamp $(WORK)/host-libraries/.stamp
+build: $(LICENSE_ARCHIVES) $(HOST_EXECUTABLES) $(GUEST_EXECUTABLE) $(WORK)/management/.stamp
 	+$(MAKE) --no-print-directory -f build-support/artifact.mk artifact-publish STAGE="$(WORK)/artifact" PUBLISH="$(RUST_OUT)" WORK="$(WORK)" INPUT_LOCK="$(INPUT_LOCK)" DOWNLOADS="$(DOWNLOADS)" HOST_TARGET="$(HOST_TARGET)" GUEST_TARGET="$(GUEST_TARGET)"
-
-.PHONY: test-libraries
-test-libraries: $(WORK)/host-libraries/.stamp
-	+$(MAKE) --no-print-directory -f build-support/artifact.mk host-libraries-install STAGE="$(WORK)/test-libraries" WORK="$(WORK)" INPUT_LOCK="$(INPUT_LOCK)" DOWNLOADS="$(DOWNLOADS)"
 
 ifeq ($(BUILD_CONTEXT),Linux-aarch64)
 LINUX_TOOLS := $(WORK)/linux-test-tools

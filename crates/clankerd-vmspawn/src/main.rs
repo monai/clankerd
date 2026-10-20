@@ -58,8 +58,6 @@ fn real_main() -> Result<(), String> {
     } else {
         Box::new(Libkrun)
     };
-    #[cfg(target_os = "macos")]
-    load_firmware()?;
     reserve_descriptor_capacity()?;
     run(&spec, listener, hypervisor.as_ref())
 }
@@ -91,21 +89,5 @@ fn reserve_descriptor_capacity() -> Result<(), String> {
         "clankerd-vmspawn: open-file limit soft={} hard={}",
         limits.rlim_cur, limits.rlim_max
     );
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn load_firmware() -> Result<(), String> {
-    use std::os::unix::ffi::OsStrExt;
-    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    let path = executable
-        .parent()
-        .ok_or("missing executable directory")?
-        .join("lib/libkrunfw.5.dylib");
-    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
-    // SAFETY: load the bundled firmware and retain it for libkrun's lifetime.
-    if unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) }.is_null() {
-        return Err("cannot load bundled libkrunfw.5.dylib".into());
-    }
     Ok(())
 }
