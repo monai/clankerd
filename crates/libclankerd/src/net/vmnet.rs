@@ -259,35 +259,41 @@ fn process_exists(pid: i32) -> bool {
     }
 }
 
-/// Guards against a stale pid file (after a host reboot the pid may belong to
-/// anything): only signal a process whose command line mentions clankerd-network. If
-/// `ps` cannot be run, no signal is sent.
+/// Guards against a stale pid file: require the caller's helper and exact socket.
 fn is_helper(pid: i32, socket: &Path) -> bool {
-    if !process_exists(pid) {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    if pid <= 0 {
         return false;
     }
-    let Ok(out) = Command::new("/bin/ps")
-        .args(["-ww", "-o", "uid=,command=", "-p", &pid.to_string()])
-        .output()
-    else {
+    let pid = Pid::from_u32(pid as u32);
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing()
+            .without_tasks()
+            .with_user(UpdateKind::Always)
+            .with_exe(UpdateKind::Always)
+            .with_cmd(UpdateKind::Always),
+    );
+    let Some(process) = system.process(pid) else {
         return false;
     };
-    if !out.status.success() {
-        return false;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    let fields: Vec<_> = text.split_whitespace().collect();
-    // The local protocol stand-in is an interpreted executable; native transport
-    // is the program itself. Both must belong to the caller and exact socket.
-    fields.first().and_then(|value| value.parse::<u32>().ok()) == Some(unsafe { libc::geteuid() })
-        && fields
-            .iter()
-            .skip(1)
-            .take(2)
-            .any(|program| program.ends_with("/clankerd-network"))
-        && fields
+    // The local protocol stand-in is interpreted, with its script in argv[1].
+    let helper = std::ffi::OsStr::new("clankerd-network");
+    // SAFETY: reads the current effective identity only.
+    process
+        .effective_user_id()
+        .is_some_and(|uid| **uid == unsafe { libc::geteuid() })
+        && (process.exe().and_then(Path::file_name) == Some(helper)
+            || process
+                .cmd()
+                .get(1)
+                .is_some_and(|arg| Path::new(arg).file_name() == Some(helper)))
+        && process
+            .cmd()
             .windows(2)
-            .any(|pair| pair == ["--socket", socket.to_string_lossy().as_ref()])
+            .any(|pair| pair[0] == "--socket" && pair[1] == socket.as_os_str())
 }
 
 fn log_tail(path: &Path) -> String {
@@ -379,6 +385,46 @@ fn interface_ready(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn helper_identity_preserves_spaces_and_requires_the_exact_socket() {
+        use std::io::BufRead;
+        let directory = tempfile::Builder::new()
+            .prefix("helper with spaces ")
+            .tempdir()
+            .unwrap();
+        let helper = directory.path().join("clankerd-network");
+        let socket = directory.path().join("socket with spaces.net");
+        fs::write(
+            &helper,
+            "import time\nprint('ready', flush=True)\ntime.sleep(30)\n",
+        )
+        .unwrap();
+        let mut child = Command::new("python3")
+            .arg(&helper)
+            .arg("--socket")
+            .arg(&socket)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        let pid = child.id() as i32;
+        let matches = is_helper(pid, &socket);
+        let wrong_socket = is_helper(pid, &socket.with_extension("other"));
+        let unrelated = is_helper(std::process::id() as i32, &socket);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(ready.trim(), "ready");
+        assert!(matches);
+        assert!(!wrong_socket);
+        assert!(!unrelated);
+        assert!(!is_helper(pid, &socket));
+        assert!(!is_helper(0, &socket));
+        assert!(!is_helper(-1, &socket));
+    }
 
     #[test]
     fn readiness_requires_a_complete_identity_interface_and_selected_prefix() {

@@ -159,21 +159,24 @@ fn wait_for_userspace_to_end(limit: Duration) -> bool {
 /// Live userspace processes other than PID 1: kernel threads have no command
 /// line, zombies are only waiting to be reaped.
 fn userspace_pids() -> Vec<i32> {
-    let Ok(dir) = std::fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-    dir.flatten()
-        .filter_map(|e| e.file_name().to_str()?.parse::<i32>().ok())
-        .filter(|&pid| pid > 1)
-        .filter(|pid| {
-            let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
-            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
-            let zombie = stat
-                .rsplit(')')
-                .next()
-                .is_some_and(|s| s.trim_start().starts_with('Z'));
-            !cmdline.is_empty() && !zombie
+    use sysinfo::{ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System, UpdateKind};
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing()
+            .without_tasks()
+            .with_cmd(UpdateKind::Always),
+    );
+    system
+        .processes()
+        .iter()
+        .filter(|(pid, process)| {
+            pid.as_u32() > 1
+                && !process.cmd().is_empty()
+                && process.status() != ProcessStatus::Zombie
         })
+        .map(|(pid, _)| pid.as_u32() as i32)
         .collect()
 }
 
@@ -220,6 +223,31 @@ fn unescape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shutdown_process_scan_includes_live_children_and_excludes_zombies() {
+        let mut child = spawn_owned(Command::new("sleep").arg("30")).unwrap();
+        let pid = child.id() as i32;
+        let live = userspace_pids().contains(&pid);
+        child.kill().unwrap();
+        // SAFETY: WNOWAIT leaves our registered child as a zombie for the scan.
+        let rc = unsafe {
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            libc::waitid(
+                libc::P_PID,
+                child.id(),
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        let zombie = userspace_pids().contains(&pid);
+        child.wait().unwrap();
+        release(child.id());
+        assert!(live);
+        assert_eq!(rc, 0);
+        assert!(!zombie);
+        assert!(!userspace_pids().contains(&1));
+    }
 
     #[test]
     fn disk_and_shared_filesystems_are_unmounted_newest_first_and_never_the_root() {

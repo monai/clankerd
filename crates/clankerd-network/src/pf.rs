@@ -68,29 +68,41 @@ fn command(args: &[&str], text: Option<&str>) -> Result<String> {
     ))
 }
 fn alive(record: &Record) -> bool {
-    let Ok(out) = command(
-        &[
-            "/bin/ps",
-            "-ww",
-            "-o",
-            "uid=,command=",
-            "-p",
-            &record.pid.to_string(),
-        ],
-        None,
-    ) else {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut system = System::new();
+    let pid = Pid::from_u32(record.pid);
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing()
+            .without_tasks()
+            .with_user(UpdateKind::Always)
+            .with_exe(UpdateKind::Always)
+            .with_cmd(UpdateKind::Always),
+    );
+    let Some(process) = system.process(pid) else {
         return false;
     };
-    owned_attachment(&out, record.uid, &record.socket)
+    owned_attachment(
+        process.effective_user_id().map(|uid| **uid),
+        process.exe(),
+        process.cmd(),
+        record.uid,
+        &record.socket,
+    )
 }
-fn owned_attachment(output: &str, uid: u32, socket: &str) -> bool {
-    let fields: Vec<_> = output.split_whitespace().collect();
-    fields.len() >= 4
-        && fields[0].parse::<u32>().ok() == Some(uid)
-        && fields[1].ends_with("/clankerd-network")
-        && fields[2..]
+fn owned_attachment(
+    owner: Option<u32>,
+    executable: Option<&Path>,
+    args: &[std::ffi::OsString],
+    uid: u32,
+    socket: &str,
+) -> bool {
+    owner == Some(uid)
+        && executable.and_then(Path::file_name) == Some(std::ffi::OsStr::new("clankerd-network"))
+        && args
             .windows(2)
-            .any(|pair| pair == ["--socket", socket])
+            .any(|pair| pair[0] == "--socket" && pair[1] == socket)
 }
 fn rules(records: &BTreeMap<String, Record>) -> String {
     let bridges: BTreeSet<_> = records.values().map(|r| &r.bridge).collect();
@@ -126,27 +138,35 @@ fn bridge_for(subnet: &str) -> Result<String> {
     {
         return Err("expected aligned RFC1918 subnet".into());
     }
-    let gateway = Ipv4Addr::from(raw + 1).to_string();
+    let gateway = Ipv4Addr::from(raw + 1);
     for _ in 0..20 {
-        let route = command(&["/sbin/route", "-n", "get", &gateway], None)?;
-        if let Some(bridge) = route
-            .lines()
-            .find_map(|l| l.trim().strip_prefix("interface: "))
-            && bridge.starts_with("bridge")
-            && !bridge[6..].is_empty()
-            && bridge[6..].bytes().all(|b| b.is_ascii_digit())
-        {
-            let addresses = command(&["/sbin/ifconfig", bridge], None)?;
-            if addresses.lines().any(|l| {
-                let mut f = l.split_whitespace();
-                f.next() == Some("inet") && f.next() == Some(&gateway)
-            }) {
-                return Ok(bridge.into());
-            }
+        let networks = sysinfo::Networks::new_with_refreshed_list();
+        if let Some(bridge) = bridge_owning(
+            networks
+                .iter()
+                .map(|(name, network)| (name.as_str(), network.ip_networks())),
+            gateway,
+        )? {
+            return Ok(bridge.into());
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     Err(format!("no native bridge owns {gateway}").into())
+}
+fn bridge_owning<'a>(
+    interfaces: impl IntoIterator<Item = (&'a str, &'a [sysinfo::IpNetwork])>,
+    gateway: Ipv4Addr,
+) -> Result<Option<&'a str>> {
+    let mut bridges = interfaces.into_iter().filter(|(name, addresses)| {
+        name.strip_prefix("bridge")
+            .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
+            && addresses.iter().any(|address| address.addr == gateway)
+    });
+    let bridge = bridges.next().map(|(name, _)| name);
+    if bridges.next().is_some() {
+        return Err(format!("multiple native bridges own {gateway}").into());
+    }
+    Ok(bridge)
 }
 fn persist(state: &State) -> Result<()> {
     let path = Path::new(STATE);
@@ -309,42 +329,116 @@ mod tests {
     }
 
     #[test]
+    fn bridge_lookup_requires_a_unique_native_bridge_with_the_exact_gateway_address() {
+        let gateway = "192.168.120.1".parse().unwrap();
+        let addresses = [
+            "192.168.120.1/24".parse().unwrap(),
+            "fd00::1/64".parse().unwrap(),
+        ];
+        let other = ["192.168.120.2/24".parse().unwrap()];
+        let interfaces = [
+            ("en0", addresses.as_slice()),
+            ("bridge", addresses.as_slice()),
+            ("bridgeX", addresses.as_slice()),
+            ("bridge1", other.as_slice()),
+            ("bridge2", addresses.as_slice()),
+        ];
+        assert_eq!(bridge_owning(interfaces, gateway).unwrap(), Some("bridge2"));
+        assert_eq!(
+            bridge_owning(interfaces[..4].iter().copied(), gateway).unwrap(),
+            None
+        );
+        assert!(
+            bridge_owning(
+                [
+                    ("bridge1", addresses.as_slice()),
+                    ("bridge2", addresses.as_slice())
+                ],
+                gateway
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn attachment_ownership_requires_the_caller_executable_and_exact_socket_argument() {
-        for (text, expected) in [
+        for (owner, executable, args, expected) in [
             (
-                "501 /tmp/example/clankerd-network --socket /tmp/example.net",
+                Some(501),
+                Some("/tmp/example/clankerd-network"),
+                vec!["--socket", "/tmp/example.net"],
                 true,
             ),
             (
-                "501 /tmp/example/clankerd-network --operation-mode shared --socket /tmp/example.net",
+                Some(501),
+                Some("/tmp/example/clankerd-network"),
+                vec!["--operation-mode", "shared", "--socket", "/tmp/example.net"],
                 true,
             ),
             (
-                "0 /tmp/example/clankerd-network --socket /tmp/example.net",
+                Some(0),
+                Some("/tmp/example/clankerd-network"),
+                vec!["--socket", "/tmp/example.net"],
                 false,
             ),
             (
-                "502 /tmp/example/clankerd-network --socket /tmp/example.net",
-                false,
-            ),
-            ("501 /tmp/example/other --socket /tmp/example.net", false),
-            (
-                "501 /tmp/example/clankerd-network --other /tmp/example.net",
+                Some(502),
+                Some("/tmp/example/clankerd-network"),
+                vec!["--socket", "/tmp/example.net"],
                 false,
             ),
             (
-                "501 /tmp/example/clankerd-network --socket /tmp/example.net-extra",
+                None,
+                Some("/tmp/example/clankerd-network"),
+                vec!["--socket", "/tmp/example.net"],
                 false,
             ),
-            ("", false),
-            ("invalid process output", false),
+            (Some(501), None, vec!["--socket", "/tmp/example.net"], false),
+            (
+                Some(501),
+                Some("/tmp/example/other"),
+                vec!["--socket", "/tmp/example.net"],
+                false,
+            ),
+            (
+                Some(501),
+                Some("/tmp/example/clankerd-network"),
+                vec!["--other", "/tmp/example.net"],
+                false,
+            ),
+            (
+                Some(501),
+                Some("/tmp/example/clankerd-network"),
+                vec!["--socket", "/tmp/example.net-extra"],
+                false,
+            ),
+            (
+                Some(501),
+                Some("/tmp/example/clankerd-network"),
+                vec![],
+                false,
+            ),
         ] {
+            let args: Vec<_> = args.into_iter().map(std::ffi::OsString::from).collect();
             assert_eq!(
-                owned_attachment(text, 501, "/tmp/example.net"),
-                expected,
-                "{text}"
+                owned_attachment(
+                    owner,
+                    executable.map(Path::new),
+                    &args,
+                    501,
+                    "/tmp/example.net"
+                ),
+                expected
             );
         }
+        let args = ["--socket".into(), "/tmp/space in socket.net".into()];
+        assert!(owned_attachment(
+            Some(501),
+            Some(Path::new("/tmp/space in path/clankerd-network")),
+            &args,
+            501,
+            "/tmp/space in socket.net"
+        ));
     }
 
     #[test]

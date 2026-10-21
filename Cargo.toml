@@ -10,6 +10,7 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 libclankerd = { path = "crates/libclankerd" }
 clankerd-proto = { path = "crates/clankerd-proto" }
 libkrun-sys = { path = "crates/libkrun-sys" }
