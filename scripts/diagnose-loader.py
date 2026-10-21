@@ -22,14 +22,6 @@ def main():
     ], 2):
         print(f'[{step}/3] {name}', flush=True)
         subprocess.run(command, env=environment, check=True, timeout=10)
-    if sys.argv[1:] == ['--lifetimes']:
-        krun = subprocess.check_output(['brew', '--prefix', 'libkrun'], text=True).strip()
-        flags = environment.get('RUSTFLAGS', '')
-        environment['RUSTFLAGS'] = f'{flags} -L native={krun}/lib'.strip()
-        root = Path(__file__).resolve().parents[1]
-        print('Running lifetimes acceptance with the inspected library locations', flush=True)
-        return subprocess.call(['bash', str(root / 'scripts/accept-native-build.sh'),
-                                'm2-smoke-lifetimes'], env=environment, cwd=root)
     return 0
 
 
