@@ -1,77 +1,91 @@
 # clankerd
 
-A Rust library and CLI for running Linux machines from OCI images on Apple
-Silicon Macs, using libkrun and the stock libkrunfw kernel.
+A Rust library and CLI for running Linux virtual machines from OCI container
+images on Apple Silicon Macs. It uses libkrun and the stock libkrunfw kernel.
+Each machine gets its own Linux kernel, image root filesystem and guest init
+process. You can run commands, share Mac directories, attach persistent volumes
+and connect machines through virtual networks.
 
-| Component | Purpose |
+## How it works
+
+```mermaid
+flowchart TB
+    subgraph host["Mac host"]
+        CLI["vmctl · CLI"] --> Engine["libclankerd · machine API"]
+        App["Your Rust application"] --> Engine
+        Engine --> Store["Saved state, image cache and disks"]
+        Engine -->|starts one per machine| VM["clankerd-vmspawn · VM helper"]
+        VM --> FFI["libkrun-sys → libkrun + libkrunfw"]
+        Engine --> Net["clankerd-network · vmnet and PF"]
+        Net <-->|Ethernet relay| VM
+    end
+    subgraph guest["Linux machine"]
+        Init["clankerd-guestd · PID 1"] -->|starts and supervises| Work["Image ENTRYPOINT/CMD and exec sessions"]
+        Work --> Root["Image root disk and named volumes"]
+    end
+    FFI -->|boots| Init
+    Engine <-->|control and streams via VM helper + vsock| Init
+    Net <-->|virtual Ethernet via VM helper| Work
+```
+
+1. **Create:** the library pulls and caches the image, prepares a machine root
+   disk and saves the configuration.
+2. **Start:** the VM helper boots Linux. Guestd prepares mounts and networking,
+   then starts the image's `ENTRYPOINT`/`CMD`. Its management environment is
+   separate from the workload filesystem, so images need no clankerd tools.
+3. **Use:** the CLI sends commands to guestd through a host Unix socket and
+   vsock, a host-to-guest channel. `clankerd-proto` defines the shared messages
+   and stream formats. The VM helper owns forwarding and survives CLI exit.
+4. **Stop:** guestd shuts down the machine. Saved configuration, the machine
+   disk and named volumes remain for the next start.
+
+The image command can exit while the machine keeps running. `exec` still works;
+`stop` or `kill` ends the machine. Restart policies apply to machine failure.
+See [machine lifetime](docs/machine-lifecycle.md).
+
+## Project structure
+
+All Rust components live under `crates/`:
+
+| Path | Responsibility |
 | --- | --- |
-| `libclankerd` | Machine lifecycle, images, volumes, exec and forwarding APIs |
-| `vmctl` | Docker-style machine CLI |
-| `clankerd-vmspawn` | Signed VM helper that owns forwarding and outlives the CLI |
-| `clankerd-guestd` | Guest PID 1: boot setup, workloads, exec and shutdown |
-| `clankerd-proto` | Shared host/guest protocol and stream codecs |
-| `libkrun-sys` | libkrun FFI |
+| `crates/vmctl/` | CLI parsing, output and calls to the library |
+| `crates/libclankerd/` | Public `Engine` and `Machine` APIs; lifecycle, images, disks, volumes, networks and exec |
+| `crates/clankerd-vmspawn/` | Per-machine host process; boots libkrun, relays guest traffic and owns forwarding |
+| `crates/clankerd-guestd/` | Linux PID 1; boot setup, workloads, exec sessions and shutdown |
+| `crates/clankerd-proto/` | Host/guest messages, VM launch specifications and stream codecs |
+| `crates/clankerd-network/` | Mac networking helper; Apple vmnet attachments and PF firewall rules |
+| `crates/libkrun-sys/` | Rust bindings and boot configuration for libkrun |
+| `build-support/` | Locked guest inputs, management filesystem files and build rules |
+| `scripts/` | Build tooling, diagnostics and native smoke tests |
+| `images/` | Docker image recipes and startup helpers for running Docker inside a machine |
+| `docs/` | Build, lifecycle, networking and testing guides |
 
-Workloads use the image as their root filesystem, independently of guest management. Named volumes persist across
-restarts and image changes, host directories are shared through virtio-fs, and
-host Unix sockets can be exposed through management relays. Images with Docker and nftables can run containers and
-Compose inside the machine.
+Within `libclankerd/src/`, start with `engine.rs` and `machine.rs` for lifecycle,
+`images.rs` and `rootdisk.rs` for image preparation, `net/` for connectivity,
+and `guest.rs` for guest communication. Each crate keeps its integration tests
+in `tests/`.
 
 ## Build
 
-Install the pinned tools with mise, then build and sign the binaries:
+Host executables require **native Apple Silicon macOS**, Python 3.12+, Apple's
+command-line SDK, and installed libkrun, libkrunfw and liblzma libraries.
+Install the pinned tools and build:
 
 ```sh
 mise install
 mise exec -- make build
 ```
 
-Python 3.12+, Apple's command-line SDK and installed host libraries are
-required on Apple Silicon macOS. Host executables build only on native macOS.
-Linux supports guest builds and developer tests.
+For libraries installed with Homebrew, use `mise exec -- make build-homebrew`
+to discover their linker and runtime paths. The regular build uses your existing
+native library configuration.
 
-The native linker resolves libkrun and liblzma; dyld resolves their runtime
-dependencies, including libkrunfw. Installed libraries must export the APIs used
-by the application. The core build assumes no installation prefix or package manager
-and adds no library search paths. Missing libraries produce native linker or
-loader errors. liblzma source compilation is disabled for supported host targets.
-
-For an existing Homebrew installation, build with automatic linker and runtime
-path configuration:
-
-```sh
-mise exec -- make build-homebrew
-```
-
-This uses the same build graph, adds native host search paths discovered through
-Homebrew, and leaves third-party libraries installed in place. No manual
-`RUSTFLAGS` or `DYLD_*` variables are needed for this entrypoint or its output.
-
-`Makefile` downloads verified guest inputs, assembles management, runs Cargo,
-signs clankerd's executables and atomically publishes `build/artifact` as a
-symlink to a complete immutable bundle. It contains host executables under
-`darwin-arm64` and guestd plus the Alpine management filesystem under
-`linux-arm64/management`, with guest package metadata and license texts.
-Guest versions and checksums are locked in `build-support/inputs.mk`.
-`RUST_OUT` selects the publication path, `BUILD_ROOT` selects Make intermediates,
-and `CARGO_TARGET_DIR` selects Cargo intermediates. Cargo owns compilation
-freshness and Make tracks installed file prerequisites.
-
-Host networking uses bundled clankerd-owned Apple vmnet and PF code.
-Administrator authorization uses ordinary sudo authentication. The VM and
-Ethernet transport remain unprivileged; no helper installation, sudoers edits,
-or persistent configuration changes are needed.
-
-Run all Mac build/artifact checks and native gates with:
-
-```sh
-mise exec -- make test-acceptance
-```
-
-Use `mise exec -- make test-acceptance-homebrew` for the matching Homebrew
-build and acceptance configuration.
-
-See [native build](docs/native-build.md) for prerequisites and validation.
+The build downloads verified guest inputs, compiles and signs the executables,
+and publishes `build/artifact/`. Keep the bundle together: `darwin-arm64/`
+contains the host executables; `linux-arm64/management/` contains guestd and
+its management filesystem. Host libraries must remain installed.
+See [native build](docs/native-build.md) for setup and troubleshooting.
 
 ## Run a machine
 
@@ -80,78 +94,72 @@ vmctl=build/artifact/darwin-arm64/vmctl
 "$vmctl" machine create --name sandbox debian:trixie
 "$vmctl" machine start sandbox
 "$vmctl" machine exec -it sandbox /bin/bash
+# Exit the guest shell before continuing.
+"$vmctl" machine stop sandbox
+"$vmctl" machine start sandbox
 "$vmctl" machine stop sandbox
 "$vmctl" machine rm sandbox
 ```
 
-Guestd is the machine's init process and stays running until `stop` or `kill`.
-The image's ENTRYPOINT/CMD runs once per start; its exit does not stop the VM.
-`run` returns the command's exit code while leaving the machine running;
-`run -it` attaches to that command. `exec -it` opens a separate session even
-when the image command has already finished. Restart policies apply to machine
-failure, not to an image command exiting. Removing a machine retains named volumes; delete data explicitly with `vmctl volume rm NAME`.
+`create` saves a machine without booting it. `start` boots it and runs the image
+command once. `run` combines create and start, waits for the image command and
+returns its exit code; `run -d` returns immediately. Both leave the machine
+running. `exec -it` opens a separate interactive session.
 
-Run `vmctl --help` for lifecycle commands and `vmctl run --help` for image,
-resource, mount, socket and environment flags.
-Global options precede the resource or shortcut; action options precede operands.
-Lists default to tables; use `--output json` before operands for structured
-results. `vmctl --describe-contract` exports deterministic command metadata and
-JSON schemas for the public result records.
+### Share files and keep data
 
-Mac bind mounts default to **simplified** permission semantics: files appear
-owned by the requesting guest user, `chown` does not persist ownership, and
-`chmod` changes the actual Mac permission bits. To preserve guest ownership and
-permissions in host extended attributes, select **complete** per attachment:
+From the directory you want to share:
 
 ```sh
-vmctl create --mount type=bind,source=./src,target=/src,semantics=complete IMAGE
-vmctl update --mount-remove /src --mount-add type=bind,source=./src,target=/src,semantics=complete MACHINE
+"$vmctl" run -d --name dev --cpus 2 --memory 2G \
+  -v "$PWD:/workspace" -v data:/data debian:trixie
+"$vmctl" exec -it dev /bin/bash
 ```
 
-In the library, use
-`Mount::bind(source, target).with_semantics(BindSemantics::Complete)`.
-Omitting `semantics`, including in saved configuration, always means simplified.
-The choice is independent of image `USER` and run/exec user overrides. It applies
-only to host bind mounts; machine disks and named volumes retain native Linux
-ownership. Read-only bind mounts are enforced by both libkrun and the guest mount.
-Installed libkrun must provide the virtio-fs API used by these attachments.
+`-v /host/path:/guest/path` shares a Mac directory through virtio-fs.
+`-v NAME:/guest/path` attaches a named Linux volume, creating it when needed.
+Volumes survive machine removal and image changes; `vmctl volume rm NAME`
+explicitly deletes their data.
 
-Stopped-machine `update --mount-remove TARGET` and `--socket-remove TARGET`
-ensure the attachment is absent, succeeding when it was already absent.
-Removal preserves stored data; missing or running machines still fail.
-Application leases, mDNS and managed Chrome are outside the current runtime's API.
+Bind mounts default to simplified permissions: files appear owned by the guest
+user, `chown` does not persist ownership, and `chmod` changes Mac permissions.
+Use `--mount type=bind,source=./src,target=/src,semantics=complete` to preserve
+Linux ownership and permissions in host extended attributes.
 
-## Test
+### Connect machines
 
-Run the Linux workspace tests and strict formatting/lint checks:
+```sh
+"$vmctl" network create --mode shared team
+"$vmctl" run -d --name worker --network team debian:trixie
+"$vmctl" network inspect team
+```
+
+Machines on the same virtual network can communicate. Separate virtual networks
+isolate peers. `shared` supplies Internet access; `host-only` supplies host and
+peer access without built-in Internet access. Without `--network`, machines use
+the default shared network. Use `--bridge-interface en0` instead to attach to a
+physical LAN. Network setup uses ordinary sudo authentication; the VM runs as
+your user. See [virtual networks](docs/virtual-networks.md).
+
+Use `"$vmctl" --help` and `"$vmctl" run --help` for commands and flags.
+Machine commands also have shortcuts: `vmctl create`, `vmctl exec`, and so on.
+For scripts, `"$vmctl" machine ls --output json` returns structured output;
+`"$vmctl" --describe-contract` exports command metadata and result schemas.
+
+## Develop and test
+
+Linux supports guest builds and developer tests; running VMs requires macOS.
 
 ```sh
 mise exec -- make test lint
 ```
 
-Generate line and branch coverage using the separately pinned nightly compiler:
+This runs the platform's Rust tests, Python build-tool tests, formatting and
+Clippy checks. Linux needs liblzma development files and e2fsprogs; privileged
+filesystem tests also need root, loop devices and mount permissions.
+See [Rust testing](docs/rust-testing.md) for setup and coverage.
 
-```sh
-mise exec -- make coverage-setup coverage
-```
-
-Reports are written to `build/coverage/`. Privileged filesystem tests need root,
-loop devices and mount permissions. See [Rust testing](docs/rust-testing.md) for
-coverage setup and container build directories.
-
-[Docker inside a machine](docs/docker-in-machine.md) describes image setup and
-the Mac smoke scripts. Docker image assets live in `images/slim/`.
-
-CI tests the Rust workspace, runs privileged filesystem checks, generates
-coverage, and builds and signs the host/guest binaries. Tagged releases package
-those binaries and guest utilities.
-
-Named-volume mounts form a collection: for example,
-`vmctl create --name app -v data:/data -v logs:/logs IMAGE`. Each volume can appear once per machine;
-guest targets must be unique across bind and volume mounts. Volumes are attached
-in mount order after the optional image root disk. Detach, reimage and machine
-removal retain their data. Use matching versions of vmctl and clankerd-vmspawn;
-the helper protocol now writes a `volume_disks` collection (the new helper also
-accepts older singular `volume_disk` specs). Native disk counts remain subject
-to [libkrun's shared device/IRQ capacity](https://github.com/containers/libkrun/blob/main/src/libkrun/src/vmm/device_manager/hvf/mmio.rs);
-attachment failures are reported at boot.
+On a Mac, `mise exec -- make test-acceptance` builds and checks the signed bundle
+and runs native VM gates. Use `test-acceptance-homebrew` with Homebrew libraries.
+For workloads that need Docker or Compose, see
+[Docker inside a machine](docs/docker-in-machine.md).
