@@ -8,6 +8,7 @@ fi
 shift
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
+artifact=${RUST_OUT:-build/artifact}
 [ "$(uname -sm)" = 'Darwin arm64' ] || { echo 'Requires Apple Silicon macOS' >&2; exit 1; }
 [ "$(sw_vers -productVersion | cut -d. -f1)" = 15 ] || { echo 'The acceptance baseline requires macOS 15' >&2; exit 1; }
 python3 -c 'import sys; assert sys.version_info >= (3,12), "Python 3.12+ required"'
@@ -59,17 +60,17 @@ python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 step 'Build artifact (long-running: about 1–10 minutes; cold downloads may take longer)'
 make -j"${BUILD_JOBS:-4}" build
 step 'Copy published artifact'
-cp -pRP build/artifact/. "$evidence/bundle"
+cp -pRP "$artifact/." "$evidence/bundle"
 export OUT=$evidence/bundle
-rsync -rlpcn --delete --itemize-changes build/artifact/ "$OUT/" > "$evidence/relocation-diff.txt"
+rsync -rlpcn --delete --itemize-changes "$artifact/" "$OUT/" > "$evidence/relocation-diff.txt"
 test ! -s "$evidence/relocation-diff.txt"
 # A warm build must retain installed files and their modification times.
 step 'Verify unchanged warm build'
-find -H build/artifact -type f -exec stat -f '%N %m' {} + | sort > "$evidence/before-warm.txt"
+find -H "$artifact" -type f -exec stat -f '%N %m' {} + | sort > "$evidence/before-warm.txt"
 make -j"${BUILD_JOBS:-4}" build
-find -H build/artifact -type f -exec stat -f '%N %m' {} + | sort > "$evidence/after-warm.txt"
+find -H "$artifact" -type f -exec stat -f '%N %m' {} + | sort > "$evidence/after-warm.txt"
 cmp "$evidence/before-warm.txt" "$evidence/after-warm.txt"
-rsync -rlpcn --delete --itemize-changes build/artifact/ "$OUT/" > "$evidence/relocation-diff.txt"
+rsync -rlpcn --delete --itemize-changes "$artifact/" "$OUT/" > "$evidence/relocation-diff.txt"
 test ! -s "$evidence/relocation-diff.txt"
 step 'Apple SDK, executable signatures, and native linkage'
 # Compile the owned native transport against Apple's real headers too.
@@ -102,8 +103,15 @@ sudo -v
 # Native gates use sudo for read-only PF observations and temporary test fixtures.
 ( while sleep 30; do sudo -n -v || exit; done ) &
 refresh_pid=$!
+host_cargo() {
+  if [ "${HOST_RUSTFLAGS+x}" = x ]; then
+    CARGO_ENCODED_RUSTFLAGS="$HOST_RUSTFLAGS" cargo "$@"
+  else
+    cargo "$@"
+  fi
+}
 step 'Native bind semantics (long-running: about 1–5 minutes)'
-cargo test --locked -p vmctl --test native_bind_semantics -- --ignored --test-threads=1 \
+host_cargo test --locked -p vmctl --test native_bind_semantics -- --ignored --test-threads=1 \
   > "$evidence/native-bind-semantics.log" 2>&1
 : > "$evidence/results.tsv"
 failures=0

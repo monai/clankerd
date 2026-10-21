@@ -71,7 +71,7 @@ jobs:
           brew tap slp/krun
           brew trust slp/krun
           brew install libkrun
-      - run: mise exec -- make lint test build
+      - run: mise exec -- python3 scripts/homebrew.py make lint test build
       - uses: actions/upload-artifact@v7
         with:
           name: clankerd-rust

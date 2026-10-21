@@ -32,9 +32,20 @@ Linux supports guest builds and developer tests.
 
 The native linker resolves libkrun and liblzma; dyld resolves their runtime
 dependencies, including libkrunfw. Installed libraries must export the APIs used
-by the application. The build assumes no installation prefix or package manager
+by the application. The core build assumes no installation prefix or package manager
 and adds no library search paths. Missing libraries produce native linker or
 loader errors. liblzma source compilation is disabled for supported host targets.
+
+For an existing Homebrew installation, build with automatic linker and runtime
+path configuration:
+
+```sh
+mise exec -- make build-homebrew
+```
+
+This uses the same build graph, adds native host search paths discovered through
+Homebrew, and leaves third-party libraries installed in place. No manual
+`RUSTFLAGS` or `DYLD_*` variables are needed for this entrypoint or its output.
 
 `Makefile` downloads verified guest inputs, assembles management, runs Cargo,
 signs clankerd's executables and atomically publishes `build/artifact` as a
@@ -54,8 +65,11 @@ or persistent configuration changes are needed.
 Run all Mac build/artifact checks and native gates with:
 
 ```sh
-mise exec -- bash scripts/accept-native-build.sh
+mise exec -- make test-acceptance
 ```
+
+Use `mise exec -- make test-acceptance-homebrew` for the matching Homebrew
+build and acceptance configuration.
 
 See [native build](docs/native-build.md) for prerequisites and validation.
 

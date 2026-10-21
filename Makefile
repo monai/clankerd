@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := build
-.PHONY: build clean
+.PHONY: build build-homebrew test-acceptance test-acceptance-homebrew clean
 
 # mise install supplies the pinned toolchain; all build phases run in one context.
 # Guest distribution inputs and assembly phases are real graph nodes.
@@ -56,6 +56,11 @@ $(WORK)/management/.stamp: $(addsuffix /.stamp,$(GUEST_PACKAGES)) $(MANAGEMENT_F
 	$(PYTHON) scripts/assemble-management.py "$(@D)" $(MANAGEMENT_ROOTFS) $(GUEST_PACKAGES) --required $(GUEST_REQUIRED); \
 	touch "$@"
 
+# Only host Cargo invocations receive adapter-supplied native linker flags.
+ifneq ($(origin HOST_RUSTFLAGS),undefined)
+cargo-host: export CARGO_ENCODED_RUSTFLAGS := $(HOST_RUSTFLAGS)
+endif
+
 .PHONY: cargo-host cargo-guest
 cargo-host:
 	@test "$(shell uname -sm)" = 'Darwin arm64' || { echo 'Host executables require native Apple Silicon macOS' >&2; exit 1; }
@@ -74,6 +79,15 @@ LICENSE_ARCHIVES := $(foreach input,$(LICENSE_INPUTS),$(DOWNLOADS)/$(input)-$($(
 
 build: $(LICENSE_ARCHIVES) $(HOST_EXECUTABLES) $(GUEST_EXECUTABLE) $(WORK)/management/.stamp
 	+$(MAKE) --no-print-directory -f build-support/artifact.mk artifact-publish STAGE="$(WORK)/artifact" PUBLISH="$(RUST_OUT)" WORK="$(WORK)" INPUT_LOCK="$(INPUT_LOCK)" DOWNLOADS="$(DOWNLOADS)" HOST_TARGET="$(HOST_TARGET)" GUEST_TARGET="$(GUEST_TARGET)"
+
+build-homebrew:
+	+$(PYTHON) scripts/homebrew.py "$(MAKE)" build
+
+test-acceptance:
+	+bash scripts/accept-native-build.sh $(ACCEPTANCE_GATES)
+
+test-acceptance-homebrew:
+	+$(PYTHON) scripts/homebrew.py "$(MAKE)" test-acceptance
 
 ifeq ($(BUILD_CONTEXT),Linux-aarch64)
 LINUX_TOOLS := $(WORK)/linux-test-tools

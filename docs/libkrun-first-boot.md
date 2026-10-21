@@ -5,8 +5,11 @@ macOS 15:
 
 ```bash
 mise exec -- make -j4 build
-mise exec -- bash scripts/accept-native-build.sh
+mise exec -- make test-acceptance
 ```
+
+For an existing Homebrew installation, use `make build-homebrew` and
+`make test-acceptance-homebrew` instead; they configure native library paths.
 
 The artifact supplies signed clankerd host executables and
 `linux-arm64/management`, a packaged Linux management filesystem. Host libraries
@@ -23,7 +26,7 @@ own attachments when that machine is removed.
 Run only the boot gate, including common preparation and management checks:
 
 ```bash
-mise exec -- bash scripts/accept-native-build.sh m2-boot-check
+mise exec -- make test-acceptance ACCEPTANCE_GATES=m2-boot-check
 ```
 
 Logs, input identities and a compact result stay under `build/acceptance-<UTC>`.

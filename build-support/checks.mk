@@ -11,6 +11,10 @@ test-scripts:
 	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
 ifeq ($(CHECK_SYSTEM),Darwin)
+ifneq ($(origin HOST_RUSTFLAGS),undefined)
+test-rust lint: export CARGO_ENCODED_RUSTFLAGS := $(HOST_RUSTFLAGS)
+endif
+
 test-rust:
 	+cargo test --locked --workspace --exclude clankerd-guestd --lib --bins
 	+cargo test --locked -p clankerd-proto --test spawn
