@@ -213,7 +213,7 @@ pub(crate) fn spawn_helper(
 pub(crate) fn explain_exit(log: &str) -> Error {
     if log.contains("Library not loaded") {
         return Error::unavailable(
-            "bundled host library could not be loaded; rebuild the complete artifact (see vmspawn.log)",
+            "installed host library could not be loaded; check native loader configuration (see vmspawn.log)",
         );
     }
     let tail: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();

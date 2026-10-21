@@ -73,7 +73,7 @@ fn the_helper_outlives_the_library_process() {
 }
 
 #[test]
-fn missing_bundled_libkrun_fails_fast_with_rebuild_instructions() {
+fn missing_installed_libkrun_fails_fast_with_loader_instructions() {
     let env = Env::new();
     let fake = script(
         env.root(),
@@ -92,11 +92,8 @@ fn missing_bundled_libkrun_fails_fast_with_rebuild_instructions() {
         "should not wait for the start timeout"
     );
     assert_eq!(err.kind(), ErrorKind::Unavailable);
-    assert!(err.message().contains("bundled host library"), "{err}");
-    assert!(
-        err.message().contains("rebuild the complete artifact"),
-        "{err}"
-    );
+    assert!(err.message().contains("installed host library"), "{err}");
+    assert!(err.message().contains("native loader"), "{err}");
     assert_eq!(m.inspect().unwrap().state.status, Status::Created);
 }
 

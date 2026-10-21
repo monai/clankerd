@@ -31,11 +31,11 @@ fn unknown_hypervisor_codes_are_reported_in_hex() {
 }
 
 #[test]
-fn missing_libkrunfw_says_how_to_rebuild_the_artifact() {
+fn missing_libkrunfw_identifies_the_installed_library() {
     // krun_start_enter returns -ENOENT when libkrunfw cannot be loaded.
     let e = Error::from_krun("krun_start_enter", -2);
     assert_eq!(e.kind(), ErrorKind::KernelLibraryMissing);
-    assert!(e.to_string().contains("make build"), "{e}");
+    assert!(e.to_string().contains("native loader"), "{e}");
 }
 
 #[test]

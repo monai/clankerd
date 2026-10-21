@@ -83,8 +83,8 @@ impl Error {
             return Error {
                 kind: ErrorKind::KernelLibraryMissing,
                 message: "libkrunfw (the guest kernel library) could not be loaded; \
-                          rebuild the complete artifact with `make build` and keep its \
-                          darwin-arm64/lib directory beside clankerd-vmspawn"
+                          ensure installed libkrunfw and its dependencies are resolvable \
+                          by the native loader"
                     .to_owned(),
             };
         }

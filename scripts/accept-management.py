@@ -54,7 +54,7 @@ def observe(machine, path):
                and '\nUid:\t0\t' not in p['status'] for p in workers), workers
     assert '\nCapEff:\t0000000000000000' not in value['status'], value['status']
     (evidence / f'{machine}-observation.json').write_text(json.dumps(value, indent=2) + '\n')
-    # The actual VMM must remain owned by this user, with bundled libraries.
+    # The actual VMM must remain owned by this user, with installed libraries.
     machine_info = json.loads(vm('inspect', machine))[0]
     (evidence / f'{machine}-inspect.json').write_text(json.dumps(machine_info, indent=2) + '\n')
     subprocess.run([sys.executable, str(root / 'accept-vm-process.py'),

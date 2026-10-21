@@ -9,7 +9,10 @@ work=$(mktemp -d /tmp/clankerd-lifetimes.XXXXXX)
 export CLANKERD_STATE_DIR=$work/state CLANKERD_RUNTIME_DIR=$work/run
 export VMNET_LIFETIME_CONTROL=$work
 export VMNET_TEST_REAL_VMSPAWN=$out/darwin-arm64/clankerd-vmspawn
-export CLANKERD_VMSPAWN=$root/scripts/fixtures/vmnet-lifetimes.py
+# Use the installed Python directly so /usr/bin/env cannot strip caller DYLD_*.
+python3 "$root/scripts/fixtures/python-launcher.py" \
+  "$root/scripts/fixtures/vmnet-lifetimes.py" "$work/vmspawn-fixture"
+export CLANKERD_VMSPAWN=$work/vmspawn-fixture
 export CLANKERD_GUEST_ROOT=$out/linux-arm64/management
 echo "Mac inherited open-file limits soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
 name=vmnet-lifetimes
