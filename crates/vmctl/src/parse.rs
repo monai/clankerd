@@ -8,7 +8,7 @@ pub fn size(s: &str) -> Result<u64, String> {
 pub fn guest_path(s: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(s);
     if !path.is_absolute()
-        || s == "/"
+        || !path.components().any(|c| matches!(c, Component::Normal(_)))
         || s.split('/').any(|p| p == "." || p == "..")
         || path
             .components()
@@ -115,4 +115,28 @@ pub fn socket(s: &str) -> Result<SocketBinding, String> {
         host_path,
         guest_path,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guest_paths_reject_root_aliases_and_dot_components() {
+        for path in [
+            "/",
+            "//",
+            "///",
+            "",
+            "relative",
+            "/./",
+            "/data/.",
+            "/data/../other",
+        ] {
+            assert!(guest_path(path).is_err(), "accepted {path:?}");
+        }
+        for path in ["/data", "//data", "/data/", "/data//nested"] {
+            assert_eq!(guest_path(path).unwrap(), PathBuf::from(path));
+        }
+    }
 }
