@@ -234,8 +234,10 @@ fn normalize(raw: &[u8]) -> io::Result<PathBuf> {
 fn read_meta<R: Read>(entry: &mut Entry<'_, R>) -> io::Result<Meta> {
     let h = entry.header();
     let mut meta = Meta {
-        uid: h.uid()? as u32,
-        gid: h.gid()? as u32,
+        uid: u32::try_from(h.uid()?)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "tar uid exceeds u32"))?,
+        gid: u32::try_from(h.gid()?)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "tar gid exceeds u32"))?,
         mode: h.mode()? & 0o7777,
         mtime: (h.mtime()? as i64, 0),
         xattrs: Vec::new(),
@@ -379,6 +381,41 @@ fn check(rc: libc::c_int) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ownership_archive(uid: u64, gid: u64) -> Vec<u8> {
+        let mut archive = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_size(0);
+        header.set_mode(0o600);
+        header.set_mtime(0);
+        header.set_uid(uid);
+        header.set_gid(gid);
+        archive
+            .append_data(&mut header, "entry", io::empty())
+            .unwrap();
+        archive.into_inner().unwrap()
+    }
+
+    #[test]
+    fn overflowing_archive_ownership_is_rejected_before_creating_entries() {
+        for (uid, gid) in [(1u64 << 32, 0), (0, 1u64 << 32)] {
+            let dir = tempfile::tempdir().unwrap();
+            let archive = ownership_archive(uid, gid);
+            let error = unpack(archive.as_slice(), dir.path(), true).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(!dir.path().join("entry").exists());
+        }
+    }
+
+    #[test]
+    fn archive_ownership_accepts_the_u32_boundary() {
+        let archive = ownership_archive(u64::from(u32::MAX), u64::from(u32::MAX));
+        let mut tar = Archive::new(archive.as_slice());
+        let mut entry = tar.entries().unwrap().next().unwrap().unwrap();
+        let meta = read_meta(&mut entry).unwrap();
+        assert_eq!(meta.uid, u32::MAX);
+        assert_eq!(meta.gid, u32::MAX);
+    }
 
     #[test]
     fn pax_times_split_into_floor_seconds_and_positive_nanos() {
