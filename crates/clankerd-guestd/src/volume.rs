@@ -161,7 +161,12 @@ pub fn ext4_bytes(device: &Path) -> io::Result<Option<u64>> {
     if u32_at(96) & INCOMPAT_64BIT != 0 {
         blocks |= u64::from(u32_at(0x150)) << 32;
     }
-    Ok(Some(blocks * (1024u64 << u32_at(24))))
+    let bytes = 1u64
+        .checked_shl(u32_at(24))
+        .and_then(|size| size.checked_mul(1024))
+        .and_then(|size| blocks.checked_mul(size))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "ext4 size exceeds u64"))?;
+    Ok(Some(bytes))
 }
 
 fn is_blank(device: &Path) -> io::Result<bool> {
@@ -228,6 +233,37 @@ mod tests {
             .unwrap()
             .set_len(size)
             .unwrap();
+    }
+
+    #[test]
+    fn malformed_ext4_sizes_are_rejected_without_overflow() {
+        for (shift, blocks, expected) in [
+            (0, 2, Some(2048)),
+            (2, 2, Some(8192)),
+            (53, 1, Some(1u64 << 63)),
+            (54, 1, None),
+            (64, 1, None),
+            (u32::MAX, 1, None),
+            (0, u64::MAX, None),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("superblock");
+            let mut bytes = vec![0u8; 2048];
+            let sb = &mut bytes[1024..];
+            sb[56..58].copy_from_slice(&EXT4_MAGIC.to_le_bytes());
+            sb[4..8].copy_from_slice(&(blocks as u32).to_le_bytes());
+            sb[0x150..0x154].copy_from_slice(&((blocks >> 32) as u32).to_le_bytes());
+            sb[96..100].copy_from_slice(&INCOMPAT_64BIT.to_le_bytes());
+            sb[24..28].copy_from_slice(&shift.to_le_bytes());
+            fs::write(&path, bytes).unwrap();
+            match expected {
+                Some(size) => assert_eq!(ext4_bytes(&path).unwrap(), Some(size)),
+                None => assert_eq!(
+                    ext4_bytes(&path).unwrap_err().kind(),
+                    io::ErrorKind::InvalidData
+                ),
+            }
+        }
     }
 
     #[test]
