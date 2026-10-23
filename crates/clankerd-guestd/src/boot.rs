@@ -5,6 +5,7 @@
 use std::ffi::CString;
 use std::fs;
 use std::io;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -68,7 +69,13 @@ pub fn init(workload: &Workload) -> Result<(), String> {
 
 /// Writes the `/.clankerdenv` marker under `root`.
 pub fn write_marker(root: &Path) -> io::Result<()> {
-    fs::write(root.join(MARKER), b"")
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(root.join(MARKER))?;
+    Ok(())
 }
 
 /// Enables every available cgroup v2 controller for children of the cgroup at
@@ -292,6 +299,35 @@ mod tests {
     #[test]
     fn a_missing_cgroup_root_is_an_error_not_a_panic() {
         assert!(delegate_controllers(Path::new("/nonexistent/cgroup")).is_err());
+    }
+
+    #[test]
+    fn existing_regular_markers_are_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(MARKER), b"old contents").unwrap();
+        write_marker(dir.path()).unwrap();
+        assert!(fs::read(dir.path().join(MARKER)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn marker_symlinks_are_rejected_without_touching_the_target() {
+        for existing in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let target = dir.path().join("sentinel");
+            if existing {
+                fs::write(&target, b"keep").unwrap();
+            }
+            std::os::unix::fs::symlink(&target, dir.path().join(MARKER)).unwrap();
+            assert_eq!(
+                write_marker(dir.path()).unwrap_err().raw_os_error(),
+                Some(libc::ELOOP)
+            );
+            if existing {
+                assert_eq!(fs::read(&target).unwrap(), b"keep");
+            } else {
+                assert!(!target.exists());
+            }
+        }
     }
 
     #[test]
