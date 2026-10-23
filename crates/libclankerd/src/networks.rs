@@ -146,6 +146,7 @@ impl<'a> Networks<'a> {
                 subnet
             }
             None => (64..=254)
+                .filter(|third| !matches!(third, 105 | 128))
                 .map(|third| SharedNetwork {
                     address: std::net::Ipv4Addr::new(192, 168, third, 0),
                     prefix_len: 24,
@@ -281,5 +282,49 @@ impl Engine {
         }
         fs::remove_file(networks.path(name)?)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn automatic_subnets_skip_reserved_ranges() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let networks = Networks::lock(&store).unwrap();
+        for (name, subnet) in [
+            ("before-default", "192.168.64.0/19"),
+            ("before-default-2", "192.168.96.0/21"),
+            ("before-default-3", "192.168.104.0/24"),
+        ] {
+            networks
+                .create(name, NetworkKind::Shared, Some(subnet.parse().unwrap()))
+                .unwrap();
+        }
+        assert_eq!(
+            networks
+                .create("after-default", NetworkKind::Shared, None)
+                .unwrap()
+                .subnet,
+            "192.168.106.0/24".parse::<SharedNetwork>().unwrap()
+        );
+        for third in 107..128 {
+            networks
+                .create(
+                    &format!("occupied-{third}"),
+                    NetworkKind::Shared,
+                    Some(format!("192.168.{third}.0/24").parse().unwrap()),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            networks
+                .create("after-reserved", NetworkKind::Shared, None)
+                .unwrap()
+                .subnet,
+            "192.168.129.0/24".parse::<SharedNetwork>().unwrap()
+        );
     }
 }
