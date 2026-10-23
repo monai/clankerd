@@ -81,6 +81,7 @@ pub struct ForwardingConfig {
 
 /// A host directory shared over virtio-fs; the guest mounts it by `tag`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Share {
     pub tag: String,
     pub path: PathBuf,
@@ -93,6 +94,7 @@ pub struct Share {
 /// One virtio-net device whose backend is a network sidecar listening on a
 /// unix datagram socket.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NetDevice {
     pub socket: PathBuf,
     pub mac: [u8; 6],
@@ -100,4 +102,34 @@ pub struct NetDevice {
     pub features: u32,
     /// Send the vfkit magic when connecting (gvproxy `-listen-vfkit`).
     pub vfkit: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn shares_reject_unknown_fields_and_preserve_defaults() {
+        let mut value = json!({"tag":"data", "path":"/data"});
+        let share: Share = serde_json::from_value(value.clone()).unwrap();
+        assert!(!share.read_only);
+        assert_eq!(share.semantics, BindSemantics::Simplified);
+        value["read_only"] = json!(true);
+        assert!(
+            serde_json::from_value::<Share>(value.clone())
+                .unwrap()
+                .read_only
+        );
+        value["read_ony"] = json!(true);
+        assert!(serde_json::from_value::<Share>(value).is_err());
+    }
+
+    #[test]
+    fn network_devices_reject_unknown_fields() {
+        let mut value = json!({"socket":"/net", "mac":[2,0,0,0,0,1], "features":0, "vfkit":false});
+        assert!(serde_json::from_value::<NetDevice>(value.clone()).is_ok());
+        value["feature"] = json!(1);
+        assert!(serde_json::from_value::<NetDevice>(value).is_err());
+    }
 }
