@@ -327,4 +327,21 @@ mod tests {
             "192.168.129.0/24".parse::<SharedNetwork>().unwrap()
         );
     }
+
+    #[test]
+    fn default_membership_creates_the_documented_implicit_network() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let networks = Networks::lock(&store).unwrap();
+        let mut host = HostConfig::default();
+        networks.assign(&mut host).unwrap();
+        assert_eq!(
+            host.virtual_network.as_deref(),
+            Some("shared-192.168.105.0-24")
+        );
+        assert_eq!(
+            networks.get("shared-192.168.105.0-24").unwrap().subnet,
+            "192.168.105.0/24".parse::<SharedNetwork>().unwrap()
+        );
+    }
 }

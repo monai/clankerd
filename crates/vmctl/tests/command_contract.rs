@@ -568,7 +568,7 @@ fn metadata_declares_effective_defaults_separately_from_omitted_updates() {
     }
     assert_eq!(
         arg(create, "network")["effective_default"]["value"],
-        "default-shared"
+        "shared-192.168.105.0-24"
     );
     let update = actions.iter().find(|c| c["name"] == "update").unwrap();
     assert_eq!(

@@ -880,7 +880,7 @@ fn effective_default(arg: &clap::Arg, resource: Option<&str>, action: &str) -> s
                 return json!({"source":"library", "value":host.restart_policy.to_string()});
             }
             "network" => {
-                return json!({"source":"library", "value":format!("default-{}", serde_json::to_value(host.network_mode).unwrap().as_str().unwrap()), "unless_explicit":"bridge_interface"});
+                return json!({"source":"library", "value":format!("{}-{}-{}", serde_json::to_value(host.network_mode).unwrap().as_str().unwrap(), host.shared_network.address, host.shared_network.prefix_len), "unless_explicit":"bridge_interface"});
             }
             "cpus" | "memory" => return json!({"source":"backend_default"}),
             "cmd" | "entrypoint" | "user" | "workdir" | "env" | "stop_signal" => {
