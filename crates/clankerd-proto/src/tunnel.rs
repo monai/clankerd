@@ -219,15 +219,25 @@ mod tests {
 
     #[test]
     fn writer_enforces_the_payload_limit_without_partial_output() {
-        let frame = Frame::Data(vec![7; MAX_PAYLOAD]);
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &frame).unwrap();
-        assert_eq!(read_frame(&mut wire.as_slice()).unwrap(), Some(frame));
-
-        let mut wire = Vec::new();
-        let error = write_frame(&mut wire, &Frame::Data(vec![7; MAX_PAYLOAD + 1])).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-        assert!(wire.is_empty());
+        for (length, accepted) in [
+            (0, true),
+            (1, true),
+            (MAX_PAYLOAD - 1, true),
+            (MAX_PAYLOAD, true),
+            (MAX_PAYLOAD + 1, false),
+            (MAX_PAYLOAD * 2, false),
+        ] {
+            let frame = Frame::Data(vec![7; length]);
+            let mut wire = vec![99];
+            let result = write_frame(&mut wire, &frame);
+            if accepted {
+                result.unwrap();
+                assert_eq!(read_frame(&mut &wire[1..]).unwrap(), Some(frame));
+            } else {
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+                assert_eq!(wire, [99]);
+            }
+        }
     }
 
     #[test]

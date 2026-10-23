@@ -397,24 +397,30 @@ mod tests {
     }
 
     #[test]
-    fn overflowing_archive_ownership_is_rejected_before_creating_entries() {
-        for (uid, gid) in [(1u64 << 32, 0), (0, 1u64 << 32)] {
-            let dir = tempfile::tempdir().unwrap();
-            let archive = ownership_archive(uid, gid);
-            let error = unpack(archive.as_slice(), dir.path(), true).unwrap_err();
-            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-            assert!(!dir.path().join("entry").exists());
+    fn unrepresentable_archive_ownership_is_rejected_before_creating_entries() {
+        for id in [1u64 << 32, (1u64 << 32) + 1, u64::MAX] {
+            for (uid, gid) in [(id, 0), (0, id)] {
+                for lenient in [false, true] {
+                    let dir = tempfile::tempdir().unwrap();
+                    let archive = ownership_archive(uid, gid);
+                    let error = unpack(archive.as_slice(), dir.path(), lenient).unwrap_err();
+                    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+                    assert!(!dir.path().join("entry").exists());
+                }
+            }
         }
     }
 
     #[test]
-    fn archive_ownership_accepts_the_u32_boundary() {
-        let archive = ownership_archive(u64::from(u32::MAX), u64::from(u32::MAX));
-        let mut tar = Archive::new(archive.as_slice());
-        let mut entry = tar.entries().unwrap().next().unwrap().unwrap();
-        let meta = read_meta(&mut entry).unwrap();
-        assert_eq!(meta.uid, u32::MAX);
-        assert_eq!(meta.gid, u32::MAX);
+    fn archive_ownership_preserves_representable_ids() {
+        for id in [0, 1, u32::MAX - 1, u32::MAX] {
+            let archive = ownership_archive(u64::from(id), u64::from(id));
+            let mut tar = Archive::new(archive.as_slice());
+            let mut entry = tar.entries().unwrap().next().unwrap().unwrap();
+            let meta = read_meta(&mut entry).unwrap();
+            assert_eq!(meta.uid, id);
+            assert_eq!(meta.gid, id);
+        }
     }
 
     #[test]

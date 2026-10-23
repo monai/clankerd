@@ -110,26 +110,70 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn shares_reject_unknown_fields_and_preserve_defaults() {
-        let mut value = json!({"tag":"data", "path":"/data"});
+    fn shares_preserve_explicit_fields_and_apply_omitted_defaults() {
+        let value = json!({"tag":"data", "path":"/data"});
         let share: Share = serde_json::from_value(value.clone()).unwrap();
-        assert!(!share.read_only);
-        assert_eq!(share.semantics, BindSemantics::Simplified);
-        value["read_only"] = json!(true);
-        assert!(
-            serde_json::from_value::<Share>(value.clone())
-                .unwrap()
-                .read_only
+        assert_eq!(
+            share,
+            Share {
+                tag: "data".into(),
+                path: "/data".into(),
+                semantics: BindSemantics::Simplified,
+                read_only: false,
+            }
         );
-        value["read_ony"] = json!(true);
-        assert!(serde_json::from_value::<Share>(value).is_err());
+        for semantics in [BindSemantics::Simplified, BindSemantics::Complete] {
+            for read_only in [false, true] {
+                let mut value = value.clone();
+                value["semantics"] = json!(semantics);
+                value["read_only"] = json!(read_only);
+                let decoded: Share = serde_json::from_value(value).unwrap();
+                assert_eq!(decoded.semantics, semantics);
+                assert_eq!(decoded.read_only, read_only);
+            }
+        }
+    }
+
+    #[test]
+    fn shares_reject_unknown_fields() {
+        for field in ["read_ony", "semantic", "unknown"] {
+            let mut value = json!({"tag":"data", "path":"/data"});
+            value[field] = json!(true);
+            assert!(
+                serde_json::from_value::<Share>(value).is_err(),
+                "accepted {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn network_devices_preserve_explicit_fields() {
+        for (features, vfkit) in [(0, false), (u32::MAX, true)] {
+            let value =
+                json!({"socket":"/net", "mac":[2,0,0,0,0,1], "features":features, "vfkit":vfkit});
+            let decoded: NetDevice = serde_json::from_value(value).unwrap();
+            assert_eq!(
+                decoded,
+                NetDevice {
+                    socket: "/net".into(),
+                    mac: [2, 0, 0, 0, 0, 1],
+                    features,
+                    vfkit,
+                }
+            );
+        }
     }
 
     #[test]
     fn network_devices_reject_unknown_fields() {
-        let mut value = json!({"socket":"/net", "mac":[2,0,0,0,0,1], "features":0, "vfkit":false});
-        assert!(serde_json::from_value::<NetDevice>(value.clone()).is_ok());
-        value["feature"] = json!(1);
-        assert!(serde_json::from_value::<NetDevice>(value).is_err());
+        for field in ["feature", "unknown"] {
+            let mut value =
+                json!({"socket":"/net", "mac":[2,0,0,0,0,1], "features":0, "vfkit":false});
+            value[field] = json!(1);
+            assert!(
+                serde_json::from_value::<NetDevice>(value).is_err(),
+                "accepted {field}"
+            );
+        }
     }
 }

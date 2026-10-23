@@ -291,41 +291,40 @@ mod tests {
 
     #[test]
     fn automatic_subnets_skip_reserved_ranges() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
-        let networks = Networks::lock(&store).unwrap();
-        for (name, subnet) in [
-            ("before-default", "192.168.64.0/19"),
-            ("before-default-2", "192.168.96.0/21"),
-            ("before-default-3", "192.168.104.0/24"),
-        ] {
-            networks
-                .create(name, NetworkKind::Shared, Some(subnet.parse().unwrap()))
-                .unwrap();
+        for mode in [NetworkKind::Shared, NetworkKind::HostOnly] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(dir.path()).unwrap();
+            let networks = Networks::lock(&store).unwrap();
+            for (name, subnet) in [
+                ("before-default", "192.168.64.0/19"),
+                ("before-default-2", "192.168.96.0/21"),
+                ("before-default-3", "192.168.104.0/24"),
+            ] {
+                networks
+                    .create(name, mode, Some(subnet.parse().unwrap()))
+                    .unwrap();
+            }
+            assert_eq!(
+                networks.create("after-default", mode, None).unwrap().subnet,
+                "192.168.106.0/24".parse::<SharedNetwork>().unwrap()
+            );
+            for third in 107..128 {
+                networks
+                    .create(
+                        &format!("occupied-{third}"),
+                        mode,
+                        Some(format!("192.168.{third}.0/24").parse().unwrap()),
+                    )
+                    .unwrap();
+            }
+            assert_eq!(
+                networks
+                    .create("after-reserved", mode, None)
+                    .unwrap()
+                    .subnet,
+                "192.168.129.0/24".parse::<SharedNetwork>().unwrap()
+            );
         }
-        assert_eq!(
-            networks
-                .create("after-default", NetworkKind::Shared, None)
-                .unwrap()
-                .subnet,
-            "192.168.106.0/24".parse::<SharedNetwork>().unwrap()
-        );
-        for third in 107..128 {
-            networks
-                .create(
-                    &format!("occupied-{third}"),
-                    NetworkKind::Shared,
-                    Some(format!("192.168.{third}.0/24").parse().unwrap()),
-                )
-                .unwrap();
-        }
-        assert_eq!(
-            networks
-                .create("after-reserved", NetworkKind::Shared, None)
-                .unwrap()
-                .subnet,
-            "192.168.129.0/24".parse::<SharedNetwork>().unwrap()
-        );
     }
 
     #[test]

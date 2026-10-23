@@ -566,10 +566,16 @@ fn metadata_declares_effective_defaults_separately_from_omitted_updates() {
             serde_json::json!(["simplified", "complete"])
         );
     }
-    assert_eq!(
-        arg(create, "network")["effective_default"]["value"],
-        "shared-192.168.105.0-24"
-    );
+    for name in ["create", "run"] {
+        let action = actions
+            .iter()
+            .find(|action| action["name"] == name)
+            .unwrap();
+        assert_eq!(
+            arg(action, "network")["effective_default"]["value"],
+            "shared-192.168.105.0-24"
+        );
+    }
     let update = actions.iter().find(|c| c["name"] == "update").unwrap();
     assert_eq!(
         arg(update, "pull")["effective_default"]["source"],

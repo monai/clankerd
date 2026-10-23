@@ -318,10 +318,8 @@ mod tests {
                 fs::write(&target, b"keep").unwrap();
             }
             std::os::unix::fs::symlink(&target, dir.path().join(MARKER)).unwrap();
-            assert_eq!(
-                write_marker(dir.path()).unwrap_err().raw_os_error(),
-                Some(libc::ELOOP)
-            );
+            assert!(write_marker(dir.path()).is_err());
+            assert_eq!(fs::read_link(dir.path().join(MARKER)).unwrap(), target);
             if existing {
                 assert_eq!(fs::read(&target).unwrap(), b"keep");
             } else {
