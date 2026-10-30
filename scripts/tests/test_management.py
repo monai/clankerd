@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-SCRIPT = Path(__file__).parents[1] / 'assemble-management.py'
+SCRIPT = Path(__file__).parents[1] / 'build' / 'assemble-management.py'
 ROOTFS = Path(__file__).parents[2] / 'build-support/management-rootfs'
 
 

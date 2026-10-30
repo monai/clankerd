@@ -80,7 +80,7 @@ for binary in "$OUT"/darwin-arm64/{vmctl,clankerd-vmspawn,clankerd-network}; do
   codesign --verify --strict "$binary"
   otool -L "$binary"
 done
-python3 scripts/verify-host-artifact.py "$OUT"
+python3 scripts/build/verify-host-artifact.py "$OUT"
 "$OUT/darwin-arm64/vmctl" --version
 step 'Build guest probe (usually under 1 minute)'
 # The test probe belongs to acceptance, never to the published runtime bundle.

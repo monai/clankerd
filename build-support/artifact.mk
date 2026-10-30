@@ -25,7 +25,7 @@ ARTIFACT_FILES := $(HOST_PROGRAMS) $(GUEST_FILES) \
                  $(LICENSES)/alpine-base-installed
 
 artifact-install: $(ARTIFACT_FILES)
-	python3 scripts/verify-host-artifact.py "$(STAGE)"
+	python3 scripts/build/verify-host-artifact.py "$(STAGE)"
 
 ifneq ($(PUBLISH),)
 ifeq ($(shell uname -s),Darwin)

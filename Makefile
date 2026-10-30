@@ -36,11 +36,11 @@ $(DOWNLOADS)/$(1)-$($(1)_SHA256).archive:
 	curl --fail --location --retry 3 --output "$$$$temporary" '$($(1)_URL)'; \
 	printf '%s  %s\n' '$($(1)_SHA256)' "$$$$temporary" | shasum -a 256 -c -; \
 	mv -f "$$$$temporary" "$$@"
-$(WORK)/packages/$(1)/.stamp: $(DOWNLOADS)/$(1)-$($(1)_SHA256).archive scripts/extract-binary.py Makefile check-file-times
+$(WORK)/packages/$(1)/.stamp: $(DOWNLOADS)/$(1)-$($(1)_SHA256).archive scripts/build/extract-binary.py Makefile check-file-times
 	@set -e; $$(skip_unchanged); \
 	printf '%s  %s\n' '$($(1)_SHA256)' "$$<" | shasum -a 256 -c -; \
 	rm -rf "$$(@D)"; \
-	$(PYTHON) scripts/extract-binary.py "$$<" "$$(@D)"; \
+	$(PYTHON) scripts/build/extract-binary.py "$$<" "$$(@D)"; \
 	touch "$$@"
 endef
 $(foreach input,$(INPUTS),$(eval $(call binary_input,$(input))))
@@ -50,10 +50,10 @@ GUEST_PACKAGES := $(addprefix $(WORK)/packages/,$(GUEST_INPUTS))
 MANAGEMENT_ROOTFS := build-support/management-rootfs
 MANAGEMENT_FILES := $(shell find $(MANAGEMENT_ROOTFS))
 
-$(WORK)/management/.stamp: $(addsuffix /.stamp,$(GUEST_PACKAGES)) $(MANAGEMENT_FILES) $(INPUT_LOCK) scripts/assemble-management.py Makefile check-file-times
+$(WORK)/management/.stamp: $(addsuffix /.stamp,$(GUEST_PACKAGES)) $(MANAGEMENT_FILES) $(INPUT_LOCK) scripts/build/assemble-management.py Makefile check-file-times
 	@set -e; $(skip_unchanged); \
 	rm -rf "$(@D)"; \
-	$(PYTHON) scripts/assemble-management.py "$(@D)" $(MANAGEMENT_ROOTFS) $(GUEST_PACKAGES) --required $(GUEST_REQUIRED); \
+	$(PYTHON) scripts/build/assemble-management.py "$(@D)" $(MANAGEMENT_ROOTFS) $(GUEST_PACKAGES) --required $(GUEST_REQUIRED); \
 	touch "$@"
 
 # Only host Cargo invocations receive adapter-supplied native linker flags.
@@ -81,13 +81,13 @@ build: $(LICENSE_ARCHIVES) $(HOST_EXECUTABLES) $(GUEST_EXECUTABLE) $(WORK)/manag
 	+$(MAKE) --no-print-directory -f build-support/artifact.mk artifact-publish STAGE="$(WORK)/artifact" PUBLISH="$(RUST_OUT)" WORK="$(WORK)" INPUT_LOCK="$(INPUT_LOCK)" DOWNLOADS="$(DOWNLOADS)" HOST_TARGET="$(HOST_TARGET)" GUEST_TARGET="$(GUEST_TARGET)"
 
 build-homebrew:
-	+$(PYTHON) scripts/homebrew.py "$(MAKE)" build
+	+$(PYTHON) scripts/build/homebrew.py "$(MAKE)" build
 
 test-acceptance:
 	+bash scripts/accept-native-build.sh $(ACCEPTANCE_GATES)
 
 test-acceptance-homebrew:
-	+$(PYTHON) scripts/homebrew.py "$(MAKE)" test-acceptance
+	+$(PYTHON) scripts/build/homebrew.py "$(MAKE)" test-acceptance
 
 ifeq ($(BUILD_CONTEXT),Linux-aarch64)
 LINUX_TOOLS := $(WORK)/linux-test-tools
