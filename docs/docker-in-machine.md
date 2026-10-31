@@ -51,7 +51,8 @@ Push the result as `ghcr.io/monai/clankers:slim` (linux/arm64).
 ## 2. Run the smoke test
 
 ```sh
-make build
+cmake --preset default
+cmake --build --preset default --target build
 scripts/m2-smoke-test.sh
 ```
 

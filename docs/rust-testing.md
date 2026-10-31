@@ -1,19 +1,24 @@
 # Rust tests and coverage
 
-`mise exec -- make test lint` runs the workspace tests and lint checks
-with the pinned production compiler; the selected suite depends on the host.
+Configure once, then run workspace tests and lint with the pinned compiler.
+The selected suite depends on the host.
+
+```sh
+mise exec -- cmake --preset default
+mise exec -- cmake --build --preset default --target test lint
+```
 
 Run coverage on Linux. It uses [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov), pinned
 in `mise.toml`. It measures LLVM line, region, function and branch coverage.
 [LLVM continuous profiles](https://clang.llvm.org/docs/SourceBasedCodeCoverage.html)
 retain counters when tests kill helper processes;
 this is compiler instrumentation, with no profiling code in production sources.
-Branch instrumentation requires nightly Rust; `build-support/checks.mk` pins a
+Branch instrumentation requires nightly Rust; `cmake/Checks.cmake` pins a
 separate coverage toolchain without changing the production compiler.
 
 ```sh
 mise install
-mise exec -- make coverage-setup coverage
+mise exec -- cmake --build --preset default --target coverage
 ```
 
 Reports are `build/coverage/coverage.json` and `build/coverage/html/index.html`.
@@ -34,7 +39,7 @@ Mac smoke tests.
 
 `vmctl/tests/native_bind_semantics.rs` contains opt-in tests of actual Mac
 virtio-fs ownership, permission side effects and host read-only enforcement.
-`mise exec -- make test-native` builds signed native helpers and runs these checks
+`mise exec -- cmake --build --preset default --target test-native` builds signed native helpers and runs these checks
 on Apple Silicon. These tests are ignored in the ordinary workspace suite;
 Linux compilation or schema/protocol tests do not establish native behavior.
 
@@ -44,16 +49,16 @@ then mounts its ext4 filesystem and unpacks the image. It requires root,
 loop devices and mount permissions; uid 0 alone is insufficient in a restricted
 container. [Linux loop-device documentation](https://man7.org/linux/man-pages/man4/loop.4.html).
 
-`build-support/checks.mk` declares developer commands separately from artifact
-production. `make test` runs Python contract tests and direct Cargo tests; it
-does not build the distributable bundle. `make test-scripts` and `make test-rust`
+`cmake/Checks.cmake` declares developer commands separately from artifact
+production. `cmake --build --preset default --target test` runs Python contract tests and direct Cargo tests; it
+does not build the distributable bundle. `cmake --build --preset default --target test-scripts` and `cmake --build --preset default --target test-rust`
 select either suite independently. On Linux, Cargo runs the workspace suite.
 Test fixtures build their executable helpers through Cargo when needed. On macOS
 tests use installed host libraries through the native linker and dyld. No guest image,
 product executable, or published bundle is required for ordinary Mac tests.
 The Mac suite runs host unit tests, protocol/libkrun integration tests, and CLI version
 and smoke-script checks. Guest integration tests execute a local Linux guest
-process and therefore require Linux; run `mise exec -- make test-linux` in a
+process and therefore require Linux; run `mise exec -- cmake --build --preset default --target test-linux` in a
 Linux context. Mac lint checks all host targets and excludes the Linux-only
 guest package. Lint invokes `cargo fmt` and `cargo clippy` directly.
 
@@ -65,7 +70,7 @@ same llvm-cov environment, and preserves `CARGO_LLVM_COV_TARGET_DIR` across
 collection and every report.
 
 Linux tests require installed liblzma development/linker files and native e2fsprogs (`apt-get install e2fsprogs` on Debian/Ubuntu).
-On ARM64 Linux, Make supplies tools from the packaged management filesystem;
+On ARM64 Linux, CMake supplies tools from the packaged management filesystem;
 other Linux hosts use their native tools. The coverage runner validates tool
 availability before compilation. `CLANKERD_TEST_TOOLS` is authoritative when set;
 it must contain executable tools

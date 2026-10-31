@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The prototype's end-to-end smoke test (ticket 10): Docker inside a clankerd
 # machine, driven only through the vmctl CLI. Run on the Apple Silicon Mac
-# after `make build`, with the slim image changes applied
+# after `cmake --build --preset default --target build`, with the slim image changes applied
 # (docs/docker-in-machine.md). Exits non-zero on the first failed check, and
 # always removes its machines and volume. Not run in CI (GitHub's macOS
 # runners cannot run VMs); a self-hosted runner can call it as is.
@@ -115,7 +115,7 @@ step "prerequisites"
 if [ -z "${VMCTL:-}" ]; then
   [ "$(uname -sm)" = "Darwin arm64" ] || fail "run this on the Apple Silicon Mac"
   for f in "$vmctl" "$CLANKERD_VMSPAWN" "$CLANKERD_GUEST_ROOT/usr/sbin/clankerd-guestd" "$out/linux-arm64/management/sbin/mke2fs"; do
-    [ -x "$f" ] || fail "$f missing: run make build"
+    [ -x "$f" ] || fail "$f missing: run cmake --build --preset default --target build"
   done
 fi
 command -v curl >/dev/null || fail "curl is required on the host"

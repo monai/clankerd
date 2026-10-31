@@ -65,7 +65,7 @@ def summarize(evidence):
 def main():
     if sys.argv[1:] == ['--progress']:
         for line in sys.stdin:
-            if re.match(r'^(\[\d+/\d+\]|STILL RUNNING|PASS\t|FAIL\t|TIMEOUT|Evidence retained:)', line):
+            if re.match(r'^(\[\d+/\d+\]|STILL RUNNING|PASS\t|FAIL\t|TIMEOUT|test_[^ ]+ \(|Ran [0-9]+ tests|OK$|FAILED|Evidence retained:)', line):
                 print(line, end='', flush=True)
         return
     if len(sys.argv) > 1:

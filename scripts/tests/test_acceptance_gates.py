@@ -1,10 +1,86 @@
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+class AcceptanceConfiguration(unittest.TestCase):
+    def test_relocated_checkout_reconfigures_without_removing_build_outputs(self):
+        import json
+        import sys
+        cmake = shutil.which('cmake')
+        self.assertIsNotNone(cmake, 'CMake must be installed for acceptance checks')
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            original = work / 'container-checkout'
+            original.mkdir()
+            dependency = work / 'dependency'
+            dependency.mkdir()
+            (dependency / 'CMakeLists.txt').write_text(
+                'cmake_minimum_required(VERSION 3.25)\nproject(dependency NONE)\n'
+                'file(WRITE "${CMAKE_BINARY_DIR}/dependency-source.txt" "${CMAKE_CURRENT_SOURCE_DIR}")\n')
+            archive = shutil.make_archive(str(work / 'dependency'), 'gztar', dependency)
+            fetch = ('project(acceptance NONE)\ninclude(FetchContent)\n'
+                     f'FetchContent_Declare(dependency URL "{Path(archive).as_uri()}")\n'
+                     'FetchContent_MakeAvailable(dependency)\n')
+            (original / 'CMakeLists.txt').write_text(
+                'cmake_minimum_required(VERSION 3.25)\n' + fetch)
+            (original / 'CMakePresets.json').write_text(json.dumps({
+                'version': 6, 'configurePresets': [{
+                    'name': 'homebrew', 'generator': 'Ninja',
+                    'binaryDir': '${sourceDir}/build/cmake',
+                }],
+            }))
+            configured = subprocess.run([cmake, '--preset', 'homebrew'], cwd=original,
+                                        capture_output=True, text=True)
+            self.assertEqual(configured.returncode, 0, configured.stdout + configured.stderr)
+            self.assertTrue((original / 'build/cmake/_deps/dependency-subbuild/CMakeCache.txt').is_file())
+            retained = ['build/cmake/cargo/build/compiled', 'build/downloads/package',
+                        'build/artifact/published']
+            for name in retained:
+                path = original / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(name)
+            relocated = work / 'mac-checkout'
+            shutil.copytree(original, relocated)
+            shutil.rmtree(original)
+            policy = (ROOT / 'CMakeLists.txt').read_text().split('project(', 1)[0]
+            (relocated / 'CMakeLists.txt').write_text(policy + fetch)
+            scripts = relocated / 'scripts'
+            scripts.mkdir()
+            for name in ['accept-native-build.sh', 'summarize-native-build.py']:
+                shutil.copy2(ROOT / 'scripts' / name, scripts / name)
+            tools = work / 'tools'
+            tools.mkdir()
+            commands = {
+                'uname': '#!/bin/sh\necho Darwin arm64\n',
+                'sw_vers': '#!/bin/sh\necho 15.8.1\n',
+                'git': '#!/bin/sh\nexit 0\n',
+                'cmake': f'#!{sys.executable}\nimport os,sys\n'
+                         'if sys.argv[1:2] == ["--build"]: sys.exit(83)\n'
+                         f'os.execv({cmake!r}, [{cmake!r}, *sys.argv[1:]])\n',
+            }
+            for name, content in commands.items():
+                path = tools / name
+                path.write_text(content)
+                path.chmod(0o755)
+            result = subprocess.run(['bash', str(scripts / 'accept-native-build.sh')],
+                cwd=relocated, env=dict(os.environ, ACCEPTANCE_VERBOSE='1',
+                    CLANKERD_CMAKE_PRESET='homebrew',
+                    EVIDENCE_DIR=str(relocated / 'build/acceptance-evidence'),
+                    PATH=str(tools)+os.pathsep+os.environ['PATH']),
+                capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 83, result.stdout + result.stderr)
+            cache = (relocated / 'build/cmake/CMakeCache.txt').read_text()
+            self.assertIn(f'CMAKE_HOME_DIRECTORY:INTERNAL={relocated}', cache)
+            self.assertEqual((relocated / 'build/cmake/dependency-source.txt').read_text(),
+                             str(relocated / 'build/cmake/_deps/dependency-src'))
+            for name in retained:
+                self.assertEqual((relocated / name).read_text(), name)
 
 
 class BootGate(unittest.TestCase):

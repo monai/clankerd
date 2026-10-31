@@ -29,7 +29,8 @@ clankerd adds no naming service or multicast reflector.
 Run the real-host gate after building:
 
 ```sh
-mise exec -- make build && scripts/m2-smoke-bridged.sh
+mise exec -- cmake --preset default
+mise exec -- cmake --build --preset default --target build && scripts/m2-smoke-bridged.sh
 ```
 
 The fixture enumerates supported active physical interfaces and explicitly

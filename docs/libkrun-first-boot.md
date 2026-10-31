@@ -4,12 +4,13 @@ Build the native artifact and run the native gates on Apple Silicon
 macOS 15:
 
 ```bash
-mise exec -- make -j4 build
-mise exec -- make test-acceptance
+mise exec -- cmake --preset default
+mise exec -- cmake --build --preset default --target build --parallel 4
+mise exec -- bash scripts/accept-native-build.sh
 ```
 
-For an existing Homebrew installation, use `make build-homebrew` and
-`make test-acceptance-homebrew` instead; they configure native library paths.
+For an existing Homebrew installation, use the `homebrew` CMake preset and
+`bash scripts/accept-native-build.sh` instead; they configure native library paths.
 
 The artifact supplies signed clankerd host executables and
 `linux-arm64/management`, a packaged Linux management filesystem. Host libraries
@@ -26,7 +27,7 @@ own attachments when that machine is removed.
 Run only the boot gate, including common preparation and management checks:
 
 ```bash
-mise exec -- make test-acceptance ACCEPTANCE_GATES=m2-boot-check
+mise exec -- bash scripts/accept-native-build.sh m2-boot-check
 ```
 
 Logs, input identities and a compact result stay under `build/acceptance-<UTC>`.
@@ -38,7 +39,7 @@ mise exec -- python3 scripts/summarize-native-build.py
 ```
 
 A native hypervisor entitlement error requires rebuilding the signed artifact
-with `make build`. Missing installed libraries produce native linker or loader
+with `cmake --build --preset default --target build`. Missing installed libraries produce native linker or loader
 errors; resolve the system prerequisite before rerunning acceptance.
 
 See [the build contract](native-build.md), [virtual networks](virtual-networks.md),

@@ -1,0 +1,31 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "default",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CLANKERD_HOMEBREW": "OFF"
+      }
+    },
+    {
+      "name": "homebrew",
+      "inherits": "default",
+      "cacheVariables": {
+        "CLANKERD_HOMEBREW": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default"
+    },
+    {
+      "name": "homebrew",
+      "configurePreset": "homebrew"
+    }
+  ]
+}

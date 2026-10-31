@@ -44,7 +44,7 @@ def prebuild(env, toolchain=None):
 def linux_required(system):
     if system != "Linux":
         raise RuntimeError("Linux guest integration tests require a Linux execution context; "
-                           "run mise exec -- make test-linux on Linux. make test runs native Mac checks.")
+                           "run cmake --build --preset default --target test-linux on Linux. The test target runs native Mac checks.")
 
 
 @contextmanager

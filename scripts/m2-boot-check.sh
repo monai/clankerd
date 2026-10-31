@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Real boots on the M2 (tickets 03, 05 and 09). Run on the Mac after `make build`.
+# Real boots on the M2 (tickets 03, 05 and 09). Run on the Mac after `cmake --build --preset default --target build`.
 # See docs/libkrun-first-boot.md. Exits non-zero on the first failed check.
 #
 #   scripts/m2-boot-check.sh [boot|image|volume|net|all]   (default: all)
@@ -65,10 +65,10 @@ case "$mode" in boot | image | volume | net | all) ;; *) fail "usage: $0 [boot|i
 step "prerequisites"
 [ "$(uname -sm)" = "Darwin arm64" ] || fail "run this on the Apple Silicon Mac"
 for f in "$vmctl" "$CLANKERD_VMSPAWN" "$CLANKERD_GUEST_ROOT/usr/sbin/clankerd-guestd"; do
-  [ -x "$f" ] || fail "$f missing: run make build"
+  [ -x "$f" ] || fail "$f missing: run cmake --build --preset default --target build"
 done
 codesign -d --entitlements - "$CLANKERD_VMSPAWN" 2>&1 | grep -q com.apple.security.hypervisor \
-  || fail "clankerd-vmspawn lacks the hypervisor entitlement: run make build"
+  || fail "clankerd-vmspawn lacks the hypervisor entitlement: run cmake --build --preset default --target build"
 echo ok
 
 boot_check() {
@@ -132,7 +132,7 @@ wait_exec() { # name: until exec works (the machine is booted and guestd serves)
 seconds() { date +%s; }
 
 image_check() {
-  [ -x "$out/linux-arm64/management/sbin/mke2fs" ] || fail "$out/linux-arm64/management/sbin/mke2fs missing: run make build (it assembles the guest management environment)"
+  [ -x "$out/linux-arm64/management/sbin/mke2fs" ] || fail "$out/linux-arm64/management/sbin/mke2fs missing: run cmake --build --preset default --target build (it assembles the guest management environment)"
 
   step "pull $image"
   "$vmctl" pull "$image"
@@ -218,7 +218,7 @@ expect_volume_capacity() {
 
 volume_check() {
   [ -x "$out/linux-arm64/management/sbin/mke2fs" ] && [ -x "$out/linux-arm64/management/usr/sbin/resize2fs" ] \
-    || fail "mke2fs/resize2fs missing in $out/linux-arm64: run make build (it assembles the guest management environment)"
+    || fail "mke2fs/resize2fs missing in $out/linux-arm64: run cmake --build --preset default --target build (it assembles the guest management environment)"
 
   "$vmctl" pull "$image" >/dev/null
 

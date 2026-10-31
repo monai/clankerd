@@ -56,7 +56,8 @@ All Rust components live under `crates/`:
 | `crates/clankerd-proto/` | Host/guest messages, VM launch specifications and stream codecs |
 | `crates/clankerd-network/` | Mac networking helper; Apple vmnet attachments and PF firewall rules |
 | `crates/libkrun-sys/` | Rust bindings and boot configuration for libkrun |
-| `build-support/` | Locked guest inputs, management filesystem files and build rules |
+| `cmake/` | Build graph and locked guest distribution inputs |
+| `build-support/` | Management filesystem policy and Linux test tools |
 | `scripts/` | Build tooling, diagnostics and native smoke tests |
 | `images/` | Docker image recipes and startup helpers for running Docker inside a machine |
 | `docs/` | Build, lifecycle, networking and testing guides |
@@ -74,12 +75,14 @@ Install the pinned tools and build:
 
 ```sh
 mise install
-mise exec -- make build
+mise exec -- cmake --preset default
+mise exec -- cmake --build --preset default --target build
 ```
 
-For libraries installed with Homebrew, use `mise exec -- make build-homebrew`
-to discover their linker and runtime paths. The regular build uses your existing
-native library configuration.
+For libraries installed with Homebrew, configure with `mise exec -- cmake --preset homebrew`
+and build with `mise exec -- cmake --build --preset homebrew --target build`.
+The Homebrew preset discovers installed linker and runtime paths. The default
+preset uses your existing native library configuration.
 
 The build downloads verified guest inputs, compiles and signs the executables,
 and publishes `build/artifact/`. Keep the bundle together: `darwin-arm64/`
@@ -151,7 +154,8 @@ For scripts, `"$vmctl" machine ls --output json` returns structured output;
 Linux supports guest builds and developer tests; running VMs requires macOS.
 
 ```sh
-mise exec -- make test lint
+mise exec -- cmake --preset default
+mise exec -- cmake --build --preset default --target test lint
 ```
 
 This runs the platform's Rust tests, Python build-tool tests, formatting and
@@ -159,7 +163,7 @@ Clippy checks. Linux needs liblzma development files and e2fsprogs; privileged
 filesystem tests also need root, loop devices and mount permissions.
 See [Rust testing](docs/rust-testing.md) for setup and coverage.
 
-On a Mac, `mise exec -- make test-acceptance` builds and checks the signed bundle
-and runs native VM gates. Use `test-acceptance-homebrew` with Homebrew libraries.
+On a Mac, `mise exec -- bash scripts/accept-native-build.sh` builds and checks the signed bundle
+and runs native VM gates. It uses the Homebrew preset by default.
 For workloads that need Docker or Compose, see
 [Docker inside a machine](docs/docker-in-machine.md).

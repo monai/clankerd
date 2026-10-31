@@ -11,13 +11,15 @@ Cargo's liblzma build-script overrides require installed libraries and suppress
 source compilation on macOS ARM64 and Linux ARM64/x86_64 GNU hosts.
 
 ```sh
-mise exec -- make build
+mise exec -- cmake --preset default
+mise exec -- cmake --build --preset default --target build
 ```
 
 For libraries installed through Homebrew, use the optional entrypoint:
 
 ```sh
-mise exec -- make build-homebrew
+mise exec -- cmake --preset homebrew
+mise exec -- cmake --build --preset homebrew --target build
 ```
 
 It queries `brew --prefix` for libkrun, libkrunfw, xz and libkrun's installed
@@ -29,13 +31,19 @@ The resulting host binaries still require those installed libraries, but should
 run without `DYLD_*` variables. Moving them to another machine requires libraries
 resolvable through the encoded paths or rebuilding for that installation.
 
-The package-manager-independent `make build` continues to use the caller's
+The package-manager-independent `cmake --build --preset default --target build` continues to use the caller's
 native toolchain configuration; it never invokes Homebrew. Host flag overrides
-inside the adapter use Cargo's encoded argument format so library paths remain
+in CMake use Cargo's encoded argument format so library paths remain
 single arguments. Cargo owns recompilation when those flags change.
 
-Make retains checksum-verified guest downloads, guest management assembly,
-Cargo compilation, executable signing and atomic publication. `build/artifact`
+CMake owns checksum-verified guest downloads, assembly dependencies, executable
+signing and atomic publication. Corrosion invokes Cargo for Rust compilation.
+Cargo also keeps ownership of crate-local C compilation and native linking.
+The two retained Python build scripts implement archive safety and guest
+filesystem policy. They preserve package metadata, symlinks, overlay order,
+permissions and architecture checks. These operations remain in Python because
+they require product-specific traversal and validation. The small shell publication
+script keeps signal cleanup and atomic symlink replacement together. `build/artifact`
 points to an immutable complete bundle in `build/artifact.bundles/`. Failed
 builds leave the published bundle intact. A warm build reuses unchanged files.
 The artifact includes clankerd's executables, Alpine guest management and guest
@@ -45,20 +53,14 @@ that its native loader can resolve.
 Run consolidated native acceptance:
 
 ```sh
-mise exec -- make test-acceptance
+mise exec -- bash scripts/accept-native-build.sh
 ```
 
-The matching Homebrew acceptance entrypoint builds with the same linker/runtime
-configuration and removes inherited `DYLD_*` overrides before running tests:
-
-```sh
-mise exec -- make test-acceptance-homebrew
-```
-
-This tests runtime lookup from the built executables. Select particular gates
-with `ACCEPTANCE_GATES=m2-smoke-lifetimes`; the common build, management and native
-bind checks still run before the selected gate. `RUST_OUT` selects the same
-publication path for builds and acceptance.
+The script configures the Homebrew preset, runs lint and ordinary tests, builds
+and signs the bundle, checks a warm rebuild, and runs real VM acceptance.
+Set `CLANKERD_CMAKE_PRESET=default` to use caller-configured native libraries.
+Pass gate names as script arguments to select a subset. Common management and
+native bind checks still run. `CLANKERD_ARTIFACT_DIR` selects the publication path.
 
 The script prints numbered progress, marks long steps and retains verbose logs
 under `build/acceptance-<UTC>`. It checks script regressions, native compilation,
@@ -72,5 +74,5 @@ mise exec -- python3 scripts/summarize-native-build.py
 ```
 
 Linux developer checks require installed liblzma development/linker files and
-e2fsprogs; guest compilation remains available with `make cargo-guest`.
+e2fsprogs; guest compilation remains available with `cmake --build --preset default --target cargo-guest`.
 Linux checks do not establish native Mac linkage, loader or VM behavior.

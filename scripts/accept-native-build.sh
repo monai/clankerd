@@ -8,17 +8,19 @@ fi
 shift
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
-artifact=${RUST_OUT:-build/artifact}
+artifact=${CLANKERD_ARTIFACT_DIR:-${RUST_OUT:-$root/build/artifact}}
+cmake_preset=${CLANKERD_CMAKE_PRESET:-homebrew}
+cmake_directory=$root/build/cmake
 [ "$(uname -sm)" = 'Darwin arm64' ] || { echo 'Requires Apple Silicon macOS' >&2; exit 1; }
 [ "$(sw_vers -productVersion | cut -d. -f1)" = 15 ] || { echo 'The acceptance baseline requires macOS 15' >&2; exit 1; }
 python3 -c 'import sys; assert sys.version_info >= (3,12), "Python 3.12+ required"'
 evidence=${EVIDENCE_DIR:-$root/build/acceptance-$(date -u +%Y%m%dT%H%M%SZ)}
 mkdir -p "$evidence"
 evidence=$(cd "$evidence" && pwd)
-export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$root/build/acceptance-cargo-Darwin-arm64}
+export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$cmake_directory/cargo/build}
 # Runtime checks inherit the system loader environment.
 for variable in $(env | cut -d= -f1); do
-  case "$variable" in CLANKERD_NETWORK|CLANKERD_VMSPAWN|CLANKERD_GUEST_ROOT|CLANKERD_NETWORK_PF|CLANKERD_BOOT_DIR_ROOT|CLANKERD_DEV_GUESTD|CLANKERD_VMSPAWN_DEV_LOCAL) unset "$variable";; esac
+  case "$variable" in DYLD_*|CLANKERD_NETWORK|CLANKERD_VMSPAWN|CLANKERD_GUEST_ROOT|CLANKERD_NETWORK_PF|CLANKERD_BOOT_DIR_ROOT|CLANKERD_DEV_GUESTD|CLANKERD_VMSPAWN_DEV_LOCAL) unset "$variable";; esac
 done
 printf 'Evidence: %s\n' "$evidence"
 exec 3>&1
@@ -54,11 +56,12 @@ step() {
 step 'Host and source evidence'
 sw_vers
 git rev-parse HEAD > "$evidence/commit.txt"
-git diff HEAD -- crates scripts Makefile build-support > "$evidence/worktree.diff"
-step 'Script regressions (usually under 30 seconds)'
-python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+git diff HEAD -- crates scripts CMakeLists.txt CMakePresets.json cmake build-support > "$evidence/worktree.diff"
+step 'Configure CMake and run developer checks'
+cmake --fresh --preset "$cmake_preset" -DCLANKERD_ARTIFACT_DIR="$artifact"
+cmake --build "$cmake_directory" --target lint test --parallel "${BUILD_JOBS:-4}"
 step 'Build artifact (long-running: about 1–10 minutes; cold downloads may take longer)'
-make -j"${BUILD_JOBS:-4}" build
+cmake --build "$cmake_directory" --target build --parallel "${BUILD_JOBS:-4}"
 step 'Copy published artifact'
 cp -pRP "$artifact/." "$evidence/bundle"
 export OUT=$evidence/bundle
@@ -67,7 +70,7 @@ test ! -s "$evidence/relocation-diff.txt"
 # A warm build must retain installed files and their modification times.
 step 'Verify unchanged warm build'
 find -H "$artifact" -type f -exec stat -f '%N %m' {} + | sort > "$evidence/before-warm.txt"
-make -j"${BUILD_JOBS:-4}" build
+cmake --build "$cmake_directory" --target build --parallel "${BUILD_JOBS:-4}"
 find -H "$artifact" -type f -exec stat -f '%N %m' {} + | sort > "$evidence/after-warm.txt"
 cmp "$evidence/before-warm.txt" "$evidence/after-warm.txt"
 rsync -rlpcn --delete --itemize-changes "$artifact/" "$OUT/" > "$evidence/relocation-diff.txt"
@@ -80,7 +83,7 @@ for binary in "$OUT"/darwin-arm64/{vmctl,clankerd-vmspawn,clankerd-network}; do
   codesign --verify --strict "$binary"
   otool -L "$binary"
 done
-python3 scripts/build/verify-host-artifact.py "$OUT"
+cmake -DCLANKERD_ARTIFACT_DIR="$OUT" -P cmake/VerifyHost.cmake
 "$OUT/darwin-arm64/vmctl" --version
 step 'Build guest probe (usually under 1 minute)'
 # The test probe belongs to acceptance, never to the published runtime bundle.
@@ -103,15 +106,8 @@ sudo -v
 # Native gates use sudo for read-only PF observations and temporary test fixtures.
 ( while sleep 30; do sudo -n -v || exit; done ) &
 refresh_pid=$!
-host_cargo() {
-  if [ "${HOST_RUSTFLAGS+x}" = x ]; then
-    CARGO_ENCODED_RUSTFLAGS="$HOST_RUSTFLAGS" cargo "$@"
-  else
-    cargo "$@"
-  fi
-}
 step 'Native bind semantics (long-running: about 1–5 minutes)'
-host_cargo test --locked -p vmctl --test native_bind_semantics -- --ignored --test-threads=1 \
+cmake --build "$cmake_directory" --target native-bind-check \
   > "$evidence/native-bind-semantics.log" 2>&1
 : > "$evidence/results.tsv"
 failures=0

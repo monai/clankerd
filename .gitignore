@@ -3,3 +3,4 @@ __pycache__/
 /build/
 memory/
 target/
+/__cmake_systeminformation/

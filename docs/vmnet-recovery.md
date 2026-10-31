@@ -9,7 +9,8 @@ The guest independently supervises its bundled dhcpcd, clears client evidence wh
 Run the real macOS 15 recovery gate:
 
 ```sh
-mise exec -- make build && scripts/m2-smoke-recovery.sh
+mise exec -- cmake --preset default
+mise exec -- cmake --build --preset default --target build && scripts/m2-smoke-recovery.sh
 ```
 
 The gate holds a real guest link/address outage while checking exec, workload output attachment, signals and a host Unix binding. It also kills the configuration client and repeatedly replaces the native helper, then checks direct IPv4 TCP/UDP, unchanged workload identity, unchanged policy and cleanup. Controlled Linux backend tests exercise real Unix datagram packets across failed helper replacement without claiming real vmnet behavior. Host sleep/wake and external IPv6 need separate host evidence.

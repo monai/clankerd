@@ -32,9 +32,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends e2fsprogs liblzma-dev
 
-      - run: mise exec -- make lint
+      - run: mise exec -- cmake --preset default
 
-      - run: mise exec -- make test
+      - run: mise exec -- cmake --build --preset default --target lint
+
+      - run: mise exec -- cmake --build --preset default --target test
 
       # Seam B as root: chown to foreign owners, mknod, security.capability and
       # the loop-mount population of an ext4 root disk cannot run unprivileged
@@ -51,7 +53,7 @@ jobs:
           if grep -q '^SKIPPED' seam-b.log; then echo "seam B tests were skipped:"; grep '^SKIPPED' seam-b.log; exit 1; fi
 
       - name: Rust coverage (lines and branches)
-        run: mise exec -- make coverage-setup coverage
+        run: mise exec -- cmake --build --preset default --target coverage
 
       - uses: actions/upload-artifact@v7
         with:
@@ -71,7 +73,8 @@ jobs:
           brew tap slp/krun
           brew trust slp/krun
           brew install libkrun
-      - run: mise exec -- python3 scripts/build/homebrew.py make lint test build
+      - run: mise exec -- cmake --preset homebrew
+      - run: mise exec -- cmake --build --preset homebrew --target lint test build
       - uses: actions/upload-artifact@v7
         with:
           name: clankerd-rust

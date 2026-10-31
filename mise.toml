@@ -1,4 +1,6 @@
 [tools]
+cmake = "4.1.2"
+ninja = "1.13.1"
 rust = { version = "1.98.1", targets = "aarch64-apple-darwin,aarch64-unknown-linux-musl", profile = "minimal", components = "clippy,rustfmt" }
 "github:indygreg/apple-platform-rs" = { version = "apple-codesign/0.29.0", bin = "rcodesign" }
 
