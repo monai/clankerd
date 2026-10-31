@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 stage=$1
 publish=$2
 if [ -e "$publish" ] && [ ! -L "$publish" ]; then
@@ -19,7 +19,7 @@ mkdir -p "$publish.bundles"
 bundle=$(mktemp -d "$publish.bundles/bundle.XXXXXX")
 link="$publish.${bundle##*/}.link"
 target="$(basename "$publish").bundles/${bundle##*/}"
-trap 'rm -f "$link"; if [ "$(readlink "$publish" 2>/dev/null || :)" != "$target" ]; then rm -rf "$bundle"; fi' EXIT
+trap 'rm -f "$link"; if [ "$(readlink "$publish" 2>/dev/null || :)" != "$target" ]; then rm -rf "$bundle"; fi' 0
 trap 'exit 1' HUP INT TERM
 cp -pRP "$stage/." "$bundle/"
 ln -s "$target" "$link"
