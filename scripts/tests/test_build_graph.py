@@ -458,7 +458,7 @@ include(cmake/Artifact.cmake)
                     (right / 'file').mkdir()
                 elif change == 'empty-directory':
                     (right / 'empty').rmdir()
-                result = subprocess.run(['python3', str(ROOT / 'scripts/build/compare-trees.py'), str(left), str(right)])
+                result = subprocess.run(['python3', str(ROOT / 'cmake/scripts/compare-trees.py'), str(left), str(right)])
                 self.assertEqual(result.returncode, 0 if change in ('unchanged', 'timestamp') else 1)
                 shutil.rmtree(right)
 
@@ -488,7 +488,7 @@ include(cmake/Artifact.cmake)
             previous = output.resolve(strict=True)
             staged.unlink()
             staged.symlink_to(target)
-            result = subprocess.run(['bash', str(self.root / 'scripts/build/publish.sh'),
+            result = subprocess.run(['bash', str(self.root / 'cmake/scripts/publish.sh'),
                                      str(stage), str(output)], env=self.env, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
             installed = output / 'linux-arm64/management/etc/current-policy'

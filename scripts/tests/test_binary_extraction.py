@@ -7,7 +7,7 @@ import tarfile
 import tempfile
 import unittest
 
-SCRIPT = Path(__file__).parents[1] / 'build' / 'extract-binary.py'
+SCRIPT = Path(__file__).parents[2] / 'cmake' / 'scripts' / 'extract-binary.py'
 
 
 class BinaryExtraction(unittest.TestCase):

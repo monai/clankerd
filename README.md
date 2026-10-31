@@ -59,7 +59,7 @@ All Rust components live under `crates/`:
 | `cmake/` | Build graph and locked guest distribution inputs |
 | `crates/clankerd-guestd/rootfs/` | Guest management filesystem policy |
 | `tests/support/` | Shared test support files |
-| `scripts/` | Build tooling, diagnostics and native smoke tests |
+| `scripts/` | Diagnostics and native smoke tests |
 | `images/` | Docker image recipes and startup helpers for running Docker inside a machine |
 | `docs/` | Build, lifecycle, networking and testing guides |
 

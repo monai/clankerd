@@ -20,9 +20,9 @@ foreach(input IN LISTS GUEST_INPUTS)
     add_custom_command(OUTPUT "${directory}/.stamp"
         COMMAND "${CMAKE_COMMAND}" "-DARCHIVE=${${input}_ARCHIVE}" "-DSHA256=${${input}_SHA256}" -P "${CLANKERD_SOURCE_DIR}/cmake/VerifyInput.cmake"
         COMMAND "${CMAKE_COMMAND}" -E rm -rf "${directory}"
-        COMMAND "${Python3_EXECUTABLE}" "${CLANKERD_SOURCE_DIR}/scripts/build/extract-binary.py" "${${input}_ARCHIVE}" "${directory}"
+        COMMAND "${Python3_EXECUTABLE}" "${CLANKERD_SOURCE_DIR}/cmake/scripts/extract-binary.py" "${${input}_ARCHIVE}" "${directory}"
         COMMAND "${CMAKE_COMMAND}" -E touch "${directory}/.stamp"
-        DEPENDS "${${input}_ARCHIVE}" "${CLANKERD_SOURCE_DIR}/scripts/build/extract-binary.py" "${CLANKERD_SOURCE_DIR}/cmake/VerifyInput.cmake"
+        DEPENDS "${${input}_ARCHIVE}" "${CLANKERD_SOURCE_DIR}/cmake/scripts/extract-binary.py" "${CLANKERD_SOURCE_DIR}/cmake/VerifyInput.cmake"
         VERBATIM)
     list(APPEND CLANKERD_PACKAGE_STAMPS "${directory}/.stamp")
     list(APPEND CLANKERD_PACKAGE_DIRS "${directory}")
@@ -32,8 +32,8 @@ file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/ManagementFiles.txt" CONTENT "${manage
 set(CLANKERD_MANAGEMENT_DIR "${CLANKERD_WORK_DIR}/management")
 add_custom_command(OUTPUT "${CLANKERD_MANAGEMENT_DIR}/.stamp"
     COMMAND "${CMAKE_COMMAND}" -E rm -rf "${CLANKERD_MANAGEMENT_DIR}"
-    COMMAND "${Python3_EXECUTABLE}" "${CLANKERD_SOURCE_DIR}/scripts/build/assemble-management.py" "${CLANKERD_MANAGEMENT_DIR}" "${CLANKERD_SOURCE_DIR}/crates/clankerd-guestd/rootfs" ${CLANKERD_PACKAGE_DIRS} --required ${GUEST_REQUIRED}
+    COMMAND "${Python3_EXECUTABLE}" "${CLANKERD_SOURCE_DIR}/cmake/scripts/assemble-management.py" "${CLANKERD_MANAGEMENT_DIR}" "${CLANKERD_SOURCE_DIR}/crates/clankerd-guestd/rootfs" ${CLANKERD_PACKAGE_DIRS} --required ${GUEST_REQUIRED}
     COMMAND "${CMAKE_COMMAND}" -E touch "${CLANKERD_MANAGEMENT_DIR}/.stamp"
-    DEPENDS ${CLANKERD_PACKAGE_STAMPS} ${management_files} "${CMAKE_BINARY_DIR}/ManagementFiles.txt" "${CLANKERD_INPUTS}" "${CLANKERD_SOURCE_DIR}/scripts/build/assemble-management.py"
+    DEPENDS ${CLANKERD_PACKAGE_STAMPS} ${management_files} "${CMAKE_BINARY_DIR}/ManagementFiles.txt" "${CLANKERD_INPUTS}" "${CLANKERD_SOURCE_DIR}/cmake/scripts/assemble-management.py"
     VERBATIM)
 add_custom_target(management DEPENDS "${CLANKERD_MANAGEMENT_DIR}/.stamp")
