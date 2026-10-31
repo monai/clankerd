@@ -56,7 +56,7 @@ step() {
 step 'Host and source evidence'
 sw_vers
 git rev-parse HEAD > "$evidence/commit.txt"
-git diff HEAD -- crates scripts CMakeLists.txt CMakePresets.json cmake build-support > "$evidence/worktree.diff"
+git diff HEAD -- crates scripts CMakeLists.txt CMakePresets.json cmake tests > "$evidence/worktree.diff"
 step 'Configure CMake and run developer checks'
 cmake --fresh --preset "$cmake_preset" -DCLANKERD_ARTIFACT_DIR="$artifact"
 cmake --build "$cmake_directory" --target lint test --parallel "${BUILD_JOBS:-4}"

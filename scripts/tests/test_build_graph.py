@@ -128,7 +128,7 @@ class ArtifactGraph(unittest.TestCase):
         self.root = Path(self.temporary.name)
         shutil.copytree(ROOT / 'cmake', self.root / 'cmake')
         shutil.copytree(ROOT / 'scripts', self.root / 'scripts', ignore=shutil.ignore_patterns('__pycache__'))
-        shutil.copytree(ROOT / 'build-support', self.root / 'build-support')
+        shutil.copytree(ROOT / 'crates/clankerd-guestd/rootfs', self.root / 'crates/clankerd-guestd/rootfs')
         for name in ['Cargo.toml', 'Cargo.lock', 'crates/clankerd-vmspawn/entitlements.plist',
                      'crates/clankerd-guestd/src/main.rs', 'crates/libclankerd/src/lib.rs']:
             path = self.root / name
@@ -267,7 +267,7 @@ include(cmake/Artifact.cmake)
         self.assertEqual(self.artifact_state(), original)
 
     def test_removed_management_policy_file_is_removed_from_the_bundle(self):
-        policy = self.root / 'build-support/management-rootfs/etc/obsolete-policy'
+        policy = self.root / 'crates/clankerd-guestd/rootfs/etc/obsolete-policy'
         policy.write_text('temporary policy\n')
         self.run_build()
         installed = self.root / 'build/artifact/linux-arm64/management/etc/obsolete-policy'
@@ -277,7 +277,7 @@ include(cmake/Artifact.cmake)
         self.assertFalse(installed.exists())
 
     def test_permission_only_policy_change_is_published(self):
-        policy = self.root / 'build-support/management-rootfs/etc/private-policy'
+        policy = self.root / 'crates/clankerd-guestd/rootfs/etc/private-policy'
         policy.write_text('private policy\n')
         policy.chmod(0o644)
         self.run_build()
@@ -347,7 +347,7 @@ include(cmake/Artifact.cmake)
     def test_static_management_inputs_rebuild_the_filesystem_without_recompiling(self):
         self.run_build()
         artifact = self.root / 'build/artifact'
-        config = self.root / 'build-support/management-rootfs/etc/clankerd/dhcpcd.conf'
+        config = self.root / 'crates/clankerd-guestd/rootfs/etc/clankerd/dhcpcd.conf'
         stamp = next((self.root / 'build/work').glob('*/management/.stamp'))
         previous = stamp.stat().st_mtime_ns
         config.write_text('duid ll\nnoipv4ll\n# fixture policy\n')
@@ -411,14 +411,14 @@ include(cmake/Artifact.cmake)
         self.run_build(env=dict(self.env, GUEST_PAYLOAD='new guest'))
         self.assertNotEqual(output.resolve(strict=True), previous)
         previous = output.resolve(strict=True)
-        policy = self.root / 'build-support/management-rootfs/etc/group'
+        policy = self.root / 'crates/clankerd-guestd/rootfs/etc/group'
         policy.chmod(0o400)
         next((self.root / 'build/work').glob('*/management/.stamp')).unlink()
         self.run_build(env=dict(self.env, GUEST_PAYLOAD='new guest'))
         self.assertEqual((output / 'linux-arm64/management/etc/group').stat().st_mode & 0o777, 0o400)
         self.assertNotEqual(output.resolve(strict=True), previous)
         previous = output.resolve(strict=True)
-        link = self.root / 'build-support/management-rootfs/etc/current-policy'
+        link = self.root / 'crates/clankerd-guestd/rootfs/etc/current-policy'
         link.symlink_to('passwd')
         self.run_build(env=dict(self.env, GUEST_PAYLOAD='new guest'))
         self.assertNotEqual(output.resolve(strict=True), previous)
@@ -465,7 +465,7 @@ include(cmake/Artifact.cmake)
     def test_publication_preserves_symlink_targets(self):
         import shlex
         import shutil
-        link = self.root / 'build-support/management-rootfs/etc/current-policy'
+        link = self.root / 'crates/clankerd-guestd/rootfs/etc/current-policy'
         link.symlink_to('passwd')
         self.run_build()
         output = self.root / 'build/artifact'

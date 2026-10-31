@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 SCRIPT = Path(__file__).parents[1] / 'build' / 'assemble-management.py'
-ROOTFS = Path(__file__).parents[2] / 'build-support/management-rootfs'
+ROOTFS = Path(__file__).parents[2] / 'crates/clankerd-guestd/rootfs'
 
 
 class ManagementFilesystem(unittest.TestCase):

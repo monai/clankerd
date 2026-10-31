@@ -57,7 +57,8 @@ All Rust components live under `crates/`:
 | `crates/clankerd-network/` | Mac networking helper; Apple vmnet attachments and PF firewall rules |
 | `crates/libkrun-sys/` | Rust bindings and boot configuration for libkrun |
 | `cmake/` | Build graph and locked guest distribution inputs |
-| `build-support/` | Management filesystem policy and Linux test tools |
+| `crates/clankerd-guestd/rootfs/` | Guest management filesystem policy |
+| `tests/support/` | Shared test support files |
 | `scripts/` | Build tooling, diagnostics and native smoke tests |
 | `images/` | Docker image recipes and startup helpers for running Docker inside a machine |
 | `docs/` | Build, lifecycle, networking and testing guides |
