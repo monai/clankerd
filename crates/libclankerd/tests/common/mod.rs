@@ -14,9 +14,7 @@ use std::time::Duration;
 use libclankerd::vmm::LocalProcessVmm;
 use libclankerd::{Engine, EngineConfig, HostConfig, Machine, MachineConfig, Vmm};
 
-#[path = "../../../../tests/support/cargo.rs"]
-mod cargo;
-pub use cargo::build_binary as built;
+pub use test_support::build_binary as built;
 
 pub fn guestd_path() -> PathBuf {
     static PATH: OnceLock<PathBuf> = OnceLock::new();

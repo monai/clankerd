@@ -1162,6 +1162,7 @@ dependencies = [
  "sysinfo",
  "tar",
  "tempfile",
+ "test-support",
  "tokio",
  "tokio-stream",
 ]
@@ -2108,6 +2109,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-support"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "thiserror"
 version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2387,6 +2395,7 @@ dependencies = [
  "sha2",
  "tar",
  "tempfile",
+ "test-support",
 ]
 
 [[package]]

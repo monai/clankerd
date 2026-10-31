@@ -7,9 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
-#[path = "../../../../tests/support/cargo.rs"]
-mod cargo;
-pub use cargo::build_binary as built;
+pub use test_support::build_binary as built;
 
 pub fn guestd() -> PathBuf {
     built("clankerd-guestd")
