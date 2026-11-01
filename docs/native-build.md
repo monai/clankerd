@@ -50,28 +50,14 @@ The artifact includes clankerd's executables, Alpine guest management and guest
 license metadata. Running it on another Mac requires installed host libraries
 that its native loader can resolve.
 
-Run consolidated native acceptance:
+Run the implemented native Rust checks after configuring the selected preset:
 
 ```sh
-mise exec -- bash scripts/accept-native-build.sh
+mise exec -- cmake --build --preset default --target test-native
+mise exec -- cmake --build --preset default --target verify-host-lifecycle
 ```
 
-The script configures the Homebrew preset, runs lint and ordinary tests, builds
-and signs the bundle, checks a warm rebuild, and runs real VM acceptance.
-Set `CLANKERD_CMAKE_PRESET=default` to use caller-configured native libraries.
-Pass gate names as script arguments to select a subset. Common management and
-native bind checks still run. `CLANKERD_ARTIFACT_DIR` selects the publication path.
-
-The script prints numbered progress, marks long steps and retains verbose logs
-under `build/acceptance-<UTC>`. It checks script regressions, native compilation,
-warm publication, executable signatures, real SDK compilation, management
-isolation, bind semantics and VM gates. The VMM mapping check accepts installed
-library paths and verifies the requesting user's process and loaded libkrun.
-Library lookup failures remain in the logs and bounded failure summary.
-
-```sh
-mise exec -- python3 scripts/summarize-native-build.py
-```
+`test-native` checks bind semantics. `verify-host-lifecycle` checks exec after workload completion, disk persistence and owned-machine cleanup. Neither establishes distribution relocation, networking recovery or Docker workload behavior. Those journeys remain planned in the [verification skill](../.agents/skills/verify-clankerd/SKILL.md).
 
 Linux developer checks require installed liblzma development/linker files and
 e2fsprogs; guest compilation remains available with `cmake --build --preset default --target cargo-guest`.

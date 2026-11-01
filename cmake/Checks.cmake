@@ -6,16 +6,15 @@ set(check_env "CARGO_TARGET_DIR=${CLANKERD_CARGO_TARGET_DIR}")
 if(CLANKERD_CHECK_SYSTEM STREQUAL "Darwin")
     list(APPEND check_env ${CLANKERD_HOST_ENV})
 endif()
-add_custom_target(test-scripts COMMAND "${Python3_EXECUTABLE}" -u -m unittest discover -v -s scripts/tests -p "test_*.py" WORKING_DIRECTORY "${CLANKERD_SOURCE_DIR}" USES_TERMINAL VERBATIM)
+add_custom_target(test-build COMMAND "${Python3_EXECUTABLE}" -u -m unittest discover -v -s cmake/tests -p "test_*.py" WORKING_DIRECTORY "${CLANKERD_SOURCE_DIR}" USES_TERMINAL VERBATIM)
 if(CLANKERD_CHECK_SYSTEM STREQUAL "Darwin")
     add_custom_target(test-rust
         COMMAND "${CMAKE_COMMAND}" -E env ${check_env} "${CLANKERD_CARGO_EXECUTABLE}" test --locked --workspace --exclude clankerd-guestd --lib --bins
         COMMAND "${CMAKE_COMMAND}" -E env ${check_env} "${CLANKERD_CARGO_EXECUTABLE}" test --locked -p clankerd-proto --test spawn
         COMMAND "${CMAKE_COMMAND}" -E env ${check_env} "${CLANKERD_CARGO_EXECUTABLE}" test --locked -p libkrun-sys --test errors
-        COMMAND "${CMAKE_COMMAND}" -E env ${check_env} "${CLANKERD_CARGO_EXECUTABLE}" test --locked -p vmctl --test version --test smoke_script --test native_bind_semantics
+        COMMAND "${CMAKE_COMMAND}" -E env ${check_env} "${CLANKERD_CARGO_EXECUTABLE}" test --locked -p vmctl --test version --test native_bind_semantics
         WORKING_DIRECTORY "${CLANKERD_SOURCE_DIR}" USES_TERMINAL VERBATIM)
     set(clippy_excludes --exclude clankerd-guestd)
-    add_custom_target(native-bind-check COMMAND "${CMAKE_COMMAND}" -E env ${check_env} "${CLANKERD_CARGO_EXECUTABLE}" test --locked -p vmctl --test native_bind_semantics -- --ignored --test-threads=1 WORKING_DIRECTORY "${CLANKERD_SOURCE_DIR}" USES_TERMINAL VERBATIM)
     add_custom_target(test-linux COMMAND "${CMAKE_COMMAND}" -E echo "Linux guest tests require a Linux execution context" COMMAND "${CMAKE_COMMAND}" -E false)
     add_custom_target(test-native
         COMMAND "${CMAKE_COMMAND}" -E env ${check_env} "OUT=${CLANKERD_ARTIFACT_DIR}" "${CLANKERD_CARGO_EXECUTABLE}" test --locked -p vmctl --test native_bind_semantics -- --ignored --test-threads=1
@@ -41,7 +40,7 @@ else()
         add_custom_target(${target} COMMAND "${CMAKE_COMMAND}" -E echo "Developer checks require Linux or macOS" COMMAND "${CMAKE_COMMAND}" -E false)
     endforeach()
 endif()
-add_custom_target(test DEPENDS test-scripts test-rust)
+add_custom_target(test DEPENDS test-build test-rust)
 if(CLANKERD_CHECK_SYSTEM MATCHES "^(Linux|Darwin)$")
 add_custom_target(lint
     COMMAND "${CMAKE_COMMAND}" -E env ${check_env} "${CLANKERD_CARGO_EXECUTABLE}" fmt --all -- --check
@@ -52,9 +51,16 @@ add_custom_target(lint COMMAND "${CMAKE_COMMAND}" -E echo "Developer checks requ
 endif()
 if(CLANKERD_CHECK_SYSTEM STREQUAL "Linux")
 add_custom_target(coverage-setup COMMAND rustup toolchain install "${CLANKERD_COVERAGE_TOOLCHAIN}" --profile minimal --component llvm-tools-preview USES_TERMINAL VERBATIM)
-add_custom_target(coverage COMMAND "${CMAKE_COMMAND}" -E env ${linux_env} "RUST_COVERAGE_TOOLCHAIN=${CLANKERD_COVERAGE_TOOLCHAIN}" "${Python3_EXECUTABLE}" scripts/rust-coverage.py DEPENDS coverage-setup ${linux_prerequisites} WORKING_DIRECTORY "${CLANKERD_SOURCE_DIR}" USES_TERMINAL VERBATIM)
+add_custom_target(coverage COMMAND "${CMAKE_COMMAND}" -E env ${linux_env} "RUST_COVERAGE_TOOLCHAIN=${CLANKERD_COVERAGE_TOOLCHAIN}" "${Python3_EXECUTABLE}" cmake/scripts/rust-coverage.py DEPENDS coverage-setup ${linux_prerequisites} WORKING_DIRECTORY "${CLANKERD_SOURCE_DIR}" USES_TERMINAL VERBATIM)
 else()
 add_custom_target(coverage-setup COMMAND "${CMAKE_COMMAND}" -E echo "Coverage requires Linux" COMMAND "${CMAKE_COMMAND}" -E false)
 add_custom_target(coverage COMMAND "${CMAKE_COMMAND}" -E echo "Coverage requires Linux" COMMAND "${CMAKE_COMMAND}" -E false)
 endif()
-add_custom_target(test-acceptance COMMAND bash scripts/accept-native-build.sh WORKING_DIRECTORY "${CLANKERD_SOURCE_DIR}" USES_TERMINAL VERBATIM)
+if(CLANKERD_CHECK_SYSTEM STREQUAL "Darwin")
+    add_custom_target(verify-host-lifecycle
+        COMMAND "${CMAKE_COMMAND}" -E env ${check_env} "OUT=${CLANKERD_ARTIFACT_DIR}"
+            "${CLANKERD_CARGO_EXECUTABLE}" test --locked -p vmctl --test native_verification -- lifecycle_preserves_machine_after_workload_exit_and_disk_across_boots --exact --ignored --nocapture --test-threads=1
+        DEPENDS build WORKING_DIRECTORY "${CLANKERD_SOURCE_DIR}" USES_TERMINAL VERBATIM)
+else()
+    add_custom_target(verify-host-lifecycle COMMAND "${CMAKE_COMMAND}" -E echo "Native verification requires Apple Silicon macOS" COMMAND "${CMAKE_COMMAND}" -E false)
+endif()

@@ -59,7 +59,7 @@ All Rust components live under `crates/`:
 | `cmake/` | Build graph and locked guest distribution inputs |
 | `crates/clankerd-guestd/rootfs/` | Guest management filesystem policy |
 | `tests/support/` | Shared test support files |
-| `scripts/` | Diagnostics and native smoke tests |
+| `cmake/tests/` | Build-contract tests |
 | `images/` | Docker image recipes and startup helpers for running Docker inside a machine |
 | `docs/` | Build, lifecycle, networking and testing guides |
 
@@ -164,7 +164,8 @@ Clippy checks. Linux needs liblzma development files and e2fsprogs; privileged
 filesystem tests also need root, loop devices and mount permissions.
 See [Rust testing](docs/rust-testing.md) for setup and coverage.
 
-On a Mac, `mise exec -- bash scripts/accept-native-build.sh` builds and checks the signed bundle
-and runs native VM gates. It uses the Homebrew preset by default.
+On a Mac, build the signed bundle and run `test-native` for bind semantics or
+`verify-host-lifecycle` for lifecycle assertions through CMake. See the
+[verification skill](.agents/skills/verify-clankerd/SKILL.md) for prerequisites and evidence.
 For workloads that need Docker or Compose, see
 [Docker inside a machine](docs/docker-in-machine.md).

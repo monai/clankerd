@@ -51,7 +51,7 @@ container. [Linux loop-device documentation](https://man7.org/linux/man-pages/ma
 
 `cmake/Checks.cmake` declares developer commands separately from artifact
 production. `cmake --build --preset default --target test` runs Python contract tests and direct Cargo tests; it
-does not build the distributable bundle. `cmake --build --preset default --target test-scripts` and `cmake --build --preset default --target test-rust`
+does not build the distributable bundle. `cmake --build --preset default --target test-build` and `cmake --build --preset default --target test-rust`
 select either suite independently. On Linux, Cargo runs the workspace suite.
 Test fixtures build their executable helpers through Cargo when needed. On macOS
 tests use installed host libraries through the native linker and dyld. No guest image,
@@ -62,7 +62,7 @@ process and therefore require Linux; run `mise exec -- cmake --build --preset de
 Linux context. Mac lint checks all host targets and excludes the Linux-only
 guest package. Lint invokes `cargo fmt` and `cargo clippy` directly.
 
-Coverage alone uses `scripts/rust-coverage.py` to pass `CLANKERD_TEST_BINARIES`,
+Coverage alone uses `cmake/scripts/rust-coverage.py` to pass `CLANKERD_TEST_BINARIES`,
 a JSON map of helper names to Cargo-reported executable paths. Ordinary Cargo
 tests ask Cargo for helper binaries when needed; Cargo owns their reuse.
 Coverage instruments the helper prebuild and the test run with the

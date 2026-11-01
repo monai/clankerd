@@ -56,3 +56,6 @@ pub fn build_binary(package: &str) -> PathBuf {
         })
         .unwrap_or_else(|| panic!("cargo reported no executable for {package}"))
 }
+
+#[cfg(unix)]
+pub mod process;

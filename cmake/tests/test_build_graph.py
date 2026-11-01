@@ -127,7 +127,6 @@ class ArtifactGraph(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         shutil.copytree(ROOT / 'cmake', self.root / 'cmake')
-        shutil.copytree(ROOT / 'scripts', self.root / 'scripts', ignore=shutil.ignore_patterns('__pycache__'))
         shutil.copytree(ROOT / 'crates/clankerd-guestd/rootfs', self.root / 'crates/clankerd-guestd/rootfs')
         for name in ['Cargo.toml', 'Cargo.lock', 'crates/clankerd-vmspawn/entitlements.plist',
                      'crates/clankerd-guestd/src/main.rs', 'crates/libclankerd/src/lib.rs']:

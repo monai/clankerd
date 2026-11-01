@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# Builds the prepared DinD context into the current Docker daemon's image store.
 set -euo pipefail
 
-root=$(cd "$(dirname "$0")/.." && pwd)
-context=$root/build/dind-smoke-image
-image=${CLANKERD_DIND_IMAGE:-clankerd-dind:smoke}
+context=$(cd "$(dirname "$0")" && pwd)
+image=${1:-clankerd-slim:local}
 
-if [ ! -f "$context/Dockerfile" ]; then
-    echo "Build context missing: run scripts/m2-prepare-dind-image.sh first." >&2
+if [ "$#" -gt 1 ]; then
+    echo "Usage: $0 [IMAGE_TAG]" >&2
     exit 1
 fi
 if ! command -v docker >/dev/null 2>&1; then

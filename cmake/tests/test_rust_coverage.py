@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-SPEC = importlib.util.spec_from_file_location("rust_coverage", Path(__file__).parents[1] / "rust-coverage.py")
+SPEC = importlib.util.spec_from_file_location("rust_coverage", Path(__file__).parents[1] / "scripts" / "rust-coverage.py")
 runner = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runner)
 

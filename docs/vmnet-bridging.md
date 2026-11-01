@@ -26,17 +26,4 @@ the physical LAN using the bundled guest client; one usable family suffices.
 Use guest addresses directly for TCP/UDP. Users supply any mDNS responder;
 clankerd adds no naming service or multicast reflector.
 
-Run the real-host gate after building:
-
-```sh
-mise exec -- cmake --preset default
-mise exec -- cmake --build --preset default --target build && scripts/m2-smoke-bridged.sh
-```
-
-The fixture enumerates supported active physical interfaces and explicitly
-passes each selected name to the CLI. It tests direct Mac TCP/UDP for available
-families, preboot family-filtered startup, persistence/restart, and failure of an
-unavailable interface. External probes use family-specific sockets and compare
-the same destination from the selected Mac interface and the guest. This does
-not establish independent physical-LAN peer reachability, mDNS discovery, or
-attachment types absent from that host; those acceptance checks remain separate.
+Native verification for this surface remains planned in the [verification skill](../.agents/skills/verify-clankerd/SKILL.md). Run it only on an actual Mac with the required network environment. The lifecycle and bind suites do not establish this behavior. Host sleep/wake, external IPv6 and independent LAN peers require separate observations.

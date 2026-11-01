@@ -6,11 +6,4 @@ The relay lives in the detached VMM process. Opening or closing vmctl does not o
 
 The guest independently supervises its bundled dhcpcd, clears client evidence when it exits, and restarts it with the same configuration. IPv6 peer evidence is rechecked. Address, route, resolver and client-state changes invalidate previous endpoint observations and trigger new probes. Startup still waits for usable networking before launching a workload; subsequent outages leave the workload and vsock management running.
 
-Run the real macOS 15 recovery gate:
-
-```sh
-mise exec -- cmake --preset default
-mise exec -- cmake --build --preset default --target build && scripts/m2-smoke-recovery.sh
-```
-
-The gate holds a real guest link/address outage while checking exec, workload output attachment, signals and a host Unix binding. It also kills the configuration client and repeatedly replaces the native helper, then checks direct IPv4 TCP/UDP, unchanged workload identity, unchanged policy and cleanup. Controlled Linux backend tests exercise real Unix datagram packets across failed helper replacement without claiming real vmnet behavior. Host sleep/wake and external IPv6 need separate host evidence.
+Native verification for this surface remains planned in the [verification skill](../.agents/skills/verify-clankerd/SKILL.md). Run it only on an actual Mac with the required network environment. The lifecycle and bind suites do not establish this behavior. Host sleep/wake, external IPv6 and independent LAN peers require separate observations.
