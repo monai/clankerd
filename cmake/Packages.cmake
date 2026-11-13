@@ -30,10 +30,8 @@ endforeach()
 file(GLOB_RECURSE management_files CONFIGURE_DEPENDS "${CLANKERD_SOURCE_DIR}/crates/clankerd-guestd/rootfs/*")
 file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/ManagementFiles.txt" CONTENT "${management_files}\n")
 set(CLANKERD_MANAGEMENT_DIR "${CLANKERD_WORK_DIR}/management")
-add_custom_command(OUTPUT "${CLANKERD_MANAGEMENT_DIR}/.stamp"
+add_custom_target(management
     COMMAND "${CMAKE_COMMAND}" -E rm -rf "${CLANKERD_MANAGEMENT_DIR}"
     COMMAND "${Python3_EXECUTABLE}" "${CLANKERD_SOURCE_DIR}/cmake/scripts/assemble-management.py" "${CLANKERD_MANAGEMENT_DIR}" "${CLANKERD_SOURCE_DIR}/crates/clankerd-guestd/rootfs" ${CLANKERD_PACKAGE_DIRS} --required ${GUEST_REQUIRED}
-    COMMAND "${CMAKE_COMMAND}" -E touch "${CLANKERD_MANAGEMENT_DIR}/.stamp"
     DEPENDS ${CLANKERD_PACKAGE_STAMPS} ${management_files} "${CMAKE_BINARY_DIR}/ManagementFiles.txt" "${CLANKERD_INPUTS}" "${CLANKERD_SOURCE_DIR}/cmake/scripts/assemble-management.py"
     VERBATIM)
-add_custom_target(management DEPENDS "${CLANKERD_MANAGEMENT_DIR}/.stamp")

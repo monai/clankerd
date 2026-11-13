@@ -270,6 +270,7 @@ fn umount(target: &Path) -> Result<(), Failure> {
 /// the case where it is still mounted).
 pub(crate) struct LoopDevice {
     pub(crate) path: PathBuf,
+    _device: fs::File,
 }
 
 const LOOP_SET_FD: libc::Ioctl = 0x4C00 as libc::Ioctl;
@@ -306,7 +307,7 @@ impl LoopDevice {
             unsafe { libc::ioctl(dev.as_raw_fd(), LOOP_CLR_FD) };
             return Err(e);
         }
-        Ok(LoopDevice { path })
+        Ok(LoopDevice { path, _device: dev })
     }
 }
 

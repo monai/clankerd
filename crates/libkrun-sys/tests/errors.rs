@@ -11,7 +11,10 @@ fn missing_hypervisor_entitlement_names_the_entitlement_and_the_fix() {
     assert_eq!(e.kind(), ErrorKind::EntitlementMissing);
     let msg = e.to_string();
     assert!(msg.contains("com.apple.security.hypervisor"), "{msg}");
-    assert!(msg.contains("make build"), "{msg}");
+    assert!(
+        msg.contains("mise exec -- cmake --build --preset default --target build"),
+        "{msg}"
+    );
 }
 
 #[test]

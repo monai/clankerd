@@ -70,7 +70,7 @@ impl Exec {
             }),
         };
         let created: ExecCreated =
-            serde_json::from_value(guest::call(&socket, METHOD_EXEC_CREATE, &spec)?)?;
+            serde_json::from_value(guest::call(&socket, METHOD_EXEC_CREATE, &spec, None)?)?;
         Ok(Exec {
             socket,
             id: created.id,
@@ -101,7 +101,7 @@ impl Exec {
             rows,
             cols,
         };
-        guest::call(&self.socket, METHOD_EXEC_RESIZE, &p).map(drop)
+        guest::call(&self.socket, METHOD_EXEC_RESIZE, &p, None).map(drop)
     }
 
     /// Sends `signal` (a Linux signal number) to the exec's process group.
@@ -110,7 +110,7 @@ impl Exec {
             id: self.id.clone(),
             signal,
         };
-        guest::call(&self.socket, METHOD_EXEC_KILL, &p).map(drop)
+        guest::call(&self.socket, METHOD_EXEC_KILL, &p, None).map(drop)
     }
 
     pub fn inspect(&self) -> Result<ExecInfo> {
@@ -120,6 +120,7 @@ impl Exec {
             &ExecRef {
                 id: self.id.clone(),
             },
+            None,
         )?;
         Ok(serde_json::from_value(v)?)
     }

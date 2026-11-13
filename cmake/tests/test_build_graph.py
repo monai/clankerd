@@ -283,8 +283,6 @@ include(cmake/Artifact.cmake)
         installed = self.root / 'build/artifact/linux-arm64/management/etc/private-policy'
         self.assertEqual(installed.stat().st_mode & 0o777, 0o644)
         policy.chmod(0o600)
-        stamp = next((self.root / 'build/work').glob('*/management/.stamp'))
-        stamp.unlink()
         self.run_build()
         self.assertEqual(installed.stat().st_mode & 0o777, 0o600)
 
@@ -347,10 +345,7 @@ include(cmake/Artifact.cmake)
         self.run_build()
         artifact = self.root / 'build/artifact'
         config = self.root / 'crates/clankerd-guestd/rootfs/etc/clankerd/dhcpcd.conf'
-        stamp = next((self.root / 'build/work').glob('*/management/.stamp'))
-        previous = stamp.stat().st_mtime_ns
         config.write_text('duid ll\nnoipv4ll\n# fixture policy\n')
-        os.utime(config, ns=(previous + 1, previous + 1))
         self.run_build()
         self.assertEqual((artifact / 'linux-arm64/management/etc/clankerd/dhcpcd.conf').read_text(),
                          'duid ll\nnoipv4ll\n# fixture policy\n')
@@ -412,7 +407,6 @@ include(cmake/Artifact.cmake)
         previous = output.resolve(strict=True)
         policy = self.root / 'crates/clankerd-guestd/rootfs/etc/group'
         policy.chmod(0o400)
-        next((self.root / 'build/work').glob('*/management/.stamp')).unlink()
         self.run_build(env=dict(self.env, GUEST_PAYLOAD='new guest'))
         self.assertEqual((output / 'linux-arm64/management/etc/group').stat().st_mode & 0o777, 0o400)
         self.assertNotEqual(output.resolve(strict=True), previous)
@@ -424,7 +418,6 @@ include(cmake/Artifact.cmake)
         self.assertEqual((output / 'linux-arm64/management/etc/current-policy').readlink(), Path('passwd'))
         link.unlink()
         link.symlink_to('group')
-        next((self.root / 'build/work').glob('*/management/.stamp')).unlink()
         self.run_build(env=dict(self.env, GUEST_PAYLOAD='new guest'))
         self.assertEqual((output / 'linux-arm64/management/etc/current-policy').readlink(), Path('group'))
 
@@ -471,7 +464,6 @@ include(cmake/Artifact.cmake)
         previous = output.resolve(strict=True)
         link.unlink()
         link.symlink_to('group')
-        next((self.root / 'build/work').glob('*/management/.stamp')).unlink()
         self.run_build()
         self.assertEqual((output / 'linux-arm64/management/etc/current-policy').readlink(), Path('group'))
         self.assertNotEqual(output.resolve(strict=True), previous)

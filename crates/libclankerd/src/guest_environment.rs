@@ -18,7 +18,7 @@ pub(crate) fn place(source: &Path, target: &Path) -> Result<()> {
                 == 0
         {
             return Err(Error::unavailable(format!(
-                "management filesystem missing {required} in {}; run make build",
+                "management filesystem missing {required} in {}; run mise exec -- cmake --build --preset default --target build",
                 management.display()
             )));
         }

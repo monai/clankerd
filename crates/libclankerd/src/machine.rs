@@ -94,6 +94,7 @@ impl Machine {
                     &self.inner.socket_path(&self.id),
                     clankerd_proto::guest::METHOD_NETWORK_STATUS,
                     &serde_json::json!({}),
+                    Some(Instant::now() + std::time::Duration::from_secs(2)),
                 )
                 .ok()
                 .and_then(|value| serde_json::from_value(value).ok())
@@ -306,6 +307,7 @@ impl Machine {
             &socket,
             clankerd_proto::guest::METHOD_STARTUP_COMPLETE,
             &serde_json::json!({}),
+            None,
         ) && read_exit_file(&exit_file).is_none()
         {
             kill_group(handle.pid);
@@ -442,6 +444,7 @@ impl Machine {
             &self.inner.socket_path(&self.id),
             METHOD_SET_CLOCK,
             &Clock::now(),
+            None,
         )
         .map(|_| ())
     }
@@ -621,6 +624,7 @@ impl Machine {
             &self.inner.socket_path(&self.id),
             METHOD_SHUTDOWN,
             &ShutdownParams { signal },
+            Some(deadline),
         );
         if asked.is_ok() && self.wait_until(Some(deadline), WaitFor::RunEnd)?.is_some() {
             return Ok(());
@@ -656,6 +660,7 @@ impl Machine {
                     id: String::new(),
                     signal,
                 },
+                None,
             )
             .map(|_| ());
         }
@@ -986,6 +991,7 @@ pub(crate) fn reattach(inner: &Arc<Inner>, id: &str) {
             &inner.socket_path(id),
             clankerd_proto::guest::METHOD_STARTUP_COMPLETE,
             &serde_json::json!({}),
+            None,
         );
         spawn_monitor(
             inner.clone(),

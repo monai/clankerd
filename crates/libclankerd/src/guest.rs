@@ -1,6 +1,9 @@
 //! Host-side client for the guest's `io.clankerd.Guest` varlink interface.
 
-use std::io::BufReader;
+use std::io::{BufReader, Read, Write};
+
+mod deadline;
+use deadline::DeadlineStream;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Instant;
@@ -77,8 +80,22 @@ impl EventStream {
 }
 
 /// Sends one call and returns the reply's parameters; guest errors map to [`Error`].
-pub(crate) fn call(socket: &Path, method: &str, params: &impl Serialize) -> Result<Value> {
-    Ok(send(socket, method, params, false)?.0)
+pub(crate) fn call(
+    socket: &Path,
+    method: &str,
+    params: &impl Serialize,
+    deadline: Option<Instant>,
+) -> Result<Value> {
+    match deadline {
+        Some(deadline) => Ok(exchange(
+            DeadlineStream::connect(socket, deadline)?,
+            method,
+            params,
+            false,
+        )?
+        .0),
+        None => Ok(send(socket, method, params, false)?.0),
+    }
 }
 
 /// Sends a call with `upgrade`. On success the returned reader carries the raw
@@ -98,13 +115,17 @@ fn send(
     params: &impl Serialize,
     upgrade: bool,
 ) -> Result<(Value, BufReader<UnixStream>)> {
-    let mut conn = UnixStream::connect(socket)
+    let conn = UnixStream::connect(socket)
         .map_err(|e| Error::unavailable(format!("cannot reach the guest: {e}")))?;
-    if method == clankerd_proto::guest::METHOD_NETWORK_STATUS {
-        let timeout = Some(std::time::Duration::from_secs(2));
-        conn.set_read_timeout(timeout)?;
-        conn.set_write_timeout(timeout)?;
-    }
+    exchange(conn, method, params, upgrade)
+}
+
+fn exchange<S: Read + Write>(
+    mut conn: S,
+    method: &str,
+    params: &impl Serialize,
+    upgrade: bool,
+) -> Result<(Value, BufReader<S>)> {
     varlink::write(
         &mut conn,
         &Call {

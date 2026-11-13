@@ -1,8 +1,3 @@
-//! Real Mac virtio-fs contracts. Build signed helpers with `make build`, then run:
-//! cargo test -p vmctl --test native_bind_semantics -- --ignored --test-threads=1
-//! OUT selects the helper artifacts; IMAGE selects a Linux image with sh, stat,
-//! chmod, chown, mount, touch and sleep (default: the native smoke-test image).
-
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::PathBuf;
@@ -36,7 +31,7 @@ impl NativeShare {
         ] {
             assert!(
                 out.join(binary).is_file(),
-                "missing {binary}; run make build"
+                "missing {binary}; run mise exec -- cmake --build --preset default --target build"
             );
         }
         let share = Self {
