@@ -8,6 +8,8 @@
     <array>
         <string>/Library/PrivilegedHelperTools/clankerd-network</string>
     </array>
+    <key>StandardErrorPath</key>
+    <string>/var/log/clankerd-network.log</string>
     <key>MachServices</key>
     <dict>
         <key>io.clankerd.network</key>

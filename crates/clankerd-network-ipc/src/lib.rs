@@ -1,6 +1,35 @@
 use std::io;
 use std::os::fd::OwnedFd;
 
+/// Datagram congestion drops a packet; it does not invalidate the connection.
+pub fn is_packet_congestion(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::WouldBlock || error.raw_os_error() == Some(libc::ENOBUFS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_packet_queue_congestion_is_nonfatal() {
+        for (code, expected) in [
+            (libc::EAGAIN, true),
+            (libc::ENOBUFS, true),
+            (libc::ECONNRESET, false),
+            (libc::ENOTCONN, false),
+            (libc::EDESTADDRREQ, false),
+            (libc::EMSGSIZE, false),
+            (libc::EBADF, false),
+        ] {
+            assert_eq!(
+                is_packet_congestion(&io::Error::from_raw_os_error(code)),
+                expected,
+                "errno={code}"
+            );
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {

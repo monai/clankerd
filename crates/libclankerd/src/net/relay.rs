@@ -82,12 +82,20 @@ fn forward(
             if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
                 continue;
             }
+            eprintln!(
+                "clankerd-vmspawn: VM relay poll: {}",
+                io::Error::last_os_error()
+            );
             break;
         }
         if descriptors
             .iter()
             .any(|p| p.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0)
         {
+            eprintln!(
+                "clankerd-vmspawn: VM relay poll flags front={:#x} daemon={:#x}",
+                descriptors[0].revents, descriptors[1].revents
+            );
             break;
         }
         if descriptors[0].revents & libc::POLLIN != 0 {
@@ -103,28 +111,36 @@ fn forward(
             match result {
                 Ok(size) if size >= 14 && super::egress::permits(&buffer[..size], &host) => {
                     if let Err(e) = back.send(&buffer[..size])
-                        && e.kind() != io::ErrorKind::WouldBlock
+                        && !clankerd_network_ipc::is_packet_congestion(&e)
                     {
+                        eprintln!("clankerd-vmspawn: VM relay send size={size}: {e}");
                         break;
                     }
                 }
                 Ok(_) => {}
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
-                Err(_) => break,
+                Err(error) => {
+                    eprintln!("clankerd-vmspawn: VM relay receive/connect: {error}");
+                    break;
+                }
             }
         }
         if descriptors[1].revents & libc::POLLIN != 0 {
             match back.recv(&mut buffer) {
                 Ok(size) if connected => {
                     if let Err(e) = front.send(&buffer[..size])
-                        && e.kind() != io::ErrorKind::WouldBlock
+                        && !clankerd_network_ipc::is_packet_congestion(&e)
                     {
+                        eprintln!("clankerd-vmspawn: VM relay send size={size}: {e}");
                         break;
                     }
                 }
                 Ok(_) => {}
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
-                Err(_) => break,
+                Err(error) => {
+                    eprintln!("clankerd-vmspawn: VM relay receive/connect: {error}");
+                    break;
+                }
             }
         }
     }

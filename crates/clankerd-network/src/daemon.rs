@@ -95,9 +95,17 @@ impl Interface {
             };
             let ready = unsafe { libc::poll(&mut poll, 1, 5) };
             if ready < 0 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+                eprintln!(
+                    "clankerd-network: daemon packet poll: {}",
+                    io::Error::last_os_error()
+                );
                 break;
             }
             if poll.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                eprintln!(
+                    "clankerd-network: daemon packet socket poll flags={:#x}",
+                    poll.revents
+                );
                 break;
             }
             if poll.revents & libc::POLLIN != 0 {
@@ -109,7 +117,10 @@ impl Interface {
                     }
                     Ok(_) => {}
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
-                    Err(_) => break,
+                    Err(error) => {
+                        eprintln!("clankerd-network: daemon packet receive: {error}");
+                        break;
+                    }
                 }
             }
             for _ in 0..64 {
@@ -123,8 +134,9 @@ impl Interface {
                     break;
                 }
                 if let Err(e) = socket.send(&buffer[..size])
-                    && e.kind() != io::ErrorKind::WouldBlock
+                    && !clankerd_network_ipc::is_packet_congestion(&e)
                 {
+                    eprintln!("clankerd-network: daemon packet send size={size}: {e}");
                     active.store(false, Ordering::Relaxed);
                     break;
                 }

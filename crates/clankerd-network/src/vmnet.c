@@ -1,5 +1,6 @@
 #include <dispatch/dispatch.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <uuid/uuid.h>
 #include <xpc/xpc.h>
@@ -84,16 +85,29 @@ int clankerd_vmnet_read(clankerd_interface *handle, unsigned char *buffer, size_
     struct iovec iov = { buffer, handle->max_packet };
     struct vmpktdesc packet = { handle->max_packet, &iov, 1, 0 };
     int count = 1;
-    if (vmnet_read(handle->interface, &packet, &count) != VMNET_SUCCESS) return -1;
+    vmnet_return_t status = vmnet_read(handle->interface, &packet, &count);
+    if (status != VMNET_SUCCESS) {
+        fprintf(stderr, "clankerd-network: vmnet_read status=%u count=%d\n", status, count);
+        return -1;
+    }
     *size = count ? packet.vm_pkt_size : 0;
     return count;
 }
 int clankerd_vmnet_write(clankerd_interface *handle, unsigned char *buffer, size_t size) {
-    if (size < 14 || size > handle->max_packet) return -1;
+    if (size < 14 || size > handle->max_packet) {
+        fprintf(stderr, "clankerd-network: vmnet_write invalid size=%zu max=%zu\n", size, handle->max_packet);
+        return -1;
+    }
     struct iovec iov = { buffer, size };
     struct vmpktdesc packet = { size, &iov, 1, 0 };
     int count = 1;
-    return vmnet_write(handle->interface, &packet, &count) == VMNET_SUCCESS && count == 1 ? 0 : -1;
+    vmnet_return_t status = vmnet_write(handle->interface, &packet, &count);
+    if (status != VMNET_SUCCESS || count != 1) {
+        fprintf(stderr, "clankerd-network: vmnet_write status=%u count=%d size=%zu max=%zu\n",
+            status, count, size, handle->max_packet);
+        return -1;
+    }
+    return 0;
 }
 char *clankerd_vmnet_list(void) {
     xpc_object_t list = vmnet_copy_shared_interface_list();
