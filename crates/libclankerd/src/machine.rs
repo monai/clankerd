@@ -110,7 +110,7 @@ impl Machine {
                 family.probe = None;
             }
             network.ready = false;
-            network.diagnostic = "native Ethernet attachment is unavailable or reconnecting; vsock management remains independent".into();
+            network.diagnostic = "native Ethernet attachment is unavailable; restart the VM to restore networking; vsock management remains independent".into();
         }
         Ok(MachineInfo {
             id: record.id,

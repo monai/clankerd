@@ -16,6 +16,7 @@ include(cmake/Packages.cmake)
 include(cmake/Rust.cmake)
 include(cmake/Artifact.cmake)
 include(cmake/Checks.cmake)
+include(cmake/NetworkHelper.cmake)
 
 if(NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
     add_custom_target(guest-runtime ALL DEPENDS cargo-guest management)

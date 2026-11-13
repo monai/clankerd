@@ -1,29 +1,14 @@
-use std::path::Path;
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 use crate::error::{Error, Result};
 
 /// vmnet's own list is the authority for supported physical attachments.
-pub(super) fn validate_interface(binary: &Path, interface: &str) -> Result<()> {
-    let mut command = Command::new(binary);
-    if cfg!(target_os = "macos") {
-        command.arg("launch");
-    }
-    let output = command
-        .arg("--list-shared-interfaces")
-        .output()
-        .map_err(|e| Error::unavailable(format!("cannot list vmnet physical interfaces: {e}")))?;
-    if !output.status.success() {
-        return Err(Error::unavailable(format!(
-            "cannot list vmnet physical interfaces: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    let supported = String::from_utf8_lossy(&output.stdout);
-    if !supported.lines().any(|line| line.trim() == interface) {
+pub(super) fn validate_interface(interface: &str, supported: &[String]) -> Result<()> {
+    if !supported.iter().any(|name| name == interface) {
         return Err(Error::unavailable(format!(
             "bridge interface {interface} is unavailable or unsupported by vmnet; supported physical interfaces: {}",
-            supported.split_whitespace().collect::<Vec<_>>().join(", ")
+            supported.join(", ")
         )));
     }
     #[cfg(target_os = "macos")]

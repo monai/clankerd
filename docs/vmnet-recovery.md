@@ -1,8 +1,15 @@
 # Network loss and recovery
 
-The native VMM owns a stable Unix datagram attachment between libkrun and the bundled native attachment. When the helper exits or its socket becomes unavailable, this attachment discards Ethernet traffic while restarting the helper with the configuration selected at boot. The mode, shared network, physical interface, machine MAC, interface identity and isolation policy stay unchanged. Retries back off to at most 30 seconds; a missing physical interface or failed permission check remains a network outage rather than selecting another mode.
+The root `clankerd-network` LaunchDaemon owns all native interfaces. The VMM
+holds an XPC connection and a packet socket for its interface. Closing the VMM's
+connection releases that interface.
 
-The relay lives in the detached VMM process. Opening or closing vmctl does not own recovery. Inspection marks both families unavailable while the native attachment is disconnected, preserving current guest addresses/routes as configuration details. Guest external results remain observations of the configured numeric endpoints, with their measurement timestamps.
+If the daemon fails or is replaced, all running VMs lose networking and require
+stop/start. Neither interfaces nor packet sockets reconnect automatically. A new
+client can activate the daemon through launchd, but this does not repair existing
+VMs. Generation identifiers prevent old VM leases from referring to new interfaces.
+Inspection marks both families unavailable when the attachment is lost; vsock
+management remains independent.
 
 The guest independently supervises its bundled dhcpcd, clears client evidence when it exits, and restarts it with the same configuration. IPv6 peer evidence is rechecked. Address, route, resolver and client-state changes invalidate previous endpoint observations and trigger new probes. Startup still waits for usable networking before launching a workload; subsequent outages leave the workload and vsock management running.
 

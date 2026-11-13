@@ -1,24 +1,18 @@
 //! The `NetBackend` extension point: whatever gives a machine's virtio NIC
 //! its network through the clankerd-owned native attachment.
 //!
-//! A backend runs one sidecar per machine. It is started before the VMM, ends
-//! with the machine, and must not die with the library process (machines
-//! outlive it), so backends keep their own record of the sidecar in the
-//! machine directory and [`NetBackend::stop`] works from that record alone.
-
 mod bridge;
 mod egress;
-mod pf;
-pub mod recovery;
+pub mod relay;
 mod vmnet;
 
 use std::path::PathBuf;
 
 use crate::error::Result;
 
-pub use vmnet::VmnetBackend;
+pub use vmnet::{NetworkService, VmnetBackend};
 
-/// What a backend needs to run one machine's sidecar.
+/// What a backend needs to run one machine's interface.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NetSpec {
@@ -26,17 +20,16 @@ pub struct NetSpec {
     /// Stable resource identity, independent of names, state paths and native addressing.
     pub network_id: Option<String>,
     pub host_config: crate::HostConfig,
-    /// The machine's state directory (pid file, sidecar log).
+    /// The machine's state directory (interface lease).
     pub dir: PathBuf,
-    /// Where the sidecar must listen for the VMM's NIC (short path: unix
-    /// socket paths are length-limited).
+    /// Stable attachment identity; the VMM creates its relay socket beside this path.
     pub socket: PathBuf,
 }
 
 /// How the VMM attaches the NIC, and what the guest must be told.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetAttachment {
-    /// The sidecar's unix datagram socket; it exists when `start` returns.
+    /// Attachment identity used by the VMM to obtain its packet socket.
     pub socket: PathBuf,
     pub mac: [u8; 6],
     /// virtio-net feature bits to offer.
@@ -46,10 +39,10 @@ pub struct NetAttachment {
 }
 
 pub trait NetBackend: Send + Sync {
-    /// Starts the machine's sidecar and returns once the VMM can attach.
+    /// Starts the machine's interface and returns once the VMM can attach.
     fn start(&self, spec: &NetSpec) -> Result<NetAttachment>;
 
-    /// Ends the machine's sidecar. Idempotent; safe for a sidecar started by
+    /// Ends the machine's interface. Idempotent; safe for an interface started by
     /// an earlier process and for one that already died.
     fn stop(&self, spec: &NetSpec);
 

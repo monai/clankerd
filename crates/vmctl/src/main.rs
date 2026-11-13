@@ -84,10 +84,7 @@ fn engine(cli: &Cli) -> Result<Engine, Error> {
         cfg.vmm = Arc::new(vmm);
         cfg.populator = Some(Arc::new(populator));
         if !dev_local && !cli.boot_dir_root {
-            cfg.net = Some(Arc::new(match &cli.network_executable {
-                Some(binary) => VmnetBackend::new(binary),
-                None => VmnetBackend::default(),
-            }));
+            cfg.net = Some(Arc::new(VmnetBackend::default()));
         }
     }
     Engine::new(cfg)

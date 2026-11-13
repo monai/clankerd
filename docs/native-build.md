@@ -62,3 +62,48 @@ mise exec -- cmake --build --preset default --target verify-host-lifecycle
 Linux developer checks require installed liblzma development/linker files and
 e2fsprogs; guest compilation remains available with `cmake --build --preset default --target cargo-guest`.
 Linux checks do not establish native Mac linkage, loader or VM behavior.
+
+## Network LaunchDaemon prototype
+
+Native networking requires the system-wide `io.clankerd.network` LaunchDaemon.
+The CLI and VM runner remain ordinary user processes. Install from this checkout
+on macOS (use `homebrew` throughout instead of `default` when applicable):
+
+```sh
+mise exec -- cmake --preset default
+mise exec -- cmake --build --preset default --target install-network-helper
+mise exec -- cmake --build --preset default --target verify-network-helper
+mise exec -- cmake --build --preset default --target verify-network-relay
+mise exec -- cmake --build --preset default --target status-network-helper
+mise exec -- cmake --build --preset default --target verify-host-lifecycle
+```
+
+`install-network-helper` builds the signed artifact, asks for administrator access,
+replaces `/Library/PrivilegedHelperTools/clankerd-network` and installs
+`/Library/LaunchDaemons/io.clankerd.network.plist`. It registers the daemon with
+launchd; the first XPC request starts it. Run this target again after helper changes.
+Normal builds do not install system files. Stop development VMs before reinstalling.
+There is no binary comparison or automatic idle shutdown.
+
+`verify-network-helper` requires the installed helper. It creates two host-only
+interfaces, obtains packet socket descriptors, checks generation handling and
+checks that dropping one owner connection releases only its interface. It uses
+192.168.231.0/24; run without an unrelated vmnet network on that subnet. This test
+does not prove guest traffic, shared Internet access, PF isolation or bridging.
+`verify-network-relay` checks bidirectional forwarding with libkrun’s non-terminated
+Unix socket address format, including the macOS-specific address handling.
+
+```sh
+mise exec -- cmake --build --preset default --target restart-network-helper
+mise exec -- cmake --build --preset default --target uninstall-network-helper
+```
+
+Restart and uninstall require administrator access. Restarting, crashing or
+replacing the daemon breaks networking for all running VMs. Stop/start those VMs
+to restore networking. No interface or packet connection is recovered automatically.
+The restart target can also start a registered daemon that has not yet launched.
+Uninstall stops the service and removes its executable and plist.
+
+The daemon identifies users from XPC credentials, as the old implementation did
+through its user-specific authorization sockets. It does not check program code
+signatures. Any process running as a user can request that user's network operations.

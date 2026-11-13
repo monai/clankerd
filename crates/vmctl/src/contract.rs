@@ -38,9 +38,6 @@ pub struct Cli {
     /// Complete guest management filesystem.
     #[arg(long, env = "CLANKERD_GUEST_ROOT", value_name = "DIR")]
     pub guest_root: Option<PathBuf>,
-    /// Clankerd native networking executable.
-    #[arg(long, env = "CLANKERD_NETWORK", value_name = "PATH")]
-    pub network_executable: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -525,9 +522,7 @@ fn decorate(mut command: clap::Command, depth: usize) -> clap::Command {
             };
             let group = if depth == 0 {
                 match arg.get_id().as_str() {
-                    "vmspawn" | "guest_root" | "network_executable" => {
-                        "Executable overrides (global)"
-                    }
+                    "vmspawn" | "guest_root" => "Executable overrides (global)",
                     _ => "Global options",
                 }
             } else {

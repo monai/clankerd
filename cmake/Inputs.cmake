@@ -42,9 +42,9 @@ set(guest_libuuid_URL "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/
 set(guest_libuuid_SHA256 "9ce20c7ffe2ccaa7c321893c10564abbca13c3f2edb82f60a35f1f68e004f86c")
 set(guest_libuuid_VERSION "2.42.3-r1")
 set(guest_libuuid_LICENSE "BSD-3-Clause")
-set(guest_musl_URL "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/musl-1.2.6-r2.apk")
-set(guest_musl_SHA256 "5e9674b7f41152fe2119093b5cb4c13eaaadb19c2d5422b2d7267913e663ee6e")
-set(guest_musl_VERSION "1.2.6-r2")
+set(guest_musl_URL "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/musl-1.2.6-r3.apk")
+set(guest_musl_SHA256 "2e17864102278d9049c3a56f1bceed9e8cf287065617e579325123443daed8a5")
+set(guest_musl_VERSION "1.2.6-r3")
 set(guest_musl_LICENSE "MIT")
 set(GUEST_INPUTS alpine
     guest_busybox

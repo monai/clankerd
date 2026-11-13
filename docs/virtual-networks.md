@@ -64,10 +64,12 @@ acknowledge it before workload startup; restart retains it. Host-only resources
 have no global IPv6 prefix.
 
 The bundled `clankerd-network` uses Apple's vmnet APIs and owns PF operations.
-Ordinary sudo authorization starts a runtime-owned authorization session; the
-VM and Ethernet transport remain unprivileged. No system helper, installer,
-sudoers entry or alternate controller is supported. `--network-executable PATH`
-(or `CLANKERD_NETWORK`) selects an explicit executable for development.
+A root `clankerd-network` LaunchDaemon owns all native interfaces. Install it once
+with the [CMake install target](native-build.md#network-launchdaemon-prototype).
+`vmctl` creates interfaces through XPC; `clankerd-vmspawn` obtains a packet socket
+and holds the interface's XPC connection for the VM's lifetime. The VM and its
+relay run as the ordinary user. There are no per-VM networking processes or
+runtime sudo prompts. The old `--network-executable` override is removed.
 
 The VMM-owned relay rejects IPv4 sources outside the selected guest subnet and
 IPv6 sources outside the actual native-advertised ULA /64 or link-local scope.
@@ -85,16 +87,15 @@ ID, discovers the bridge through its gateway, validates PF syntax, and replaces 
 share one native bridge, even if their subnets and IPv6 prefixes match. One
 resource cannot be split over different native bridges. A native addressing
 collision across state directories therefore fails startup instead of merging
-networks. Each attachment's recovery configuration retains its resource ID.
+networks. Each daemon-owned attachment retains its resource ID.
 
 Stopping an attachment removes its registration. Other members retain the rules;
-the last attachment releases clankerd's own PF enable reference. Helper recovery
-registers its new PID and bridge before reconnecting Ethernet. Stale helper
-registrations are pruned on the next controller operation. Failed registration
+the last attachment releases clankerd's own PF enable reference. Daemon startup
+clears registrations left by a previous daemon instance. Failed registration
 prevents workload startup. A failed registry write or rename restores the previous
-rules and releases any reference acquired by that registration. A failed reference
-release retains a registry entry so cleanup can retry. Failed cleanup is reported and can leave restrictive
-rules until the next operation reconciles the registry.
+rules and releases any reference acquired by that registration. A failed cleanup is returned to an explicit stop request or logged when the owner
+disconnects or the daemon shuts down. Cleanup is not retried automatically.
+Leftover firewall rules or enable references require administrator intervention.
 
 The native-prefix gate now checks the bundled controller with actual routed
 IPv4/IPv6 TCP/UDP traffic, same-network controls, Mac access, NAT, member stop,

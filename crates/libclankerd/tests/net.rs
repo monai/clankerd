@@ -1,55 +1,19 @@
-//! Seam A: the network sidecar. The only fakes are the `Vmm` (guestd as a
-//! local process) and the native attachment executable (a shell script that makes its socket
-//! and waits to be signalled, like the real one).
-
+//! Network lifecycle through typed daemon requests; guestd runs locally.
 mod common;
-
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-
+#[path = "common/network.rs"]
+mod network;
 use common::*;
 use libclankerd::net::VmnetBackend;
 use libclankerd::vmm::{BootHandle, BootSpec, LocalProcessVmm};
 use libclankerd::{Engine, ErrorKind, HostConfig, Status, Vmm};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-const FAKE_VMNET: &str = r#"#!/bin/sh
-echo "$@" > "$0.args"
-sock=""
-prefix=""
-while [ $# -gt 0 ]; do
-  case "$1" in --socket) sock=$2 ;; --nat66-prefix) prefix=$2 ;; esac
-  shift
-done
-echo $$ > "$0.pid"
-echo 'INFO starting interface' >&2
-if [ -n "$prefix" ]; then
-  printf '{"pid":%s,"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514,"vmnet_nat66_prefix":"%s"}\n' "$$" "$prefix"
-else
-printf '{"pid":%s,"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514}\n' "$$"
-fi
-: > "$sock"
-trap 'rm -f "$sock"; exit 0' TERM
-while :; do sleep 0.1; done
-"#;
-
-const FAILING_VMNET: &str = "#!/bin/sh\necho 'cannot listen: address in use' >&2\nexit 3\n";
-
-fn script(dir: &Path, body: &str) -> PathBuf {
-    let path = dir.join("clankerd-network");
-    std::fs::write(&path, body).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    path
-}
-
-/// Remembers every BootSpec, then boots like the local stand-in.
 struct Recording {
     inner: LocalProcessVmm,
     specs: Mutex<Vec<BootSpec>>,
     probe_endpoints: Option<serde_json::Value>,
 }
-
 impl Vmm for Recording {
     fn boot(&self, spec: &BootSpec) -> libclankerd::Result<BootHandle> {
         let mut spec = spec.clone();
@@ -62,146 +26,182 @@ impl Vmm for Recording {
         self.inner.boot(&spec)
     }
 }
-
 struct Rig {
     _env: Env,
     engine: Engine,
     vmm: Arc<Recording>,
-    helper: PathBuf,
+    service: Arc<network::Service>,
 }
-
-fn rig(helper_body: &str) -> Rig {
-    rig_with_probes(helper_body, None)
+fn rig() -> Rig {
+    rig_with_probes(None)
 }
-fn rig_with_probes(helper_body: &str, probe_endpoints: Option<serde_json::Value>) -> Rig {
+fn rig_with_probes(probe_endpoints: Option<serde_json::Value>) -> Rig {
+    rig_with_service(Arc::default(), probe_endpoints)
+}
+fn rig_with_service(
+    service: Arc<network::Service>,
+    probe_endpoints: Option<serde_json::Value>,
+) -> Rig {
     let env = Env::new();
-    let helper = script(env.root(), helper_body);
     let vmm = Arc::new(Recording {
         inner: LocalProcessVmm::new(guestd_path()),
         specs: Mutex::default(),
         probe_endpoints,
     });
     let mut cfg = env.config(vmm.clone());
-    cfg.net = Some(Arc::new(VmnetBackend::new(&helper)));
+    cfg.net = Some(Arc::new(VmnetBackend::with_service(service.clone())));
     let engine = Engine::new(cfg).unwrap();
     Rig {
         _env: env,
         engine,
         vmm,
-        helper,
+        service,
     }
 }
-
 impl Rig {
-    fn sidecar_pid(&self) -> i32 {
-        let path = format!("{}.pid", self.helper.display());
-        std::fs::read_to_string(path)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap()
-    }
-    fn args(&self) -> String {
-        std::fs::read_to_string(format!("{}.args", self.helper.display())).unwrap()
-    }
     fn last_spec(&self) -> BootSpec {
         self.vmm.specs.lock().unwrap().last().unwrap().clone()
     }
 }
-
-fn alive(pid: i32) -> bool {
-    // SAFETY: signal 0 only probes.
-    unsafe { libc::kill(pid, 0) == 0 }
-}
-
-fn wait_gone(pid: i32) {
-    let deadline = Instant::now() + Duration::from_secs(8);
-    while alive(pid) {
-        assert!(Instant::now() < deadline, "sidecar {pid} is still running");
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
 fn long_running(engine: &Engine, name: &str) -> libclankerd::Machine {
     create(engine, name, "while true; do sleep 0.05; done")
 }
 
 #[test]
-fn the_sidecar_runs_while_the_machine_runs_and_ends_with_a_stop() {
-    let rig = rig(FAKE_VMNET);
-    let m = long_running(&rig.engine, "net-stop");
-    m.start().unwrap();
-    let pid = rig.sidecar_pid();
-    assert!(alive(pid));
-    m.stop(Duration::from_secs(10)).unwrap();
-    wait_gone(pid);
+fn interfaces_follow_machine_lifetime_and_not_workload_lifetime() {
+    let rig = rig();
+    let a = create(&rig.engine, "a", "sleep 0.2");
+    let b = long_running(&rig.engine, "b");
+    a.start().unwrap();
+    b.start().unwrap();
+    assert_eq!(rig.service.count(), 2);
+    a.wait_workload().unwrap();
+    assert_eq!(a.inspect().unwrap().state.status, Status::Running);
+    assert_eq!(rig.service.count(), 2);
+    a.stop(Duration::from_secs(10)).unwrap();
+    assert_eq!(rig.service.count(), 1);
+    b.kill(libc::SIGKILL).unwrap();
+    assert_eq!(rig.service.count(), 0);
+    b.start().unwrap();
+    assert_eq!(rig.service.count(), 1);
+    b.remove(true).unwrap();
+    assert_eq!(rig.service.count(), 0);
 }
-
 #[test]
-fn the_sidecar_ends_when_the_machine_is_killed_or_removed() {
-    let rig = rig(FAKE_VMNET);
-    let m = long_running(&rig.engine, "net-kill");
-    m.start().unwrap();
-    let pid = rig.sidecar_pid();
-    m.kill(libc::SIGKILL).unwrap();
-    wait_gone(pid);
-
-    m.start().unwrap();
-    let again = rig.sidecar_pid();
-    assert_ne!(again, pid);
-    assert!(alive(again));
-    m.remove(true).unwrap();
-    wait_gone(again);
-}
-
-#[test]
-fn the_sidecar_outlives_the_command_until_the_machine_is_stopped() {
-    let rig = rig(FAKE_VMNET);
-    let m = create(&rig.engine, "net-exit", "sleep 0.3");
-    m.start().unwrap();
-    let pid = rig.sidecar_pid();
-    m.wait_workload().unwrap();
-    assert_eq!(m.inspect().unwrap().state.status, Status::Running);
-    assert!(alive(pid));
-    m.stop(Duration::from_secs(5)).unwrap();
-    wait_gone(pid);
-}
-
-#[test]
-fn shared_network_attaches_without_offloads_or_endpoint_guards() {
-    let rig = rig(FAKE_VMNET);
-    let m = long_running(&rig.engine, "net-spec");
-    m.start().unwrap();
-    let spec = rig.last_spec();
-    let net = spec.net.unwrap();
-    assert!(!net.vfkit);
-    assert_eq!(net.features, 0);
-    assert!(rig.args().contains("--operation-mode shared"));
-    assert!(rig.args().contains("--interface-id"));
-    assert!(rig.args().contains("--start-address 192.168.105.1"));
-    assert!(net.socket.exists());
-    assert_eq!(spec.workload.network.unwrap().interface, "eth0");
-    m.kill(libc::SIGKILL).unwrap();
-}
-
-#[test]
-fn a_sidecar_that_dies_at_startup_fails_the_start_with_its_message() {
-    let rig = rig(FAILING_VMNET);
-    let m = long_running(&rig.engine, "net-fail");
-    let err = m.start().unwrap_err();
-    assert_eq!(err.kind(), ErrorKind::Unavailable);
-    assert!(
-        err.message().contains("address in use"),
-        "{}",
-        err.message()
-    );
+fn daemon_failure_prevents_vm_boot_and_reports_its_error() {
+    let rig = rig();
+    *rig.service.failure.lock().unwrap() = Some("daemon unavailable".into());
+    let m = long_running(&rig.engine, "fail");
+    let error = m.start().unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Unavailable);
+    assert!(error.message().contains("daemon unavailable"));
+    assert!(rig.vmm.specs.lock().unwrap().is_empty());
     assert_eq!(m.inspect().unwrap().state.status, Status::Created);
-    assert!(
-        rig.vmm.specs.lock().unwrap().is_empty(),
-        "no VMM without a network"
-    );
 }
-
+#[test]
+fn daemon_loss_does_not_recreate_interfaces_until_explicit_restart() {
+    let rig = rig();
+    let m = long_running(&rig.engine, "lost");
+    m.start().unwrap();
+    rig.service.entries.lock().unwrap().clear();
+    let info = m.inspect().unwrap();
+    assert_eq!(info.state.status, Status::Running);
+    assert!(!info.network.unwrap().ready);
+    assert_eq!(rig.service.history.lock().unwrap().len(), 1);
+    m.stop(Duration::from_secs(10)).unwrap();
+    m.start().unwrap();
+    assert_eq!(rig.service.history.lock().unwrap().len(), 2);
+    assert_eq!(rig.service.count(), 1);
+    m.remove(true).unwrap();
+}
+#[test]
+fn typed_settings_preserve_network_modes_addresses_and_prefixes() {
+    for (name, mode, expected) in [
+        ("shared", libclankerd::NetworkMode::Shared, "shared"),
+        ("host", libclankerd::NetworkMode::HostOnly, "host"),
+        ("bridge", libclankerd::NetworkMode::Bridged, "bridged"),
+    ] {
+        let rig = rig();
+        let host = HostConfig {
+            network_mode: mode,
+            bridge_interface: (expected == "bridged").then(|| "en0".into()),
+            ..Default::default()
+        };
+        let m = rig.engine.create(Some(name), sh("sleep 60"), host).unwrap();
+        m.start().unwrap();
+        let initial = rig.service.last();
+        assert_eq!(initial.operation_mode, expected);
+        if expected == "bridged" {
+            assert_eq!(initial.shared_interface.as_deref(), Some("en0"));
+            assert!(initial.start_address.is_none());
+        } else {
+            assert!(initial.start_address.is_some());
+            assert!(initial.network_id.is_some());
+        }
+        assert_eq!(initial.nat66_prefix.is_some(), expected == "shared");
+        assert_eq!(rig.last_spec().net.unwrap().features, 0);
+        m.stop(Duration::from_secs(10)).unwrap();
+        m.start().unwrap();
+        let again = rig.service.last();
+        assert_eq!(initial.interface_id, again.interface_id);
+        assert_eq!(initial.network_id, again.network_id);
+        assert_eq!(initial.nat66_prefix, again.nat66_prefix);
+        m.remove(true).unwrap();
+    }
+}
+#[test]
+fn wrong_prefix_rolls_back_interface_before_vm_boot() {
+    let rig = rig_with_service(
+        Arc::new(network::Service {
+            wrong_prefix: true,
+            ..Default::default()
+        }),
+        None,
+    );
+    let m = long_running(&rig.engine, "prefix");
+    assert!(m.start().is_err());
+    assert_eq!(rig.service.count(), 0);
+    assert!(rig.vmm.specs.lock().unwrap().is_empty());
+}
+#[test]
+fn membership_changes_are_sent_to_daemon_only_after_stopping() {
+    let rig = rig();
+    let a = rig
+        .engine
+        .create_network("first", libclankerd::NetworkKind::HostOnly, None)
+        .unwrap();
+    let b = rig
+        .engine
+        .create_network("second", libclankerd::NetworkKind::HostOnly, None)
+        .unwrap();
+    let m = rig
+        .engine
+        .create(
+            Some("member"),
+            sh("sleep 60"),
+            HostConfig {
+                virtual_network: Some(a.name),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    m.start().unwrap();
+    assert_eq!(rig.service.last().network_id, Some(a.id));
+    let info = m.inspect().unwrap();
+    let next = HostConfig {
+        virtual_network: Some(b.name),
+        ..Default::default()
+    };
+    assert_eq!(
+        m.update(&info.config, next.clone()).unwrap_err().kind(),
+        ErrorKind::Conflict
+    );
+    m.stop(Duration::from_secs(10)).unwrap();
+    m.update(&info.config, next).unwrap();
+    m.start().unwrap();
+    assert_eq!(rig.service.last().network_id, Some(b.id));
+    m.remove(true).unwrap();
+}
 #[test]
 fn without_a_net_backend_machines_boot_without_a_nic() {
     let env = Env::new();
@@ -222,34 +222,8 @@ fn without_a_net_backend_machines_boot_without_a_nic() {
 }
 
 #[test]
-fn the_vmspawn_helper_is_told_to_attach_the_nic() {
-    let env = Env::new();
-    let helper = script(env.root(), FAKE_VMNET);
-    let mut cfg = env.config(Arc::new(
-        libclankerd::vmm::VmspawnVmm::new(vmspawn_path(), guest_root()).dev_local(),
-    ));
-    cfg.net = Some(Arc::new(VmnetBackend::new(&helper)));
-    let engine = Engine::new(cfg).unwrap();
-    let m = long_running(&engine, "net-helper");
-    m.start().unwrap();
-
-    let spec_file = env
-        .root()
-        .join("state/machines")
-        .join(m.id())
-        .join("vmspawn.json");
-    let spec: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(spec_file).unwrap()).unwrap();
-    let net = &spec["net"];
-    assert_eq!(net["vfkit"], false);
-    assert_eq!(net["features"], 0);
-    assert!(net["socket"].as_str().unwrap().ends_with(".net"));
-    m.kill(libc::SIGKILL).unwrap();
-}
-
-#[test]
 fn network_identity_is_unique_and_survives_restart() {
-    let rig = rig(FAKE_VMNET);
+    let rig = rig();
     let first = long_running(&rig.engine, "identity-one");
     let second = long_running(&rig.engine, "identity-two");
     first.start().unwrap();
@@ -266,33 +240,8 @@ fn network_identity_is_unique_and_survives_restart() {
 }
 
 #[test]
-fn a_helper_that_creates_a_socket_then_fails_does_not_launch_the_workload() {
-    let rig = rig(r#"#!/bin/sh
-while [ $# -gt 0 ]; do
-  case "$1" in --socket) sock=$2 ;; esac
-  shift
-done
-: > "$sock"
-echo 'interface setup failed after binding socket' >&2
-exit 3
-"#);
-    let machine = long_running(&rig.engine, "partial-attachment");
-    let error = machine.start().unwrap_err();
-    assert!(error.message().contains("interface setup failed"));
-    assert!(rig.vmm.specs.lock().unwrap().is_empty());
-    assert!(
-        !rig._env
-            .root()
-            .join("state/machines")
-            .join(machine.id())
-            .join("net.pid")
-            .exists()
-    );
-}
-
-#[test]
 fn inspection_reports_both_families_without_claiming_an_unconfigured_network_is_usable() {
-    let rig = rig(FAKE_VMNET);
+    let rig = rig();
     let machine = long_running(&rig.engine, "family-status");
     machine.start().unwrap();
     let info = serde_json::to_value(machine.inspect().unwrap()).unwrap();
@@ -318,12 +267,9 @@ fn external_observations_report_actual_family_specific_endpoint_success_and_fail
             drop(ipv4);
             ipv6
         };
-        let rig = rig_with_probes(
-            FAKE_VMNET,
-            Some(serde_json::json!({
-                "ipv4":destination4.to_string(), "ipv6":destination6.to_string()
-            })),
-        );
+        let rig = rig_with_probes(Some(serde_json::json!({
+            "ipv4":destination4.to_string(), "ipv6":destination6.to_string()
+        })));
         let machine = long_running(&rig.engine, "observed-endpoints");
         machine.start().unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -375,7 +321,7 @@ fn external_observations_report_actual_family_specific_endpoint_success_and_fail
 
 #[test]
 fn bridged_network_requires_an_explicit_physical_interface() {
-    let rig = rig(FAKE_VMNET);
+    let rig = rig();
     for config in [
         serde_json::json!({"network_mode":"bridged"}),
         serde_json::json!({"network_mode":"bridged","bridge_interface":""}),
@@ -396,144 +342,8 @@ fn bridged_network_requires_an_explicit_physical_interface() {
 }
 
 #[test]
-fn selected_network_changes_apply_only_after_stopping() {
-    let rig = rig(FAKE_VMNET);
-    let host: HostConfig = serde_json::from_value(serde_json::json!({
-        "shared_network":{"address":"192.168.109.0","prefix_len":24}
-    }))
-    .unwrap();
-    let machine = rig
-        .engine
-        .create(
-            Some("selected-network"),
-            sh("while true; do sleep 0.05; done"),
-            host,
-        )
-        .unwrap();
-    machine.start().unwrap();
-    let args = rig.args();
-    let before = machine.inspect().unwrap();
-    assert!(before.host_config.virtual_network.is_some());
-    assert_eq!(
-        before.host_config.shared_network.address.to_string(),
-        "192.168.109.0"
-    );
-    let base = u32::from(before.host_config.shared_network.address);
-    assert!(
-        args.contains(&format!(
-            "--start-address {}",
-            std::net::Ipv4Addr::from(base + 1)
-        )),
-        "{args}"
-    );
-    assert!(
-        !args.contains("--enable-isolation"),
-        "membership replaces per-member isolation"
-    );
-    let next: HostConfig = serde_json::from_value(serde_json::json!({
-        "shared_network":{"address":"192.168.110.0","prefix_len":25}
-    }))
-    .unwrap();
-    assert_eq!(
-        machine
-            .update(&before.config, next.clone())
-            .unwrap_err()
-            .kind(),
-        ErrorKind::Conflict
-    );
-    assert_eq!(rig.args(), args, "a running attachment cannot be replaced");
-    machine.stop(Duration::from_secs(10)).unwrap();
-    machine.update(&before.config, next).unwrap();
-    machine.start().unwrap();
-    let changed = rig.args();
-    assert!(
-        changed.contains("--start-address 192.168.110.1"),
-        "{changed}"
-    );
-    assert!(
-        changed.contains("--end-address 192.168.110.126"),
-        "{changed}"
-    );
-    assert!(
-        changed.contains("--subnet-mask 255.255.255.128"),
-        "{changed}"
-    );
-    assert!(!changed.contains("--enable-isolation"), "{changed}");
-    machine.stop(Duration::from_secs(10)).unwrap();
-    machine.start().unwrap();
-    assert_eq!(
-        rig.args(),
-        changed,
-        "selected network must persist across another restart"
-    );
-    machine.stop(Duration::from_secs(10)).unwrap();
-}
-
-const BRIDGE_VMNET: &str = r#"#!/bin/sh
-if [ "$1" = --list-shared-interfaces ]; then echo en0; echo en1; exit 0; fi
-echo "$@" > "$0.args"
-while [ $# -gt 0 ]; do
-  case "$1" in --socket) sock=$2 ;; esac
-  shift
-done
-echo 'INFO starting interface' >&2
-printf '{"pid":%s,"vmnet_mac_address":"0a:d6:36:c1:ea:f3","vmnet_mtu":1500,"vmnet_max_packet_size":1514}\n' "$$"
-: > "$sock"
-trap 'rm -f "$sock"; exit 0' TERM
-while :; do sleep 0.1; done
-"#;
-
-#[test]
-fn a_selected_physical_interface_is_attached_and_preserved_across_restart() {
-    let rig = rig(BRIDGE_VMNET);
-    let host: HostConfig = serde_json::from_value(serde_json::json!({
-        "network_mode":"bridged", "bridge_interface":"en0"
-    }))
-    .unwrap();
-    let machine = rig
-        .engine
-        .create(
-            Some("bridge-selected"),
-            sh("while true; do sleep 0.05; done"),
-            host,
-        )
-        .unwrap();
-    machine.start().unwrap();
-    assert!(
-        rig.args().contains("--operation-mode bridged"),
-        "{}",
-        rig.args()
-    );
-    assert!(
-        rig.args().contains("--shared-interface en0"),
-        "{}",
-        rig.args()
-    );
-    assert!(!rig.args().contains("--start-address"));
-    assert!(!rig.args().contains("--enable-isolation"));
-    let info = machine.inspect().unwrap();
-    let mut next = info.host_config.clone();
-    next.bridge_interface = Some("en1".into());
-    assert_eq!(
-        machine
-            .update(&info.config, next.clone())
-            .unwrap_err()
-            .kind(),
-        ErrorKind::Conflict
-    );
-    machine.stop(Duration::from_secs(10)).unwrap();
-    machine.update(&info.config, next).unwrap();
-    machine.start().unwrap();
-    assert!(rig.args().contains("--shared-interface en1"));
-    machine.stop(Duration::from_secs(10)).unwrap();
-    machine.start().unwrap();
-    assert!(rig.args().contains("--shared-interface en1"));
-    machine.stop(Duration::from_secs(10)).unwrap();
-}
-
-#[test]
 fn an_unsupported_physical_interface_fails_before_the_workload_is_launched() {
-    let rig = rig(BRIDGE_VMNET);
+    let rig = rig();
     let host: HostConfig = serde_json::from_value(serde_json::json!({
         "network_mode":"bridged", "bridge_interface":"en9"
     }))
@@ -548,19 +358,12 @@ fn an_unsupported_physical_interface_fails_before_the_workload_is_launched() {
     assert!(error.message().contains("unsupported"));
     assert!(rig.vmm.specs.lock().unwrap().is_empty());
     assert_eq!(machine.inspect().unwrap().state.status, Status::Created);
-    assert!(
-        !rig._env
-            .root()
-            .join("state/machines")
-            .join(machine.id())
-            .join("net.pid")
-            .exists()
-    );
+    assert_eq!(rig.service.count(), 0);
 }
 
 #[test]
 fn invalid_shared_network_selection_fails_before_creating_or_attaching_a_machine() {
-    let rig = rig(FAKE_VMNET);
+    let rig = rig();
     for (address, prefix_len) in [
         ("192.168.109.3", 24),
         ("203.0.113.0", 24),
@@ -586,67 +389,8 @@ fn invalid_shared_network_selection_fails_before_creating_or_attaching_a_machine
 }
 
 #[test]
-fn a_bound_socket_without_native_interface_metadata_is_not_a_ready_attachment() {
-    let rig = rig(r#"#!/bin/sh
-while [ $# -gt 0 ]; do
-  case "$1" in --socket) sock=$2 ;; esac
-  shift
-done
-: > "$sock"
-echo 'interface still initializing, no completion metadata' >&2
-trap 'rm -f "$sock"; exit 0' TERM
-while :; do sleep 0.1; done
-"#);
-    let machine = long_running(&rig.engine, "socket-without-interface");
-    let error = machine.start().unwrap_err();
-    assert!(error.message().contains("no completion metadata"));
-    assert!(rig.vmm.specs.lock().unwrap().is_empty());
-    assert_eq!(machine.inspect().unwrap().state.status, Status::Created);
-    assert!(
-        !rig._env
-            .root()
-            .join("state/machines")
-            .join(machine.id())
-            .join("net.pid")
-            .exists()
-    );
-}
-
-#[test]
-fn host_only_membership_persists_across_restarts() {
-    let rig = rig(FAKE_VMNET);
-    let host: HostConfig = serde_json::from_value(serde_json::json!({
-        "network_mode":"host-only",
-        "shared_network":{"address":"192.168.128.0","prefix_len":24}
-    }))
-    .unwrap();
-    let machine = rig
-        .engine
-        .create(
-            Some("host-only"),
-            sh("while true; do sleep 0.05; done"),
-            host.clone(),
-        )
-        .unwrap();
-    let assigned = machine.inspect().unwrap().host_config;
-    for _ in 0..2 {
-        machine.start().unwrap();
-        let args = rig.args();
-        assert!(args.contains("--operation-mode host"), "{args}");
-        assert!(
-            !args.contains("--enable-isolation"),
-            "network members must retain peer communication: {args}"
-        );
-        assert!(!args.contains("--operation-mode shared"), "{args}");
-        assert!(assigned.virtual_network.is_some());
-        assert_eq!(machine.inspect().unwrap().host_config, assigned);
-        machine.stop(Duration::from_secs(10)).unwrap();
-    }
-}
-
-#[test]
 fn host_only_members_share_the_same_virtual_network() {
-    let rig = rig(FAKE_VMNET);
+    let rig = rig();
     let host = HostConfig {
         network_mode: libclankerd::NetworkMode::HostOnly,
         ..Default::default()
@@ -659,111 +403,4 @@ fn host_only_members_share_the_same_virtual_network() {
     let a = a.inspect().unwrap().host_config;
     let b = b.inspect().unwrap().host_config;
     assert_eq!(a.virtual_network, b.virtual_network);
-}
-
-#[test]
-fn named_shared_prefix_must_be_acknowledged_before_workload_start() {
-    let rig = rig(FAKE_VMNET);
-    let network = rig
-        .engine
-        .create_network("prefixed", libclankerd::NetworkKind::Shared, None)
-        .unwrap();
-    let machine = rig
-        .engine
-        .create(
-            Some("prefixed-member"),
-            sh("sleep 60"),
-            HostConfig {
-                virtual_network: Some(network.name),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    machine.start().unwrap();
-    let prefix = network.ipv6_prefix.unwrap();
-    assert!(rig.args().contains(&format!("--nat66-prefix {prefix}")));
-    assert_eq!(
-        machine.inspect().unwrap().host_config.shared_ipv6_prefix,
-        Some(prefix)
-    );
-    machine.remove(true).unwrap();
-}
-
-#[test]
-fn wrong_native_prefix_prevents_workload_start() {
-    let helper = FAKE_VMNET.replace("prefix=$2", "prefix=fd42:bad::");
-    let rig = rig(&helper);
-    rig.engine
-        .create_network("prefixed", libclankerd::NetworkKind::Shared, None)
-        .unwrap();
-    let machine = rig
-        .engine
-        .create(
-            Some("wrong-prefix"),
-            sh("sleep 60"),
-            HostConfig {
-                virtual_network: Some("prefixed".into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    assert!(machine.start().is_err());
-    assert!(
-        rig.vmm.specs.lock().unwrap().is_empty(),
-        "VMM must not boot after an ignored prefix request"
-    );
-    machine.remove(true).unwrap();
-}
-
-#[test]
-fn resource_identity_follows_membership_through_restart_and_recovery_configuration() {
-    let rig = rig(FAKE_VMNET);
-    let first = rig
-        .engine
-        .create_network("first", libclankerd::NetworkKind::HostOnly, None)
-        .unwrap();
-    let second = rig
-        .engine
-        .create_network("second", libclankerd::NetworkKind::HostOnly, None)
-        .unwrap();
-    let machine = rig
-        .engine
-        .create(
-            Some("member"),
-            sh("sleep 60"),
-            HostConfig {
-                virtual_network: Some(first.name.clone()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    let recovery_path = rig
-        ._env
-        .root()
-        .join("state/machines")
-        .join(machine.id())
-        .join("net-recovery.json");
-    let identity = || {
-        let record: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&recovery_path).unwrap()).unwrap();
-        record["spec"]["network_id"].as_str().unwrap().to_owned()
-    };
-    for _ in 0..2 {
-        machine.start().unwrap();
-        assert_eq!(identity(), first.id);
-        machine.stop(Duration::from_secs(10)).unwrap();
-    }
-    let config = machine.inspect().unwrap().config;
-    machine
-        .update(
-            &config,
-            HostConfig {
-                virtual_network: Some(second.name.clone()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    machine.start().unwrap();
-    assert_eq!(identity(), second.id);
-    machine.remove(true).unwrap();
 }

@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
-    io::{Read, Write},
+    io::Write,
     net::{Ipv4Addr, Ipv6Addr},
     os::fd::AsRawFd,
     path::Path,
@@ -17,7 +17,6 @@ const STATE: &str = "/var/run/clankerd-network-pf";
 struct Record {
     uid: u32,
     socket: String,
-    pid: u32,
     network_id: String,
     subnet: String,
     prefix: Option<String>,
@@ -33,7 +32,6 @@ struct State {
 struct Request {
     action: String,
     socket: String,
-    pid: Option<u32>,
     network_id: Option<String>,
     subnet: Option<String>,
     prefix: Option<Ipv6Addr>,
@@ -66,43 +64,6 @@ fn command(args: &[&str], text: Option<&str>) -> Result<String> {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     ))
-}
-fn alive(record: &Record) -> bool {
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-    let mut system = System::new();
-    let pid = Pid::from_u32(record.pid);
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[pid]),
-        true,
-        ProcessRefreshKind::nothing()
-            .without_tasks()
-            .with_user(UpdateKind::Always)
-            .with_exe(UpdateKind::Always)
-            .with_cmd(UpdateKind::Always),
-    );
-    let Some(process) = system.process(pid) else {
-        return false;
-    };
-    owned_attachment(
-        process.effective_user_id().map(|uid| **uid),
-        process.exe(),
-        process.cmd(),
-        record.uid,
-        &record.socket,
-    )
-}
-fn owned_attachment(
-    owner: Option<u32>,
-    executable: Option<&Path>,
-    args: &[std::ffi::OsString],
-    uid: u32,
-    socket: &str,
-) -> bool {
-    owner == Some(uid)
-        && executable.and_then(Path::file_name) == Some(std::ffi::OsStr::new("clankerd-network"))
-        && args
-            .windows(2)
-            .any(|pair| pair[0] == "--socket" && pair[1] == socket)
 }
 fn rules(records: &BTreeMap<String, Record>) -> String {
     let bridges: BTreeSet<_> = records.values().map(|r| &r.bridge).collect();
@@ -174,18 +135,20 @@ fn persist(state: &State) -> Result<()> {
     fs::rename(path.join("state.tmp"), path.join("state.json"))?;
     Ok(())
 }
-pub fn run() -> Result<()> {
-    // SAFETY: reads effective identity only.
-    if !cfg!(target_os = "macos") || unsafe { libc::geteuid() } != 0 {
-        return Err("PF requires administrator authorization on macOS".into());
+pub fn reset() -> Result<()> {
+    let path = Path::new(STATE).join("state.json");
+    if !path.exists() {
+        return Ok(());
     }
-    let uid: u32 = std::env::var("SUDO_UID")?.parse()?;
-    let mut input = String::new();
-    std::io::stdin().take(4097).read_to_string(&mut input)?;
-    if input.len() > 4096 {
-        return Err("PF request too large".into());
+    let state: State = serde_json::from_slice(&fs::read(&path)?)?;
+    command(&["/sbin/pfctl", "-a", ANCHOR, "-F", "all"], None)?;
+    if let Some(token) = state.token {
+        let _ = command(&["/sbin/pfctl", "-X", &token], None);
     }
-    let request: Request = serde_json::from_str(&input)?;
+    persist(&State::default())
+}
+pub fn apply(uid: u32, input: &str) -> Result<()> {
+    let request: Request = serde_json::from_str(input)?;
     if !["register", "remove"].contains(&request.action.as_str())
         || !request.socket.starts_with('/')
         || request.socket.len() > 1024
@@ -209,7 +172,6 @@ pub fn run() -> Result<()> {
         Err(e) => return Err(e.into()),
     };
     let previous = state.records.clone();
-    state.records.retain(|_, r| alive(r));
     let key = Sha256::digest(format!("{uid}:{}", request.socket))
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -233,15 +195,11 @@ pub fn run() -> Result<()> {
         let record = Record {
             uid,
             socket: request.socket,
-            pid: request.pid.filter(|p| *p > 1).ok_or("missing PID")?,
             network_id,
             bridge: bridge_for(&subnet)?,
             subnet,
             prefix: request.prefix.map(|p| format!("{p}/64")),
         };
-        if !alive(&record) {
-            return Err("attachment does not belong to caller and socket".into());
-        }
         for (other_key, other) in &state.records {
             if other_key != &key
                 && ((other.network_id == record.network_id) != (other.bridge == record.bridge)
@@ -308,7 +266,6 @@ pub fn run() -> Result<()> {
         command(&["/sbin/pfctl", "-X", &token], None)?;
         persist(&state)?;
     }
-    println!("{}", serde_json::json!({"attachments":state.records.len()}));
     Ok(())
 }
 
@@ -320,7 +277,6 @@ mod tests {
         Record {
             uid: 501,
             socket: "/tmp/example.net".into(),
-            pid: 123,
             network_id: "a".repeat(64),
             subnet: "192.168.120.0/24".into(),
             prefix: Some("fd00:1::/64".into()),
@@ -358,87 +314,6 @@ mod tests {
             )
             .is_err()
         );
-    }
-
-    #[test]
-    fn attachment_ownership_requires_the_caller_executable_and_exact_socket_argument() {
-        for (owner, executable, args, expected) in [
-            (
-                Some(501),
-                Some("/tmp/example/clankerd-network"),
-                vec!["--socket", "/tmp/example.net"],
-                true,
-            ),
-            (
-                Some(501),
-                Some("/tmp/example/clankerd-network"),
-                vec!["--operation-mode", "shared", "--socket", "/tmp/example.net"],
-                true,
-            ),
-            (
-                Some(0),
-                Some("/tmp/example/clankerd-network"),
-                vec!["--socket", "/tmp/example.net"],
-                false,
-            ),
-            (
-                Some(502),
-                Some("/tmp/example/clankerd-network"),
-                vec!["--socket", "/tmp/example.net"],
-                false,
-            ),
-            (
-                None,
-                Some("/tmp/example/clankerd-network"),
-                vec!["--socket", "/tmp/example.net"],
-                false,
-            ),
-            (Some(501), None, vec!["--socket", "/tmp/example.net"], false),
-            (
-                Some(501),
-                Some("/tmp/example/other"),
-                vec!["--socket", "/tmp/example.net"],
-                false,
-            ),
-            (
-                Some(501),
-                Some("/tmp/example/clankerd-network"),
-                vec!["--other", "/tmp/example.net"],
-                false,
-            ),
-            (
-                Some(501),
-                Some("/tmp/example/clankerd-network"),
-                vec!["--socket", "/tmp/example.net-extra"],
-                false,
-            ),
-            (
-                Some(501),
-                Some("/tmp/example/clankerd-network"),
-                vec![],
-                false,
-            ),
-        ] {
-            let args: Vec<_> = args.into_iter().map(std::ffi::OsString::from).collect();
-            assert_eq!(
-                owned_attachment(
-                    owner,
-                    executable.map(Path::new),
-                    &args,
-                    501,
-                    "/tmp/example.net"
-                ),
-                expected
-            );
-        }
-        let args = ["--socket".into(), "/tmp/space in socket.net".into()];
-        assert!(owned_attachment(
-            Some(501),
-            Some(Path::new("/tmp/space in path/clankerd-network")),
-            &args,
-            501,
-            "/tmp/space in socket.net"
-        ));
     }
 
     #[test]

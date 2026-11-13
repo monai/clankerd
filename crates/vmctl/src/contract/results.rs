@@ -520,3 +520,28 @@ impl TableRecord for ImageRecord {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn probe_json_uses_utc_milliseconds_and_preserves_absent_observations() {
+        for (seconds, expected) in [(0, 0), (1, 1000), (1_700_000_000, 1_700_000_000_000u64)] {
+            let family: clankerd_proto::guest::FamilyConnectivity =
+                serde_json::from_value(serde_json::json!({
+                    "local_available":true, "default_route":true, "external":"available",
+                    "probe":{"destination":"127.0.0.1:443", "connected":true,
+                        "checked_at_unix_seconds":seconds, "diagnostic":"example"}
+                }))
+                .unwrap();
+            let value = serde_json::to_value(FamilyRecord::from(family)).unwrap();
+            assert_eq!(value["probe"]["checked_at"], expected);
+            assert!(value["probe"].get("checked_at_unix_seconds").is_none());
+        }
+        let family: clankerd_proto::guest::FamilyConnectivity = serde_json::from_value(serde_json::json!({
+            "local_available":false, "default_route":false, "external":"unavailable", "probe":null
+        }))
+        .unwrap();
+        assert!(serde_json::to_value(FamilyRecord::from(family)).unwrap()["probe"].is_null());
+    }
+}

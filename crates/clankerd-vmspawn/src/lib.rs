@@ -84,11 +84,11 @@ impl Hypervisor for Libkrun {
 
         cfg.console_log = Some(spec.console_log.clone());
         let relay = if let Some(net) = &spec.net {
-            libclankerd::net::recovery::Relay::start(
+            libclankerd::net::relay::Relay::start(
                 spec.boot_dir.parent().unwrap_or(&spec.boot_dir),
                 &net.socket,
             )
-            .map_err(|error| format!("starting stable native Ethernet attachment: {error}"))?
+            .map_err(|error| format!("attaching native Ethernet socket: {error}"))?
         } else {
             None
         };
