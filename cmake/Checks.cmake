@@ -42,7 +42,23 @@ else()
 endif()
 add_custom_target(test DEPENDS test-build test-rust)
 if(CLANKERD_CHECK_SYSTEM MATCHES "^(Linux|Darwin)$")
+find_program(CLANKERD_CLANG_FORMAT_EXECUTABLE NAMES clang-format)
+if(NOT CLANKERD_CLANG_FORMAT_EXECUTABLE)
+    # Keep configuring unrelated build targets possible without developer tools.
+    set(CLANKERD_CLANG_FORMAT_EXECUTABLE clang-format)
+endif()
+set(c_sources
+    crates/clankerd-network/src/vmnet.c
+    crates/clankerd-network/src/vmnet-abi.h
+    crates/clankerd-network-ipc/src/xpc.c)
+add_custom_target(format-c
+    COMMAND "${CLANKERD_CLANG_FORMAT_EXECUTABLE}" --style=file -i ${c_sources}
+    WORKING_DIRECTORY "${CLANKERD_SOURCE_DIR}" USES_TERMINAL VERBATIM)
+add_custom_target(lint-c-format
+    COMMAND "${CLANKERD_CLANG_FORMAT_EXECUTABLE}" --style=file --dry-run --Werror ${c_sources}
+    WORKING_DIRECTORY "${CLANKERD_SOURCE_DIR}" USES_TERMINAL VERBATIM)
 add_custom_target(lint
+    DEPENDS lint-c-format
     COMMAND "${CMAKE_COMMAND}" -E env ${check_env} "${CLANKERD_CARGO_EXECUTABLE}" fmt --all -- --check
     COMMAND "${CMAKE_COMMAND}" -E env ${check_env} "${CLANKERD_CARGO_EXECUTABLE}" clippy --locked --workspace ${clippy_excludes} --all-targets -- -D warnings
     WORKING_DIRECTORY "${CLANKERD_SOURCE_DIR}" USES_TERMINAL VERBATIM)

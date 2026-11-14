@@ -26,6 +26,14 @@ if os.environ.get('FAIL_CARGO') == sys.argv[1]:
     sys.exit(1)
 ''')
         cargo.chmod(0o755)
+        formatter = self.root / 'clang-format'
+        formatter.write_text('''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+Path(os.environ['CHECK_LOG'] + '.format').write_text(json.dumps(sys.argv[1:]))
+sys.exit(int(os.environ.get('FAIL_FORMAT', '0')))
+''')
+        formatter.chmod(0o755)
         self.env = dict(os.environ, CHECK_LOG=str(self.log))
         self.project = f'''cmake_minimum_required(VERSION 3.28)
 project(CheckFixture NONE)
@@ -33,6 +41,7 @@ set(CLANKERD_SOURCE_DIR "{self.root}")
 set(CLANKERD_WORK_DIR "{self.root}/work")
 set(CLANKERD_CARGO_TARGET_DIR "{self.root}/cargo-output")
 set(CLANKERD_CARGO_EXECUTABLE "{cargo}")
+set(CLANKERD_CLANG_FORMAT_EXECUTABLE "{formatter}")
 set(CLANKERD_ARTIFACT_DIR "{self.root}/selected bundle")
 set(Python3_EXECUTABLE "{sys.executable}")
 add_custom_target(build COMMAND "${{CMAKE_COMMAND}}" -E make_directory "${{CLANKERD_ARTIFACT_DIR}}")
@@ -92,3 +101,20 @@ include("{ROOT}/cmake/Checks.cmake")
         self.assertTrue((self.root / 'selected bundle').is_dir())
         self.assertEqual(self.calls()[-1]['out'], str(self.root / 'selected bundle'))
         self.assertIn('--ignored', self.calls()[-1]['args'])
+
+    def test_lint_checks_c_formatting_and_propagates_failure(self):
+        result = self.run_target('lint', 'Linux')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        args = json.loads(Path(str(self.log) + '.format').read_text())
+        self.assertEqual(args[:3], ['--style=file', '--dry-run', '--Werror'])
+        self.assertIn('crates/clankerd-network/src/vmnet-abi.h', args)
+        self.env['FAIL_FORMAT'] = '1'
+        result = self.run_target('lint', 'Linux')
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_format_c_requests_in_place_formatting_without_running_cargo(self):
+        result = self.run_target('format-c', 'Darwin')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        args = json.loads(Path(str(self.log) + '.format').read_text())
+        self.assertEqual(args[:2], ['--style=file', '-i'])
+        self.assertFalse(self.log.exists())

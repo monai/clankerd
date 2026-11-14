@@ -161,7 +161,15 @@ mise exec -- cmake --build --preset default --target test lint
 ```
 
 This runs the platform's Rust tests, Python build-tool tests, formatting and
-Clippy checks. Linux needs liblzma development files and e2fsprogs; privileged
+Clippy checks. C formatting uses the clang-format version pinned in `mise.toml`
+(installed with `mise install`). To format the C sources and headers, run:
+
+```sh
+mise exec -- cmake --build --preset default --target format-c
+```
+
+`lint-c-format` checks C formatting without modifying files and is included in
+`lint` on Linux and macOS. Linux needs liblzma development files and e2fsprogs; privileged
 filesystem tests also need root, loop devices and mount permissions.
 See [Rust testing](docs/rust-testing.md) for setup and coverage.
 
