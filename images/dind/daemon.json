@@ -1,0 +1,6 @@
+{
+  "firewall-backend": "nftables",
+  "data-root": "/storage/docker",
+  "hosts": ["unix:///var/run/docker.sock", "tcp://0.0.0.0:2375"],
+  "tls": false
+}

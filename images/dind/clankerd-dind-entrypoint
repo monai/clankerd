@@ -1,7 +1,12 @@
 #!/bin/sh
 set -eu
+
 if [ -e /.clankerdenv ]; then
-    clankerd-dockerd
+    nohup dockerd --config-file=/etc/clankerd/docker.json >/var/log/dockerd.log 2>&1 &
+    if [ "$#" -eq 0 ]; then
+        set -- sleep infinity
+    fi
     exec "$@"
 fi
+
 exec /usr/local/bin/dockerd-entrypoint.sh "$@"
