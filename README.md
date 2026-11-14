@@ -6,6 +6,92 @@ Each machine gets its own Linux kernel, image root filesystem and guest init
 process. You can run commands, share Mac directories, attach persistent volumes
 and connect machines through virtual networks.
 
+## Build and install
+
+Requires **Apple Silicon macOS** and Homebrew. From the repo root:
+
+```sh
+# Skip if Apple's command-line tools are installed.
+xcode-select --install
+brew install mise python@3.12 xz
+brew tap slp/krun
+brew trust slp/krun
+brew install libkrun
+mise install
+mise exec -- cmake --preset homebrew
+mise exec -- cmake --build --preset homebrew --target build
+```
+
+Stop development VMs before installing the **network helper**, the system LaunchDaemon required for networking. Installation prompts for administrator access; repeat after helper changes.
+
+```sh
+mise exec -- cmake --build --preset homebrew --target install-network-helper
+mise exec -- cmake --build --preset homebrew --target verify-network-helper
+mise exec -- cmake --build --preset homebrew --target status-network-helper
+```
+
+Keep `build/artifact/` together and Homebrew libraries installed. See [native build](docs/native-build.md) for other setups and troubleshooting.
+
+## Run a machine
+
+```sh
+vmctl=build/artifact/darwin-arm64/vmctl
+"$vmctl" machine create --name sandbox debian:trixie
+"$vmctl" machine start sandbox
+"$vmctl" machine exec -it sandbox /bin/bash
+# Exit the guest shell before continuing.
+"$vmctl" machine stop sandbox
+"$vmctl" machine start sandbox
+"$vmctl" machine stop sandbox
+"$vmctl" machine rm sandbox
+```
+
+`create` saves a machine without booting it. `start` boots it and runs the image
+command once. `run` combines create and start, waits for the image command and
+returns its exit code; `run -d` returns immediately. Both leave the machine
+running. `exec -it` opens a separate interactive session.
+
+### Share files and keep data
+
+From the directory you want to share:
+
+```sh
+"$vmctl" run -d --name dev --cpus 2 --memory 2G \
+  -v "$PWD:/workspace" -v data:/data debian:trixie
+"$vmctl" exec -it dev /bin/bash
+```
+
+`-v /host/path:/guest/path` shares a Mac directory through virtio-fs.
+`-v NAME:/guest/path` attaches a named Linux volume, creating it when needed.
+Volumes survive machine removal and image changes; `vmctl volume rm NAME`
+explicitly deletes their data.
+
+Bind mounts default to simplified permissions: files appear owned by the guest
+user, `chown` does not persist ownership, and `chmod` changes Mac permissions.
+Use `--mount type=bind,source=./src,target=/src,semantics=complete` to preserve
+Linux ownership and permissions in host extended attributes.
+
+### Connect machines
+
+```sh
+"$vmctl" network create --mode shared team
+"$vmctl" run -d --name worker --network team debian:trixie
+"$vmctl" network inspect team
+```
+
+Machines on the same virtual network can communicate. Separate virtual networks
+isolate peers. `shared` supplies Internet access; `host-only` supplies host and
+peer access without built-in Internet access. Without `--network`, machines use
+the default shared network. Use `--bridge-interface en0` instead to attach to a
+physical LAN. Network setup uses the installed root LaunchDaemon; the VM runs as
+your user. See [installation](docs/native-build.md#network-launchdaemon)
+and [virtual networks](docs/virtual-networks.md).
+
+Use `"$vmctl" --help` and `"$vmctl" run --help` for commands and flags.
+Machine commands also have shortcuts: `vmctl create`, `vmctl exec`, and so on.
+For scripts, `"$vmctl" machine ls --output json` returns structured output;
+`"$vmctl" --describe-contract` exports command metadata and result schemas.
+
 ## How it works
 
 ```mermaid
@@ -67,89 +153,6 @@ Within `libclankerd/src/`, start with `engine.rs` and `machine.rs` for lifecycle
 `images.rs` and `rootdisk.rs` for image preparation, `net/` for connectivity,
 and `guest.rs` for guest communication. Each crate keeps its integration tests
 in `tests/`.
-
-## Build
-
-Host executables require **native Apple Silicon macOS**, Python 3.12+, Apple's
-command-line SDK, and installed libkrun, libkrunfw and liblzma libraries.
-Install the pinned tools and build:
-
-```sh
-mise install
-mise exec -- cmake --preset default
-mise exec -- cmake --build --preset default --target build
-```
-
-For libraries installed with Homebrew, configure with `mise exec -- cmake --preset homebrew`
-and build with `mise exec -- cmake --build --preset homebrew --target build`.
-The Homebrew preset discovers installed linker and runtime paths. The default
-preset uses your existing native library configuration.
-
-The build downloads verified guest inputs, compiles and signs the executables,
-and publishes `build/artifact/`. Keep the bundle together: `darwin-arm64/`
-contains the host executables; `linux-arm64/management/` contains guestd and
-its management filesystem. Host libraries must remain installed.
-See [native build](docs/native-build.md) for setup and troubleshooting.
-
-## Run a machine
-
-```sh
-vmctl=build/artifact/darwin-arm64/vmctl
-"$vmctl" machine create --name sandbox debian:trixie
-"$vmctl" machine start sandbox
-"$vmctl" machine exec -it sandbox /bin/bash
-# Exit the guest shell before continuing.
-"$vmctl" machine stop sandbox
-"$vmctl" machine start sandbox
-"$vmctl" machine stop sandbox
-"$vmctl" machine rm sandbox
-```
-
-`create` saves a machine without booting it. `start` boots it and runs the image
-command once. `run` combines create and start, waits for the image command and
-returns its exit code; `run -d` returns immediately. Both leave the machine
-running. `exec -it` opens a separate interactive session.
-
-### Share files and keep data
-
-From the directory you want to share:
-
-```sh
-"$vmctl" run -d --name dev --cpus 2 --memory 2G \
-  -v "$PWD:/workspace" -v data:/data debian:trixie
-"$vmctl" exec -it dev /bin/bash
-```
-
-`-v /host/path:/guest/path` shares a Mac directory through virtio-fs.
-`-v NAME:/guest/path` attaches a named Linux volume, creating it when needed.
-Volumes survive machine removal and image changes; `vmctl volume rm NAME`
-explicitly deletes their data.
-
-Bind mounts default to simplified permissions: files appear owned by the guest
-user, `chown` does not persist ownership, and `chmod` changes Mac permissions.
-Use `--mount type=bind,source=./src,target=/src,semantics=complete` to preserve
-Linux ownership and permissions in host extended attributes.
-
-### Connect machines
-
-```sh
-"$vmctl" network create --mode shared team
-"$vmctl" run -d --name worker --network team debian:trixie
-"$vmctl" network inspect team
-```
-
-Machines on the same virtual network can communicate. Separate virtual networks
-isolate peers. `shared` supplies Internet access; `host-only` supplies host and
-peer access without built-in Internet access. Without `--network`, machines use
-the default shared network. Use `--bridge-interface en0` instead to attach to a
-physical LAN. Network setup uses the installed root LaunchDaemon; the VM runs as
-your user. See [installation](docs/native-build.md#network-launchdaemon)
-and [virtual networks](docs/virtual-networks.md).
-
-Use `"$vmctl" --help` and `"$vmctl" run --help` for commands and flags.
-Machine commands also have shortcuts: `vmctl create`, `vmctl exec`, and so on.
-For scripts, `"$vmctl" machine ls --output json` returns structured output;
-`"$vmctl" --describe-contract` exports command metadata and result schemas.
 
 ## Develop and test
 
