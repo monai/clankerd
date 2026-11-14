@@ -82,6 +82,8 @@ mise exec -- cmake --build --preset default --target verify-host-lifecycle
 replaces `/Library/PrivilegedHelperTools/clankerd-network` and installs
 `/Library/LaunchDaemons/io.clankerd.network.plist`. It registers the daemon with
 launchd; the first XPC request starts it. Run this target again after helper changes.
+The client and helper must use matching builds: native XPC messages replace the
+older JSON envelope.
 Normal builds do not install system files. Stop development VMs before reinstalling.
 There is no binary comparison or automatic idle shutdown.
 

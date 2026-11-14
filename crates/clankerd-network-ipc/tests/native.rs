@@ -21,7 +21,7 @@ fn create(key: &str, identity: &str) -> String {
             },
         })
         .unwrap()
-        .0;
+        .response;
     assert!(response.connected);
     response.generation.unwrap()
 }
@@ -33,7 +33,7 @@ fn connected(key: &str, generation: &str) -> bool {
             generation: generation.into(),
         })
         .unwrap()
-        .0
+        .response
         .connected
 }
 #[test]
@@ -45,20 +45,20 @@ fn two_interfaces_share_daemon_and_disconnect_releases_only_its_interface() {
     let b = create(&key_b, "c1a00000-0000-4000-8000-000000000002");
     let owner_a = Connection::connect().unwrap();
     let owner_b = Connection::connect().unwrap();
-    let (_, socket_a) = owner_a
+    let reply_a = owner_a
         .request(&Request::Attach {
             key: key_a.clone(),
             generation: a.clone(),
         })
         .unwrap();
-    let (_, socket_b) = owner_b
+    let reply_b = owner_b
         .request(&Request::Attach {
             key: key_b.clone(),
             generation: b.clone(),
         })
         .unwrap();
-    assert!(socket_a.is_some());
-    assert!(socket_b.is_some());
+    assert!(reply_a.packet.is_some());
+    assert!(reply_b.packet.is_some());
     assert!(
         owner_b
             .request(&Request::Attach {

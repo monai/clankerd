@@ -26,7 +26,7 @@ impl NetworkService for Service {
         let mut entries = self.entries.lock().unwrap();
         let mut response = Response::default();
         match request {
-            Request::List => response.interfaces = vec!["en0".into(), "en1".into()],
+            Request::List {} => response.interfaces = vec!["en0".into(), "en1".into()],
             Request::Create { key, settings } => {
                 let mut serial = self.serial.lock().unwrap();
                 *serial += 1;

@@ -24,12 +24,14 @@ impl Relay {
             return Err(io::Error::other("network lease does not match VM"));
         }
         let connection = Connection::connect()?;
-        let (_, descriptor) = connection.request(&Request::Attach {
+        let reply = connection.request(&Request::Attach {
             key: lease.key,
             generation: lease.generation,
         })?;
         let back = UnixDatagram::from(
-            descriptor.ok_or_else(|| io::Error::other("daemon returned no packet socket"))?,
+            reply
+                .packet
+                .ok_or_else(|| io::Error::other("daemon returned no packet socket"))?,
         );
         let path = upstream.with_extension("relay");
         let _ = fs::remove_file(&path);

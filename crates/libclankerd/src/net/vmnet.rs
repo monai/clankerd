@@ -11,7 +11,7 @@ impl NetworkService for SystemService {
     fn request(&self, request: &Request) -> std::io::Result<Response> {
         Connection::connect()?
             .request(request)
-            .map(|(response, _)| response)
+            .map(|reply| reply.response)
     }
 }
 pub struct VmnetBackend {
@@ -29,14 +29,9 @@ impl VmnetBackend {
         Self { service }
     }
     fn request(&self, request: &Request) -> Result<Response> {
-        let response = self
-            .service
+        self.service
             .request(request)
-            .map_err(|e| Error::unavailable(e.to_string()))?;
-        if let Some(error) = response.error {
-            return Err(Error::unavailable(error));
-        }
-        Ok(response)
+            .map_err(|e| Error::unavailable(e.to_string()))
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -61,7 +56,7 @@ impl NetBackend for VmnetBackend {
         }
         if host.network_mode == NetworkMode::Bridged {
             let interface = host.bridge_interface.as_deref().unwrap();
-            let supported = self.request(&Request::List)?.interfaces;
+            let supported = self.request(&Request::List {})?.interfaces;
             super::bridge::validate_interface(interface, &supported)?;
         }
         self.stop(spec);

@@ -1,9 +1,9 @@
-use clankerd_network_ipc::{Request, Response, Settings};
+use clankerd_network_ipc::{Peer, Reply, Request, Response, Server, Settings};
 use std::{
     collections::BTreeMap,
     ffi::{CStr, CString, c_char, c_void},
     io::{self, Read},
-    os::fd::{AsRawFd, IntoRawFd},
+    os::fd::AsRawFd,
     os::unix::net::UnixDatagram,
     sync::{
         Arc, Mutex, OnceLock,
@@ -174,7 +174,9 @@ fn remove(entries: &mut Registry, key: &(u32, String)) -> Result<(), String> {
         if firewall {
             crate::pf::apply(
                 key.0,
-                &serde_json::json!({"action":"remove", "socket":key.1}).to_string(),
+                crate::pf::Change::Remove {
+                    socket: key.1.clone(),
+                },
             )
             .map_err(|error| format!("network firewall cleanup for {}: {error}", key.1))?;
         }
@@ -182,15 +184,14 @@ fn remove(entries: &mut Registry, key: &(u32, String)) -> Result<(), String> {
     Ok(())
 }
 
-fn handle(
-    request: Request,
-    uid: u32,
-    connection: u64,
-) -> Result<(Response, Option<UnixDatagram>), String> {
+fn request(request: Request, peer: Peer) -> Result<Reply, String> {
+    let Peer {
+        uid, connection, ..
+    } = peer;
     let mut entries = registry().lock().unwrap();
     let mut response = Response::default();
     match request {
-        Request::List => {
+        Request::List {} => {
             let pointer = unsafe { clankerd_vmnet_list() };
             if pointer.is_null() {
                 return Err("cannot list vmnet interfaces".into());
@@ -218,10 +219,16 @@ fn handle(
             if settings.firewall {
                 crate::pf::apply(
                     uid,
-                    &serde_json::json!({"action":"register", "socket":key.1,
-                    "network_id":settings.network_id,
-                    "subnet":settings.subnet, "prefix":prefix})
-                    .to_string(),
+                    crate::pf::Change::Register {
+                        socket: key.1.clone(),
+                        network_id: settings.network_id.ok_or("missing network identity")?,
+                        subnet: settings.subnet,
+                        prefix: prefix
+                            .as_deref()
+                            .map(str::parse)
+                            .transpose()
+                            .map_err(|e: std::net::AddrParseError| e.to_string())?,
+                    },
                 )
                 .map_err(|e| e.to_string())?;
             }
@@ -253,7 +260,10 @@ fn handle(
             entry.connection = Some(connection);
             response.connected = true;
             response.prefix = entry.prefix.clone();
-            return Ok((response, Some(peer)));
+            return Ok(Reply {
+                response,
+                packet: Some(peer.into()),
+            });
         }
         Request::Stop { key, generation } => {
             let key = (uid, key);
@@ -270,35 +280,12 @@ fn handle(
                 .is_some_and(|e| e.generation == generation && e.active.load(Ordering::Relaxed));
         }
     }
-    Ok((response, None))
+    Ok(Reply {
+        response,
+        packet: None,
+    })
 }
-unsafe extern "C" fn request(
-    json: *const c_char,
-    uid: u32,
-    _pid: i32,
-    connection: u64,
-    output: *mut *mut c_char,
-    fd: *mut i32,
-) {
-    let result = serde_json::from_slice::<Request>(unsafe { CStr::from_ptr(json) }.to_bytes())
-        .map_err(|e| e.to_string())
-        .and_then(|r| handle(r, uid, connection));
-    let (response, peer) = result.unwrap_or_else(|error| {
-        (
-            Response {
-                error: Some(error),
-                ..Response::default()
-            },
-            None,
-        )
-    });
-    let json = CString::new(serde_json::to_vec(&response).unwrap()).unwrap();
-    unsafe {
-        *output = libc::strdup(json.as_ptr());
-        *fd = peer.map_or(-1, IntoRawFd::into_raw_fd);
-    }
-}
-unsafe extern "C" fn disconnected(connection: u64) {
+fn disconnected(connection: u64) {
     let mut entries = registry().lock().unwrap();
     let keys: Vec<_> = entries
         .iter()
@@ -311,7 +298,7 @@ unsafe extern "C" fn disconnected(connection: u64) {
         }
     }
 }
-unsafe extern "C" fn shutdown() {
+fn shutdown() {
     let mut entries = registry().lock().unwrap();
     let keys: Vec<_> = entries.keys().cloned().collect();
     for key in keys {
@@ -341,5 +328,9 @@ pub fn run() -> ! {
             }
         }
     });
-    unsafe { clankerd_network_ipc::serve(request, disconnected, shutdown) }
+    clankerd_network_ipc::serve(Server {
+        request,
+        disconnected,
+        shutdown,
+    })
 }

@@ -30,7 +30,7 @@ mod tests {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     pub interface_id: String,
@@ -45,19 +45,20 @@ pub struct Settings {
     pub firewall: bool,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     Create { key: String, settings: Settings },
     Attach { key: String, generation: String },
     Stop { key: String, generation: String },
     Status { key: String, generation: String },
-    List,
+    // A struct variant makes Serde enforce deny_unknown_fields here too.
+    List {},
 }
 
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Response {
-    pub error: Option<String>,
     pub generation: Option<String>,
     pub prefix: Option<String>,
     pub connected: bool,
@@ -65,73 +66,37 @@ pub struct Response {
 }
 
 #[cfg(target_os = "macos")]
-mod native {
-    use super::*;
-    use std::ffi::{CStr, CString, c_char, c_void};
-    use std::os::fd::FromRawFd;
-    unsafe extern "C" {
-        fn clankerd_xpc_connect() -> *mut c_void;
-        fn clankerd_xpc_close(connection: *mut c_void);
-        fn clankerd_xpc_request(
-            connection: *mut c_void,
-            json: *const c_char,
-            output: *mut *mut c_char,
-            fd: *mut i32,
-        ) -> i32;
-        fn clankerd_xpc_serve(handler: Handler, disconnected: Disconnected, shutdown: Shutdown);
-    }
-    pub type Handler =
-        unsafe extern "C" fn(*const c_char, u32, i32, u64, *mut *mut c_char, *mut i32);
-    pub type Disconnected = unsafe extern "C" fn(u64);
-    pub type Shutdown = unsafe extern "C" fn();
-    pub struct Connection(*mut c_void);
-    // XPC connections support requests from arbitrary threads.
-    unsafe impl Send for Connection {}
-    impl Connection {
-        pub fn connect() -> io::Result<Self> {
-            let pointer = unsafe { clankerd_xpc_connect() };
-            if pointer.is_null() {
-                return Err(io::Error::other(
-                    "cannot connect to io.clankerd.network; install-network-helper first",
-                ));
-            }
-            Ok(Self(pointer))
-        }
-        pub fn request(&self, request: &Request) -> io::Result<(Response, Option<OwnedFd>)> {
-            let json = CString::new(serde_json::to_vec(request)?)?;
-            let mut output = std::ptr::null_mut();
-            let mut fd = -1;
-            let status =
-                unsafe { clankerd_xpc_request(self.0, json.as_ptr(), &mut output, &mut fd) };
-            let descriptor = (fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) });
-            if status != 0 {
-                return Err(io::Error::other(
-                    "network daemon unavailable; install-network-helper first; restart VMs after daemon failure",
-                ));
-            }
-            let parsed = serde_json::from_slice(unsafe { CStr::from_ptr(output).to_bytes() });
-            unsafe { libc::free(output.cast()) };
-            let response: Response = parsed?;
-            if let Some(error) = &response.error {
-                return Err(io::Error::other(error.clone()));
-            }
-            Ok((response, descriptor))
-        }
-    }
-    impl Drop for Connection {
-        fn drop(&mut self) {
-            unsafe { clankerd_xpc_close(self.0) };
-        }
-    }
-    /// # Safety
-    /// Callbacks must use the C ABI and remain valid until process exit.
-    pub unsafe fn serve(handler: Handler, disconnected: Disconnected, shutdown: Shutdown) -> ! {
-        unsafe { clankerd_xpc_serve(handler, disconnected, shutdown) };
-        unreachable!()
-    }
-}
+mod codec;
 #[cfg(target_os = "macos")]
-pub use native::*;
+mod ffi;
+#[cfg(target_os = "macos")]
+mod transport;
+#[cfg(target_os = "macos")]
+mod xpc;
+
+#[derive(Debug, Clone, Copy)]
+pub struct Peer {
+    pub uid: u32,
+    pub pid: i32,
+    pub connection: u64,
+}
+
+/// A successful domain reply, owning any socket until XPC duplicates it.
+pub struct Reply {
+    pub response: Response,
+    pub packet: Option<OwnedFd>,
+}
+
+/// Rust hooks; the IPC crate owns decoding, errors, ownership and C callbacks.
+/// Hooks must not panic: unwinding across the C callback boundary aborts the process.
+pub struct Server {
+    pub request: fn(Request, Peer) -> Result<Reply, String>,
+    pub disconnected: fn(u64),
+    pub shutdown: fn(),
+}
+
+#[cfg(target_os = "macos")]
+pub use transport::{Connection, serve};
 
 #[cfg(not(target_os = "macos"))]
 pub struct Connection;
@@ -143,7 +108,7 @@ impl Connection {
             "network daemon requires macOS",
         ))
     }
-    pub fn request(&self, _: &Request) -> io::Result<(Response, Option<OwnedFd>)> {
+    pub fn request(&self, _: &Request) -> io::Result<Reply> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "network daemon requires macOS",

@@ -27,14 +27,17 @@ struct State {
     records: BTreeMap<String, Record>,
     token: Option<String>,
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Request {
-    action: String,
-    socket: String,
-    network_id: Option<String>,
-    subnet: Option<String>,
-    prefix: Option<Ipv6Addr>,
+/// In-process policy changes; JSON is reserved for the persisted state file.
+pub enum Change {
+    Register {
+        socket: String,
+        network_id: String,
+        subnet: String,
+        prefix: Option<Ipv6Addr>,
+    },
+    Remove {
+        socket: String,
+    },
 }
 fn command(args: &[&str], text: Option<&str>) -> Result<String> {
     let mut child = Command::new(args[0])
@@ -147,13 +150,12 @@ pub fn reset() -> Result<()> {
     }
     persist(&State::default())
 }
-pub fn apply(uid: u32, input: &str) -> Result<()> {
-    let request: Request = serde_json::from_str(input)?;
-    if !["register", "remove"].contains(&request.action.as_str())
-        || !request.socket.starts_with('/')
-        || request.socket.len() > 1024
-    {
-        return Err("invalid PF request".into());
+pub fn apply(uid: u32, change: Change) -> Result<()> {
+    let socket = match &change {
+        Change::Register { socket, .. } | Change::Remove { socket } => socket,
+    };
+    if !socket.starts_with('/') || socket.len() > 1024 {
+        return Err("invalid PF socket path".into());
     }
     fs::create_dir_all(STATE)?;
     use std::os::unix::fs::PermissionsExt;
@@ -172,12 +174,17 @@ pub fn apply(uid: u32, input: &str) -> Result<()> {
         Err(e) => return Err(e.into()),
     };
     let previous = state.records.clone();
-    let key = Sha256::digest(format!("{uid}:{}", request.socket))
+    let key = Sha256::digest(format!("{uid}:{socket}"))
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
-    if request.action == "register" {
-        let network_id = request.network_id.ok_or("missing network identity")?;
+    if let Change::Register {
+        socket,
+        network_id,
+        subnet,
+        prefix,
+    } = change
+    {
         if network_id.len() != 64
             || !network_id
                 .bytes()
@@ -185,20 +192,18 @@ pub fn apply(uid: u32, input: &str) -> Result<()> {
         {
             return Err("invalid network identity".into());
         }
-        if request
-            .prefix
+        if prefix
             .is_some_and(|p| p.octets()[0] != 0xfd || u128::from(p) & u128::from(u64::MAX) != 0)
         {
             return Err("expected aligned ULA /64".into());
         }
-        let subnet = request.subnet.ok_or("missing subnet")?;
         let record = Record {
             uid,
-            socket: request.socket,
+            socket,
             network_id,
             bridge: bridge_for(&subnet)?,
             subnet,
-            prefix: request.prefix.map(|p| format!("{p}/64")),
+            prefix: prefix.map(|p| format!("{p}/64")),
         };
         for (other_key, other) in &state.records {
             if other_key != &key
