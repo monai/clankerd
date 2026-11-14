@@ -1,4 +1,0 @@
-{
-  "firewall-backend": "nftables",
-  "data-root": "/storage/docker"
-}
