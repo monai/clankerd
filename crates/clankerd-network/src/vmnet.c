@@ -1,7 +1,9 @@
 #include <dispatch/dispatch.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <uuid/uuid.h>
 #include <xpc/xpc.h>
 #ifdef CLANKERD_CROSS
@@ -19,19 +21,31 @@ typedef struct {
 static void set_string(xpc_object_t desc, const char* key, const char* value) {
   if (value) xpc_dictionary_set_string(desc, key, value);
 }
-int clankerd_vmnet_stop(clankerd_interface* handle) {
+void clankerd_vmnet_stop(clankerd_interface* handle) {
+  vmnet_interface_set_event_callback(handle->interface, VMNET_INTERFACE_PACKETS_AVAILABLE, NULL, NULL);
+  dispatch_sync(handle->queue, ^{
+                });
   dispatch_semaphore_t done = dispatch_semaphore_create(0);
   __block vmnet_return_t status = 0;
   vmnet_return_t result = vmnet_stop_interface(handle->interface, handle->queue, ^(vmnet_return_t code) {
     status = code;
     dispatch_semaphore_signal(done);
   });
-  if (result == VMNET_SUCCESS && dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC)))
-    _Exit(1);
+  if (result != VMNET_SUCCESS) {
+    fprintf(stderr, "clankerd-network: vmnet_stop_interface status=%u\n", result);
+    abort();
+  }
+  if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC))) {
+    fprintf(stderr, "clankerd-network: vmnet_stop_interface timed out\n");
+    abort();
+  }
+  if (status != VMNET_SUCCESS) {
+    fprintf(stderr, "clankerd-network: vmnet_stop_interface completion status=%u\n", status);
+    abort();
+  }
   dispatch_release(done);
   dispatch_release(handle->queue);
   free(handle);
-  return result == VMNET_SUCCESS && status == VMNET_SUCCESS ? 0 : -1;
 }
 clankerd_interface* clankerd_vmnet_create(const char* identity, const char* mode, const char* start, const char* end,
                                           const char* mask, const char* prefix, const char* shared,
@@ -88,16 +102,32 @@ clankerd_interface* clankerd_vmnet_create(const char* identity, const char* mode
   }
   return handle;
 }
-int clankerd_vmnet_read(clankerd_interface* handle, unsigned char* buffer, size_t* size) {
-  struct iovec iov = {buffer, handle->max_packet};
-  struct vmpktdesc packet = {handle->max_packet, &iov, 1, 0};
-  int count = 1;
-  vmnet_return_t status = vmnet_read(handle->interface, &packet, &count);
+int clankerd_vmnet_watch(clankerd_interface* handle, int fd) {
+  return vmnet_interface_set_event_callback(handle->interface, VMNET_INTERFACE_PACKETS_AVAILABLE, handle->queue,
+                                            ^(interface_event_t event, xpc_object_t metadata) {
+                                              unsigned char signal = 0;
+                                              // A full notification socket already has a wakeup pending.
+                                              if (send(fd, &signal, 1, 0) < 0 && errno != EAGAIN && errno != ENOBUFS)
+                                                abort();
+                                            }) == VMNET_SUCCESS
+             ? 0
+             : -1;
+}
+int clankerd_vmnet_read(clankerd_interface* handle, unsigned char* buffers, size_t stride, size_t* sizes,
+                        int capacity) {
+  struct iovec iov[capacity];
+  struct vmpktdesc packets[capacity];
+  for (int i = 0; i < capacity; i++) {
+    iov[i] = (struct iovec){buffers + i * stride, handle->max_packet};
+    packets[i] = (struct vmpktdesc){handle->max_packet, &iov[i], 1, 0};
+  }
+  int count = capacity;
+  vmnet_return_t status = vmnet_read(handle->interface, packets, &count);
   if (status != VMNET_SUCCESS) {
     fprintf(stderr, "clankerd-network: vmnet_read status=%u count=%d\n", status, count);
     return -1;
   }
-  *size = count ? packet.vm_pkt_size : 0;
+  for (int i = 0; i < count; i++) sizes[i] = packets[i].vm_pkt_size;
   return count;
 }
 int clankerd_vmnet_write(clankerd_interface* handle, unsigned char* buffer, size_t size) {
@@ -109,6 +139,7 @@ int clankerd_vmnet_write(clankerd_interface* handle, unsigned char* buffer, size
   struct vmpktdesc packet = {size, &iov, 1, 0};
   int count = 1;
   vmnet_return_t status = vmnet_write(handle->interface, &packet, &count);
+  if (status == VMNET_BUFFER_EXHAUSTED || (status == VMNET_SUCCESS && count == 0)) return 1;
   if (status != VMNET_SUCCESS || count != 1) {
     fprintf(stderr, "clankerd-network: vmnet_write status=%u count=%d size=%zu max=%zu\n", status, count, size,
             handle->max_packet);

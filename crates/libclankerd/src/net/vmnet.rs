@@ -1,6 +1,7 @@
-use super::{NetAttachment, NetBackend, NetSpec};
+use super::NetSpec;
 use crate::{Error, NetworkMode, Result};
 use clankerd_network_ipc::{Connection, Request, Response, Settings};
+use clankerd_proto::spawn::NetDevice;
 use std::{fs, path::Path, sync::Arc};
 
 pub trait NetworkService: Send + Sync {
@@ -14,17 +15,18 @@ impl NetworkService for SystemService {
             .map(|reply| reply.response)
     }
 }
-pub struct VmnetBackend {
+/// Controls native interfaces owned by the system network helper.
+pub struct Network {
     service: Arc<dyn NetworkService>,
 }
-impl Default for VmnetBackend {
+impl Default for Network {
     fn default() -> Self {
         Self {
             service: Arc::new(SystemService),
         }
     }
 }
-impl VmnetBackend {
+impl Network {
     pub fn with_service(service: Arc<dyn NetworkService>) -> Self {
         Self { service }
     }
@@ -34,18 +36,32 @@ impl VmnetBackend {
             .map_err(|e| Error::unavailable(e.to_string()))
     }
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-pub(super) struct Lease {
-    pub key: String,
-    pub generation: String,
-    pub host: crate::HostConfig,
+const LEASE: &str = "net-lease.json";
+/// A packet descriptor and the XPC connection that owns its native interface.
+pub struct Attachment {
+    pub packet: std::os::fd::OwnedFd,
+    pub connection: Connection,
 }
-pub(super) const LEASE: &str = "net-lease.json";
-fn lease(dir: &Path) -> Option<Lease> {
+impl Attachment {
+    pub fn open(device: &NetDevice) -> std::io::Result<Self> {
+        let connection = Connection::connect()?;
+        let reply = connection.request(&Request::Attach {
+            key: device.key.clone(),
+            generation: device.generation.clone(),
+        })?;
+        Ok(Self {
+            packet: reply
+                .packet
+                .ok_or_else(|| std::io::Error::other("daemon returned no packet socket"))?,
+            connection,
+        })
+    }
+}
+fn lease(dir: &Path) -> Option<NetDevice> {
     serde_json::from_slice(&fs::read(dir.join(LEASE)).ok()?).ok()
 }
-impl NetBackend for VmnetBackend {
-    fn start(&self, spec: &NetSpec) -> Result<NetAttachment> {
+impl Network {
+    pub(crate) fn start(&self, spec: &NetSpec) -> Result<NetDevice> {
         crate::config::validate_bridge_config(&spec.host_config)?;
         super::validate_host_config(&spec.host_config)?;
         let host = &spec.host_config;
@@ -60,7 +76,7 @@ impl NetBackend for VmnetBackend {
             super::bridge::validate_interface(interface, &supported)?;
         }
         self.stop(spec);
-        let key = spec.socket.to_string_lossy().into_owned();
+        let key = spec.dir.to_string_lossy().into_owned();
         let settings = settings(spec)?;
         let response = self.request(&Request::Create {
             key: key.clone(),
@@ -69,10 +85,10 @@ impl NetBackend for VmnetBackend {
         let generation = response
             .generation
             .ok_or_else(|| Error::unavailable("daemon returned no interface generation"))?;
-        let record = Lease {
+        let device = NetDevice {
             key: key.clone(),
             generation: generation.clone(),
-            host: host.clone(),
+            mac: machine_mac(&spec.machine_id),
         };
         let persisted = (|| -> Result<()> {
             if !response.connected
@@ -89,7 +105,7 @@ impl NetBackend for VmnetBackend {
                 ));
             }
             let temporary = spec.dir.join("net-lease.tmp");
-            fs::write(&temporary, serde_json::to_vec(&record)?)?;
+            fs::write(&temporary, serde_json::to_vec(&device)?)?;
             fs::rename(temporary, spec.dir.join(LEASE))?;
             Ok(())
         })();
@@ -97,14 +113,9 @@ impl NetBackend for VmnetBackend {
             let _ = self.request(&Request::Stop { key, generation });
             return Err(error);
         }
-        Ok(NetAttachment {
-            socket: spec.socket.clone(),
-            mac: machine_mac(&spec.machine_id),
-            features: 0,
-            vfkit: false,
-        })
+        Ok(device)
     }
-    fn stop(&self, spec: &NetSpec) {
+    pub(crate) fn stop(&self, spec: &NetSpec) {
         if let Some(lease) = lease(&spec.dir) {
             if let Err(error) = self.request(&Request::Stop {
                 key: lease.key,
@@ -114,9 +125,8 @@ impl NetBackend for VmnetBackend {
             }
             let _ = fs::remove_file(spec.dir.join(LEASE));
         }
-        let _ = fs::remove_file(spec.socket.with_extension("relay"));
     }
-    fn connected(&self, spec: &NetSpec) -> bool {
+    pub(crate) fn connected(&self, spec: &NetSpec) -> bool {
         lease(&spec.dir).is_some_and(|lease| {
             self.request(&Request::Status {
                 key: lease.key,

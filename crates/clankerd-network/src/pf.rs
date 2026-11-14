@@ -1,12 +1,10 @@
 //! Runtime PF ownership; no installer or persistent host configuration.
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File},
+    fs,
     io::Write,
     net::{Ipv4Addr, Ipv6Addr},
-    os::fd::AsRawFd,
     path::Path,
     process::{Command, Stdio},
 };
@@ -15,8 +13,6 @@ const ANCHOR: &str = "com.apple/clankerd-networks";
 const STATE: &str = "/var/run/clankerd-network-pf";
 #[derive(Clone, Serialize, Deserialize)]
 struct Record {
-    uid: u32,
-    socket: String,
     network_id: String,
     subnet: String,
     prefix: Option<String>,
@@ -30,13 +26,13 @@ struct State {
 /// In-process policy changes; JSON is reserved for the persisted state file.
 pub enum Change {
     Register {
-        socket: String,
+        key: String,
         network_id: String,
         subnet: String,
         prefix: Option<Ipv6Addr>,
     },
     Remove {
-        socket: String,
+        key: String,
     },
 }
 fn command(args: &[&str], text: Option<&str>) -> Result<String> {
@@ -151,38 +147,24 @@ pub fn reset() -> Result<()> {
     persist(&State::default())
 }
 pub fn apply(uid: u32, change: Change) -> Result<()> {
-    let socket = match &change {
-        Change::Register { socket, .. } | Change::Remove { socket } => socket,
+    let key = match &change {
+        Change::Register { key, .. } | Change::Remove { key } => key,
     };
-    if !socket.starts_with('/') || socket.len() > 1024 {
-        return Err("invalid PF socket path".into());
-    }
     fs::create_dir_all(STATE)?;
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(STATE, fs::Permissions::from_mode(0o700))?;
-    let lock = File::options()
-        .create(true)
-        .append(true)
-        .open(Path::new(STATE).join("lock"))?;
-    // SAFETY: lock fd is open and owned until the transaction completes.
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
     let mut state: State = match fs::read(Path::new(STATE).join("state.json")) {
         Ok(b) => serde_json::from_slice(&b)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => State::default(),
         Err(e) => return Err(e.into()),
     };
     let previous = state.records.clone();
-    let key = Sha256::digest(format!("{uid}:{socket}"))
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
+    let record_key = format!("{uid}:{key}");
     if let Change::Register {
-        socket,
         network_id,
         subnet,
         prefix,
+        ..
     } = change
     {
         if network_id.len() != 64
@@ -198,15 +180,13 @@ pub fn apply(uid: u32, change: Change) -> Result<()> {
             return Err("expected aligned ULA /64".into());
         }
         let record = Record {
-            uid,
-            socket,
             network_id,
             bridge: bridge_for(&subnet)?,
             subnet,
             prefix: prefix.map(|p| format!("{p}/64")),
         };
         for (other_key, other) in &state.records {
-            if other_key != &key
+            if other_key != &record_key
                 && ((other.network_id == record.network_id) != (other.bridge == record.bridge)
                     || (other.bridge == record.bridge
                         && (other.subnet != record.subnet || other.prefix != record.prefix)))
@@ -214,9 +194,9 @@ pub fn apply(uid: u32, change: Change) -> Result<()> {
                 return Err("native bridge conflicts with an active virtual network".into());
             }
         }
-        state.records.insert(key, record);
+        state.records.insert(record_key, record);
     } else {
-        state.records.remove(&key);
+        state.records.remove(&record_key);
     }
     if !state.records.is_empty()
         && !command(&["/sbin/pfctl", "-sr"], None)?
@@ -280,8 +260,6 @@ mod tests {
 
     fn record(bridge: &str) -> Record {
         Record {
-            uid: 501,
-            socket: "/tmp/example.net".into(),
             network_id: "a".repeat(64),
             subnet: "192.168.120.0/24".into(),
             prefix: Some("fd00:1::/64".into()),

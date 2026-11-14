@@ -91,17 +91,15 @@ pub struct Share {
     pub read_only: bool,
 }
 
-/// One virtio-net device whose backend is a network sidecar listening on a
-/// unix datagram socket.
+/// One virtio-net device attached through the native network helper.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NetDevice {
-    pub socket: PathBuf,
+    /// Helper interface key, scoped to the XPC caller.
+    pub key: String,
+    /// Identifies this creation of the interface.
+    pub generation: String,
     pub mac: [u8; 6],
-    /// virtio-net feature bits offered to the guest.
-    pub features: u32,
-    /// Send the vfkit magic when connecting (gvproxy `-listen-vfkit`).
-    pub vfkit: bool,
 }
 
 #[cfg(test)]
@@ -147,31 +145,29 @@ mod tests {
     }
 
     #[test]
-    fn network_devices_preserve_explicit_fields() {
-        for (features, vfkit) in [(0, false), (u32::MAX, true)] {
-            let value =
-                json!({"socket":"/net", "mac":[2,0,0,0,0,1], "features":features, "vfkit":vfkit});
-            let decoded: NetDevice = serde_json::from_value(value).unwrap();
-            assert_eq!(
-                decoded,
-                NetDevice {
-                    socket: "/net".into(),
-                    mac: [2, 0, 0, 0, 0, 1],
-                    features,
-                    vfkit,
-                }
+    fn network_devices_require_complete_native_identity() {
+        let value = json!({"key":"foo", "generation":"1", "mac":[2,0,0,0,0,1]});
+        assert_eq!(
+            serde_json::from_value::<NetDevice>(value.clone()).unwrap(),
+            NetDevice {
+                key: "foo".into(),
+                generation: "1".into(),
+                mac: [2, 0, 0, 0, 0, 1],
+            }
+        );
+        for field in ["key", "generation", "mac"] {
+            let mut missing = value.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<NetDevice>(missing).is_err(),
+                "accepted missing {field}"
             );
         }
-    }
-
-    #[test]
-    fn network_devices_reject_unknown_fields() {
         for field in ["feature", "unknown"] {
-            let mut value =
-                json!({"socket":"/net", "mac":[2,0,0,0,0,1], "features":0, "vfkit":false});
-            value[field] = json!(1);
+            let mut extra = value.clone();
+            extra[field] = json!(1);
             assert!(
-                serde_json::from_value::<NetDevice>(value).is_err(),
+                serde_json::from_value::<NetDevice>(extra).is_err(),
                 "accepted {field}"
             );
         }

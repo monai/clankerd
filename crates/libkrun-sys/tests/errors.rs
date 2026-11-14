@@ -56,7 +56,7 @@ fn other_libkrun_failures_name_the_call_and_errno() {
 #[test]
 fn booting_is_unsupported_off_macos() {
     let cfg = libkrun_sys::BootConfig::new("/boot", "/usr/sbin/clankerd-guestd");
-    let e = libkrun_sys::boot(&cfg).unwrap_err();
+    let e = libkrun_sys::boot(cfg).unwrap_err();
     assert_eq!(e.kind(), ErrorKind::Unsupported);
     assert!(e.to_string().contains("macOS"), "{e}");
 }

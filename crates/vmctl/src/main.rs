@@ -11,7 +11,7 @@ mod parse;
 
 use contract::results::*;
 use contract::*;
-use libclankerd::net::VmnetBackend;
+use libclankerd::net::Network;
 use libclankerd::vmm::{LocalProcessVmm, VmspawnVmm};
 use libclankerd::{
     Engine, EngineConfig, Error, HostConfig, LocalGuestdPopulator, MachineConfig, VmspawnPopulator,
@@ -84,7 +84,7 @@ fn engine(cli: &Cli) -> Result<Engine, Error> {
         cfg.vmm = Arc::new(vmm);
         cfg.populator = Some(Arc::new(populator));
         if !dev_local && !cli.boot_dir_root {
-            cfg.net = Some(Arc::new(VmnetBackend::default()));
+            cfg.net = Some(Arc::new(Network::default()));
         }
     }
     Engine::new(cfg)

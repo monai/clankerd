@@ -9,11 +9,6 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
             COMMAND sudo -- /bin/sh "${CLANKERD_SOURCE_DIR}/cmake/scripts/network-helper.sh" ${action}
             USES_TERMINAL VERBATIM)
     endforeach()
-    add_custom_target(verify-network-relay
-        COMMAND "${CMAKE_COMMAND}" -E env ${check_env}
-            "${CLANKERD_CARGO_EXECUTABLE}" test --locked -p libclankerd --lib net::relay::tests
-            -- --nocapture --test-threads=1
-        WORKING_DIRECTORY "${CLANKERD_SOURCE_DIR}" USES_TERMINAL VERBATIM)
     add_custom_target(verify-network-helper
         COMMAND "${CMAKE_COMMAND}" -E env "CARGO_TARGET_DIR=${CLANKERD_CARGO_TARGET_DIR}"
             "${CLANKERD_CARGO_EXECUTABLE}" test --locked -p clankerd-network-ipc --test native
@@ -23,9 +18,6 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
         COMMAND launchctl print system/io.clankerd.network
         USES_TERMINAL VERBATIM)
 else()
-    add_custom_target(verify-network-relay
-        COMMAND "${CMAKE_COMMAND}" -E echo "Native relay verification requires macOS"
-        COMMAND "${CMAKE_COMMAND}" -E false USES_TERMINAL VERBATIM)
     foreach(action install uninstall restart status verify)
         add_custom_target(${action}-network-helper
             COMMAND "${CMAKE_COMMAND}" -E echo "Network LaunchDaemon management requires macOS"

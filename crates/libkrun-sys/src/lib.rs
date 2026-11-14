@@ -155,19 +155,15 @@ pub struct Share {
     pub read_only: bool,
 }
 
-/// A virtio-net device whose backend listens on a unix datagram socket.
-#[derive(Debug, Clone)]
+/// A virtio-net device attached to an already configured Unix datagram socket.
+#[derive(Debug)]
 pub struct NetDevice {
-    pub socket: PathBuf,
+    pub socket: std::os::fd::OwnedFd,
     pub mac: [u8; 6],
-    /// virtio-net feature bits.
-    pub features: u32,
-    /// Send the vfkit magic (gvproxy `-listen-vfkit`).
-    pub vfkit: bool,
 }
 
 /// Everything libkrun needs to boot one guest.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct BootConfig {
     /// Host directory served as the guest's root over virtio-fs.
     pub root_dir: PathBuf,
@@ -210,14 +206,14 @@ impl BootConfig {
 /// Boots the guest and does not return on success: libkrun exits the process
 /// when the guest powers off.
 #[cfg(not(target_os = "macos"))]
-pub fn boot(_config: &BootConfig) -> Result<std::convert::Infallible, Error> {
+pub fn boot(_config: BootConfig) -> Result<std::convert::Infallible, Error> {
     Err(Error::unsupported())
 }
 
 /// Boots the guest and does not return on success: libkrun exits the process
 /// when the guest powers off.
 #[cfg(target_os = "macos")]
-pub fn boot(config: &BootConfig) -> Result<std::convert::Infallible, Error> {
+pub fn boot(config: BootConfig) -> Result<std::convert::Infallible, Error> {
     use std::ffi::CString;
 
     fn cstr(s: &str, what: &str) -> Result<CString, Error> {
@@ -298,21 +294,21 @@ pub fn boot(config: &BootConfig) -> Result<std::convert::Infallible, Error> {
                 ffi::krun_add_virtiofs4(ctx, tag.as_ptr(), dir.as_ptr(), 0, s.read_only, semantics),
             )?;
         }
-        for n in &config.nets {
-            let sock = path(&n.socket, "network socket path")?;
-            // NET_FLAG_VFKIT = 1 << 0.
-            let flags = u32::from(n.vfkit);
+        for n in config.nets {
+            use std::os::fd::{AsRawFd, IntoRawFd};
             check(
                 "krun_add_net_unixgram",
                 ffi::krun_add_net_unixgram(
                     ctx,
-                    sock.as_ptr(),
-                    -1,
+                    std::ptr::null(),
+                    n.socket.as_raw_fd(),
                     n.mac.as_ptr(),
-                    n.features,
-                    flags,
+                    0,
+                    0,
                 ),
             )?;
+            // The accepted configuration transfers the descriptor to libkrun.
+            let _ = n.socket.into_raw_fd();
         }
         for p in &config.vsock_ports {
             let sock = path(&p.host_socket, "vsock socket path")?;

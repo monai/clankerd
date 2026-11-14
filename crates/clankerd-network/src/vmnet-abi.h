@@ -13,6 +13,9 @@ struct vmpktdesc {
   uint32_t vm_flags;
 };
 #define VMNET_SUCCESS 1000
+#define VMNET_BUFFER_EXHAUSTED 1007
+#define VMNET_INTERFACE_PACKETS_AVAILABLE 1
+typedef uint32_t interface_event_t;
 #define VMNET_HOST_MODE 1000
 #define VMNET_SHARED_MODE 1001
 #define VMNET_BRIDGED_MODE 1002
@@ -24,3 +27,6 @@ vmnet_return_t vmnet_stop_interface(interface_ref, dispatch_queue_t, void (^)(vm
 vmnet_return_t vmnet_read(interface_ref, struct vmpktdesc *, int *);
 vmnet_return_t vmnet_write(interface_ref, struct vmpktdesc *, int *);
 xpc_object_t vmnet_copy_shared_interface_list(void);
+
+vmnet_return_t vmnet_interface_set_event_callback(interface_ref, interface_event_t, dispatch_queue_t,
+                                                  void (^)(interface_event_t, xpc_object_t));

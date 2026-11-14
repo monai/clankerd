@@ -35,12 +35,9 @@ unsafe extern "C" {
         read_only: bool,
         semantics: u32,
     ) -> i32;
-    /// virtio-net backed by a unix datagram socket (clankerd native attachment).
-    /// `c_path` and `fd` are mutually exclusive (`fd` -1 with a path). `c_mac`
-    /// points at 6 bytes. `flags`: `NET_FLAG_VFKIT` (1 << 0) sends the vfkit
-    /// magic, `NET_FLAG_DHCP_CLIENT` (1 << 1) would run libkrun's own DHCP
-    /// client (unused: guestd does DHCP). Once a net device exists libkrun
-    /// no longer uses TSI. Signature from libkrun v1.19.0 `include/libkrun.h`.
+    /// Attach virtio-net to a configured datagram FD (NULL path). A successful
+    /// call transfers descriptor ownership to libkrun. Clankerd uses no optional
+    /// offloads or connection preamble. Signature from libkrun v1.19.6.
     pub fn krun_add_net_unixgram(
         ctx_id: u32,
         c_path: *const c_char,

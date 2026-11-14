@@ -63,7 +63,7 @@ Linux developer checks require installed liblzma development/linker files and
 e2fsprogs; guest compilation remains available with `cmake --build --preset default --target cargo-guest`.
 Linux checks do not establish native Mac linkage, loader or VM behavior.
 
-## Network LaunchDaemon prototype
+## Network LaunchDaemon
 
 Native networking requires the system-wide `io.clankerd.network` LaunchDaemon.
 The CLI and VM runner remain ordinary user processes. Install from this checkout
@@ -73,7 +73,6 @@ on macOS (use `homebrew` throughout instead of `default` when applicable):
 mise exec -- cmake --preset default
 mise exec -- cmake --build --preset default --target install-network-helper
 mise exec -- cmake --build --preset default --target verify-network-helper
-mise exec -- cmake --build --preset default --target verify-network-relay
 mise exec -- cmake --build --preset default --target status-network-helper
 mise exec -- cmake --build --preset default --target verify-host-lifecycle
 ```
@@ -82,18 +81,23 @@ mise exec -- cmake --build --preset default --target verify-host-lifecycle
 replaces `/Library/PrivilegedHelperTools/clankerd-network` and installs
 `/Library/LaunchDaemons/io.clankerd.network.plist`. It registers the daemon with
 launchd; the first XPC request starts it. Run this target again after helper changes.
-The client and helper must use matching builds: native XPC messages replace the
-older JSON envelope.
+The client, VM runner and helper must use matching builds. Native interface shutdown
+errors abort the helper rather than reporting successful cleanup.
 Normal builds do not install system files. Stop development VMs before reinstalling.
 There is no binary comparison or automatic idle shutdown.
 
 `verify-network-helper` requires the installed helper. It creates two host-only
-interfaces, obtains packet socket descriptors, checks generation handling and
+interfaces, obtains packet socket descriptors, checks a gateway ARP exchange, generation handling and
 checks that dropping one owner connection releases only its interface. It uses
 192.168.231.0/24; run without an unrelated vmnet network on that subnet. This test
-does not prove guest traffic, shared Internet access, PF isolation or bridging.
-`verify-network-relay` checks bidirectional forwarding with libkrun’s non-terminated
-Unix socket address format, including the macOS-specific address handling.
+does not prove libkrun/guest traffic, shared Internet access, PF isolation or bridging.
+The helper passes a configured packet socket directly to libkrun; no VMM packet
+relay is involved. Helper unit tests exercise retained packets under congestion
+and source validation:
+
+```sh
+mise exec -- cargo test --locked -p clankerd-network
+```
 
 ```sh
 mise exec -- cmake --build --preset default --target restart-network-helper

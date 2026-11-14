@@ -14,7 +14,7 @@ use crate::events::{EventBus, Events};
 use crate::image_config::ImageConfig;
 use crate::images::{ImageInfo, ImageStore};
 use crate::machine::{Machine, MachineInfo};
-use crate::net::{NetBackend, NetSpec};
+use crate::net::{NetSpec, Network};
 use crate::rootdisk::{DiskPopulator, clone_file, ensure_base};
 use crate::state::MachineState;
 use crate::store::{Record, Store};
@@ -44,9 +44,9 @@ pub struct EngineConfig {
     /// Registries (`host:port`) reached over plain HTTP, like Docker's
     /// `insecure-registries`.
     pub insecure_registries: Vec<String>,
-    /// Gives machines a virtio NIC with a sidecar per machine. Without one,
+    /// Gives machines a native virtio NIC through the system helper. Without one,
     /// machines boot with no NIC.
-    pub net: Option<Arc<dyn NetBackend>>,
+    pub net: Option<Arc<Network>>,
 }
 
 impl EngineConfig {
@@ -111,7 +111,7 @@ pub(crate) struct Inner {
     pub start_timeout: Duration,
     pub images: Option<ImageStore>,
     pub populator: Option<Arc<dyn DiskPopulator>>,
-    pub net: Option<Arc<dyn NetBackend>>,
+    pub net: Option<Arc<Network>>,
     /// Serialises state read-modify-write; holds ids whose start is in flight.
     pub guarded: Mutex<HashSet<String>>,
     /// Signalled on every state change.
@@ -178,11 +178,6 @@ impl Inner {
         drop(removed);
     }
 
-    /// Where a machine's network sidecar listens for the VMM's NIC.
-    pub fn net_socket_path(&self, id: &str) -> PathBuf {
-        self.runtime_dir.join(format!("{}.net", &id[..12]))
-    }
-
     pub fn net_spec(&self, id: &str) -> NetSpec {
         let host_config = self
             .store
@@ -198,11 +193,10 @@ impl Inner {
             network_id,
             host_config,
             dir: self.store.machine_dir(id),
-            socket: self.net_socket_path(id),
         }
     }
 
-    /// Ends the machine's network sidecar, if the machine has one.
+    /// Releases the machine’s native network attachment.
     pub fn stop_net(&self, id: &str) {
         if let Some(net) = &self.net {
             net.stop(&self.net_spec(id));

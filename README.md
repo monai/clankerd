@@ -143,7 +143,7 @@ isolate peers. `shared` supplies Internet access; `host-only` supplies host and
 peer access without built-in Internet access. Without `--network`, machines use
 the default shared network. Use `--bridge-interface en0` instead to attach to a
 physical LAN. Network setup uses the installed root LaunchDaemon; the VM runs as
-your user. See [installation](docs/native-build.md#network-launchdaemon-prototype)
+your user. See [installation](docs/native-build.md#network-launchdaemon)
 and [virtual networks](docs/virtual-networks.md).
 
 Use `"$vmctl" --help` and `"$vmctl" run --help` for commands and flags.

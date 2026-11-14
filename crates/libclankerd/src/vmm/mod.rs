@@ -49,9 +49,9 @@ pub struct BootSpec {
     /// Host directories to share over virtio-fs, mounted by tag per
     /// `workload.mounts`; the local stand-in ignores them.
     pub shares: Vec<Share>,
-    /// The machine's network sidecar, already listening. A VMM that boots a
-    /// real VM attaches a virtio-net device to it; the local stand-in ignores it.
-    pub net: Option<crate::net::NetAttachment>,
+    /// The machine's native network attachment. The VM runner acquires its
+    /// packet descriptor from the helper before booting libkrun.
+    pub net: Option<clankerd_proto::spawn::NetDevice>,
 }
 
 /// A booted machine. The VMM process must outlive the library process.

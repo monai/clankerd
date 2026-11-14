@@ -65,13 +65,16 @@ have no global IPv6 prefix.
 
 The bundled `clankerd-network` uses Apple's vmnet APIs and owns PF operations.
 A root `clankerd-network` LaunchDaemon owns all native interfaces. Install it once
-with the [CMake install target](native-build.md#network-launchdaemon-prototype).
+with the [CMake install target](native-build.md#network-launchdaemon).
 `vmctl` creates interfaces through XPC; `clankerd-vmspawn` obtains a packet socket
-and holds the interface's XPC connection for the VM's lifetime. The VM and its
-relay run as the ordinary user. There are no per-VM networking processes or
+and holds the interface's XPC connection for the VM's lifetime. Its boot configuration
+carries the interface key, generation and MAC explicitly. The library persists the
+same attachment identity for stop and status operations. The VM runs as the ordinary
+user. Its libkrun NIC uses the helper’s packet socket
+directly, without an intermediate relay. There are no per-VM networking processes or
 runtime sudo prompts. The old `--network-executable` override is removed.
 
-The VMM-owned relay rejects IPv4 sources outside the selected guest subnet and
+The network helper rejects IPv4 sources outside the selected guest subnet and
 IPv6 sources outside the actual native-advertised ULA /64 or link-local scope.
 Native metadata must match the selected resource's persisted prefix. Host-only attachments permit link-local IPv6
 and its bootstrap traffic, without accepting foreign global IPv6 sources.
@@ -79,9 +82,9 @@ Bootstrap DAD, router solicitation and MLD reports remain permitted. These check
 reject foreign-prefix state spoofing before host PF lookup.
 
 The controller keeps a root-owned active-attachment registry under
-`/var/run/clankerd-network-pf`, serialized with a file lock across CLI processes
-and state directories. It verifies each helper PID, caller, socket and stable virtual-network resource
-ID, discovers the bridge through its gateway, validates PF syntax, and replaces only
+`/var/run/clankerd-network-pf`, shared by all clients and state directories. XPC supplies the caller identity; each
+attachment records its owner connection and stable virtual-network resource ID.
+The helper discovers the bridge through its gateway, validates PF syntax, and replaces only
 `com.apple/clankerd-networks`. The normal macOS root rules must include
 `anchor "com.apple/*"`. No root ruleset or unrelated states are flushed. Different resource IDs cannot
 share one native bridge, even if their subnets and IPv6 prefixes match. One

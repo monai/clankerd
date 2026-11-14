@@ -3,7 +3,7 @@ mod common;
 #[path = "common/network.rs"]
 mod network;
 use common::*;
-use libclankerd::net::VmnetBackend;
+use libclankerd::net::Network;
 use libclankerd::vmm::{BootHandle, BootSpec, LocalProcessVmm};
 use libclankerd::{Engine, ErrorKind, HostConfig, Status, Vmm};
 use std::sync::{Arc, Mutex};
@@ -49,7 +49,7 @@ fn rig_with_service(
         probe_endpoints,
     });
     let mut cfg = env.config(vmm.clone());
-    cfg.net = Some(Arc::new(VmnetBackend::with_service(service.clone())));
+    cfg.net = Some(Arc::new(Network::with_service(service.clone())));
     let engine = Engine::new(cfg).unwrap();
     Rig {
         _env: env,
@@ -73,7 +73,12 @@ fn interfaces_follow_machine_lifetime_and_not_workload_lifetime() {
     let a = create(&rig.engine, "a", "sleep 0.2");
     let b = long_running(&rig.engine, "b");
     a.start().unwrap();
+    let first = rig.last_spec().net.unwrap();
+    assert_eq!(first.generation, "1");
     b.start().unwrap();
+    let second = rig.last_spec().net.unwrap();
+    assert_eq!(second.generation, "2");
+    assert_ne!(first.key, second.key);
     assert_eq!(rig.service.count(), 2);
     a.wait_workload().unwrap();
     assert_eq!(a.inspect().unwrap().state.status, Status::Running);
@@ -83,6 +88,10 @@ fn interfaces_follow_machine_lifetime_and_not_workload_lifetime() {
     b.kill(libc::SIGKILL).unwrap();
     assert_eq!(rig.service.count(), 0);
     b.start().unwrap();
+    let restarted = rig.last_spec().net.unwrap();
+    assert_eq!(restarted.key, second.key);
+    assert_eq!(restarted.mac, second.mac);
+    assert_eq!(restarted.generation, "3");
     assert_eq!(rig.service.count(), 1);
     b.remove(true).unwrap();
     assert_eq!(rig.service.count(), 0);
@@ -139,7 +148,6 @@ fn typed_settings_preserve_network_modes_addresses_and_prefixes() {
             assert!(initial.network_id.is_some());
         }
         assert_eq!(initial.nat66_prefix.is_some(), expected == "shared");
-        assert_eq!(rig.last_spec().net.unwrap().features, 0);
         m.stop(Duration::from_secs(10)).unwrap();
         m.start().unwrap();
         let again = rig.service.last();
@@ -203,7 +211,7 @@ fn membership_changes_are_sent_to_daemon_only_after_stopping() {
     m.remove(true).unwrap();
 }
 #[test]
-fn without_a_net_backend_machines_boot_without_a_nic() {
+fn without_networking_machines_boot_without_a_nic() {
     let env = Env::new();
     let vmm = Arc::new(Recording {
         inner: LocalProcessVmm::new(guestd_path()),

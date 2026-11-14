@@ -101,8 +101,8 @@ impl Machine {
             } else {
                 None
             };
-        if let (Some(network), Some(backend)) = (&mut network, &self.inner.net)
-            && !backend.connected(&self.inner.net_spec(&self.id))
+        if let (Some(network), Some(native)) = (&mut network, &self.inner.net)
+            && !native.connected(&self.inner.net_spec(&self.id))
         {
             for family in [&mut network.ipv4, &mut network.ipv6] {
                 family.local_available = false;
@@ -218,7 +218,7 @@ impl Machine {
         let mut argv = info.config.entrypoint.clone();
         argv.extend(info.config.cmd.iter().cloned());
         let net = match &self.inner.net {
-            Some(backend) => Some(backend.start(&self.inner.net_spec(&self.id)).inspect_err(
+            Some(native) => Some(native.start(&self.inner.net_spec(&self.id)).inspect_err(
                 |err| {
                     let _ = self
                         .inner

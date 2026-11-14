@@ -83,27 +83,20 @@ impl Hypervisor for Libkrun {
         cfg.env = vec!["KRUN_INIT_PID1=1".into()];
 
         cfg.console_log = Some(spec.console_log.clone());
-        let relay = if let Some(net) = &spec.net {
-            libclankerd::net::relay::Relay::start(
-                spec.boot_dir.parent().unwrap_or(&spec.boot_dir),
-                &net.socket,
-            )
-            .map_err(|error| format!("attaching native Ethernet socket: {error}"))?
+        // Hold the XPC owner while libkrun owns the packet descriptor.
+        let _network_owner = if let Some(net) = &spec.net
+            && !spec.populate
+        {
+            let attachment = libclankerd::net::Attachment::open(net)
+                .map_err(|error| format!("attaching native Ethernet socket: {error}"))?;
+            cfg.nets.push(libkrun_sys::NetDevice {
+                socket: attachment.packet,
+                mac: net.mac,
+            });
+            Some(attachment.connection)
         } else {
             None
         };
-        if let Some(net) = &spec.net
-            && !spec.populate
-        {
-            cfg.nets = vec![libkrun_sys::NetDevice {
-                socket: relay
-                    .as_ref()
-                    .map_or_else(|| net.socket.clone(), |relay| relay.socket().to_owned()),
-                mac: net.mac,
-                features: net.features,
-                vfkit: net.vfkit,
-            }];
-        }
         cfg.vsock_ports = vec![
             libkrun_sys::VsockPort {
                 port: GUEST_VSOCK_PORT,
@@ -118,7 +111,7 @@ impl Hypervisor for Libkrun {
         ];
         cfg.cpus = spec.cpus;
         cfg.memory_mib = spec.memory_mib;
-        libkrun_sys::boot(&cfg)
+        libkrun_sys::boot(cfg)
             .map(|never| match never {})
             .map_err(|e| e.to_string())
     }
