@@ -36,9 +36,6 @@ void clankerd_xpc_serve(void* context, handler_t handler, disconnect_t disconnec
     if (xpc_get_type(event) != XPC_TYPE_CONNECTION) return;
     xpc_connection_t peer = (xpc_connection_t)event;
     unsigned long long identity = ++next;
-    dispatch_queue_t queue = dispatch_queue_create("io.clankerd.network.peer", NULL);
-    xpc_connection_set_target_queue(peer, queue);
-    dispatch_release(queue);
     unsigned int uid = xpc_connection_get_euid(peer);
     int pid = xpc_connection_get_pid(peer);
     xpc_connection_set_event_handler(peer, ^(xpc_object_t request) {

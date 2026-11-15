@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{Read, Write},
+    io::Write,
     net::{Ipv4Addr, Ipv6Addr},
     path::Path,
     process::{Command, Stdio},
@@ -18,12 +18,10 @@ struct Record {
     prefix: Option<String>,
     bridge: String,
 }
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 struct State {
     records: BTreeMap<String, Record>,
     token: Option<String>,
-    #[serde(default)]
-    acquiring: bool,
 }
 /// In-process policy changes; JSON is reserved for the persisted state file.
 pub enum Change {
@@ -40,7 +38,6 @@ pub enum Change {
 fn command(args: &[&str], text: Option<&str>) -> Result<String> {
     let mut child = Command::new(args[0])
         .args(&args[1..])
-        .env("LC_ALL", "C")
         .stdin(if text.is_some() {
             Stdio::piped()
         } else {
@@ -49,53 +46,10 @@ fn command(args: &[&str], text: Option<&str>) -> Result<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let input = text.map(str::to_owned);
-    let stdin = child.stdin.take();
-    let writer = std::thread::spawn(move || -> std::io::Result<()> {
-        if let (Some(mut stdin), Some(input)) = (stdin, input) {
-            stdin.write_all(input.as_bytes())?;
-        }
-        Ok(())
-    });
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
-    let output = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout.read_to_end(&mut bytes).map(|_| bytes)
-    });
-    let errors = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stderr.read_to_end(&mut bytes).map(|_| bytes)
-    });
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    let mut expired = false;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if std::time::Instant::now() >= deadline {
-            expired = true;
-            child.kill()?;
-            break child.wait()?;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    };
-    let written = writer.join().map_err(|_| "PF input worker failed")?;
-    let stdout = output.join().map_err(|_| "PF output worker failed")??;
-    let stderr = errors.join().map_err(|_| "PF error worker failed")??;
-    if expired {
-        return Err(format!(
-            "{} exceeded 10-second deadline; outcome requires reconciliation",
-            args.join(" ")
-        )
-        .into());
+    if let Some(text) = text {
+        child.stdin.take().unwrap().write_all(text.as_bytes())?;
     }
-    written?;
-    let out = std::process::Output {
-        status,
-        stdout,
-        stderr,
-    };
+    let out = child.wait_with_output()?;
     if !out.status.success() {
         return Err(format!(
             "{}: {}",
@@ -180,91 +134,30 @@ fn persist(state: &State) -> Result<()> {
     fs::rename(path.join("state.tmp"), path.join("state.json"))?;
     Ok(())
 }
-fn release(token: &str) -> Result<()> {
-    let token: u64 = token.parse()?;
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::fd::AsRawFd;
-        #[repr(C)]
-        struct RemoveToken {
-            token: u64,
-            references: u64,
-        }
-        let device = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open("/dev/pf")?;
-        let mut request = RemoveToken {
-            token,
-            references: 0,
-        };
-        let result = unsafe { libc::ioctl(device.as_raw_fd(), 0xc0104409, &mut request) };
-        if result != 0 {
-            let error = std::io::Error::last_os_error();
-            if !matches!(
-                error.raw_os_error(),
-                Some(libc::ENOENT) | Some(libc::EINVAL)
-            ) {
-                return Err(error.into());
-            }
-        }
-        Ok(())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = token;
-        Err("PF release requires macOS".into())
-    }
-}
 pub fn reset() -> Result<()> {
     let path = Path::new(STATE).join("state.json");
     if !path.exists() {
         return Ok(());
     }
     let state: State = serde_json::from_slice(&fs::read(&path)?)?;
-    recover(
-        state,
-        || command(&["/sbin/pfctl", "-a", ANCHOR, "-F", "all"], None).map(|_| ()),
-        release,
-        persist,
-    )
-}
-fn recover(
-    state: State,
-    flush: impl FnOnce() -> Result<()>,
-    release: impl FnOnce(&str) -> Result<()>,
-    save: impl FnOnce(&State) -> Result<()>,
-) -> Result<()> {
-    if state.acquiring {
-        return Err("PF reference acquisition was interrupted; saved evidence requires administrator reconciliation".into());
-    }
-    flush()?;
+    command(&["/sbin/pfctl", "-a", ANCHOR, "-F", "all"], None)?;
     if let Some(token) = state.token {
-        release(&token)?;
+        let _ = command(&["/sbin/pfctl", "-X", &token], None);
     }
-    save(&State::default())
+    persist(&State::default())
 }
-
 pub fn apply(uid: u32, change: Change) -> Result<()> {
-    static LIVE: std::sync::Mutex<Option<State>> = std::sync::Mutex::new(None);
-    let mut live = LIVE.lock().unwrap();
     let key = match &change {
         Change::Register { key, .. } | Change::Remove { key } => key,
     };
     fs::create_dir_all(STATE)?;
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(STATE, fs::Permissions::from_mode(0o700))?;
-    if live.is_none() {
-        *live = Some(match fs::read(Path::new(STATE).join("state.json")) {
-            Ok(b) => serde_json::from_slice(&b)?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => State::default(),
-            Err(e) => return Err(e.into()),
-        });
-    }
-    let mut state = live.as_ref().unwrap().clone();
-    if state.acquiring {
-        return Err("PF reference acquisition needs administrator reconciliation".into());
-    }
+    let mut state: State = match fs::read(Path::new(STATE).join("state.json")) {
+        Ok(b) => serde_json::from_slice(&b)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => State::default(),
+        Err(e) => return Err(e.into()),
+    };
     let previous = state.records.clone();
     let record_key = format!("{uid}:{key}");
     if let Change::Register {
@@ -319,9 +212,6 @@ pub fn apply(uid: u32, change: Change) -> Result<()> {
     )?;
     let mut acquired = false;
     if !state.records.is_empty() && state.token.is_none() {
-        state.acquiring = true;
-        persist(&state)?;
-        live.as_mut().unwrap().acquiring = true;
         let output = command(&["/sbin/pfctl", "-E"], None)?;
         state.token = output
             .lines()
@@ -338,95 +228,35 @@ pub fn apply(uid: u32, change: Change) -> Result<()> {
         {
             return Err("pfctl returned no reference token".into());
         }
-        state.acquiring = false;
-        persist(&state)?;
-        live.as_mut().unwrap().token = state.token.clone();
-        live.as_mut().unwrap().acquiring = false;
         acquired = true;
     }
     let applied = command(&["/sbin/pfctl", "-a", ANCHOR, "-f", "-"], Some(&content))
         .and_then(|_| persist(&state));
     if let Err(error) = applied {
-        if let Err(rollback) = command(
+        let _ = command(
             &["/sbin/pfctl", "-a", ANCHOR, "-f", "-"],
             Some(&rules(&previous)),
-        ) {
-            eprintln!(
-                "clankerd-network: PF rollback failed: {rollback}; restart affected machines manually after administrator reconciliation"
-            );
-            std::process::exit(1);
-        }
+        );
         if acquired {
-            release(state.token.as_deref().unwrap())?;
-            state.token = None;
+            let _ = command(
+                &["/sbin/pfctl", "-X", state.token.as_deref().unwrap()],
+                None,
+            );
         }
-        state.records = previous;
-        *live = Some(state.clone());
-        persist(&state)?;
         return Err(error);
     }
     if state.records.is_empty()
         && let Some(token) = state.token.take()
     {
-        release(&token)?;
-        *live = Some(state.clone());
+        command(&["/sbin/pfctl", "-X", &token], None)?;
         persist(&state)?;
     }
-    *live = Some(state);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn failed_recovery_retains_saved_reference_and_a_later_attempt_completes() {
-        let saved = std::cell::RefCell::new(State {
-            token: Some("42".into()),
-            ..State::default()
-        });
-        let result = recover(
-            saved.borrow().clone(),
-            || Ok(()),
-            |_| Err("reference release failed".into()),
-            |state| {
-                *saved.borrow_mut() = state.clone();
-                Ok(())
-            },
-        );
-        assert!(result.is_err());
-        assert_eq!(saved.borrow().token.as_deref(), Some("42"));
-        let state = saved.borrow().clone();
-        recover(
-            state,
-            || Ok(()),
-            |_| Ok(()),
-            |state| {
-                *saved.borrow_mut() = state.clone();
-                Ok(())
-            },
-        )
-        .unwrap();
-        assert!(saved.borrow().token.is_none());
-    }
-
-    #[test]
-    fn interrupted_acquisition_preserves_evidence_without_flushing_policy() {
-        let state = State {
-            acquiring: true,
-            ..State::default()
-        };
-        assert!(
-            recover(
-                state,
-                || panic!("must retain policy evidence"),
-                |_| panic!("no known token"),
-                |_| panic!("must retain saved evidence")
-            )
-            .is_err()
-        );
-    }
 
     fn record(bridge: &str) -> Record {
         Record {

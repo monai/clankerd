@@ -17,5 +17,7 @@ which would prevent communication between members of the same network.
 Network membership, mode and the allocated subnet persist through machine restart.
 Use `--network NAME` to select membership; mode and subnet are defined on the resource.
 
-The helper enforces isolation between virtual networks through PF. See
-[virtual networks](virtual-networks.md) for the policy and validation limits.
+Host enforcement between virtual networks is still under implementation. Neither
+subnet separation nor absence of a default route establishes exclusion of traffic
+routed through the Mac. Ticket 05 remains open until that production boundary and
+its lifecycle pass actual Mac packet tests.

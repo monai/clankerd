@@ -32,3 +32,4 @@ even if its image command previously exited successfully. Explicit stop requests
 are persisted per VMM PID so another CLI observer does not restart a machine
 that was deliberately stopped.
 
+Native validation passed in Mac suite `/tmp/clankerd-network-gates.JSPlld`: command exit retained guest init, exec, Mac TCP/UDP and NAT; explicit stop, restart, cleanup, network recovery and Docker end-to-end checks passed.

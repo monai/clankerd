@@ -268,9 +268,7 @@ impl Machine {
             err
         };
         let handle = self.inner.vmm.boot(&spec).map_err(|err| {
-            if let Err(cleanup) = self.inner.stop_net(&self.id) {
-                return fail(cleanup);
-            }
+            self.inner.stop_net(&self.id);
             fail(err)
         })?;
         let alive = || self.inner.vmm.check_alive(&spec, &handle);
@@ -278,9 +276,9 @@ impl Machine {
             Ok(r) => r,
             Err(err) => {
                 kill_group(handle.pid);
-                let cleanup = self.inner.stop_net(&self.id);
+                self.inner.stop_net(&self.id);
                 let _ = fs::remove_file(&socket);
-                return Err(fail(cleanup.err().unwrap_or(err)));
+                return Err(fail(err));
             }
         };
 
@@ -288,10 +286,10 @@ impl Machine {
             && let Err(err) = start_tunnels(&self.inner, &self.id, &info.host_config, Tunnels::Open)
         {
             kill_group(handle.pid);
-            let cleanup = self.inner.stop_net(&self.id);
+            self.inner.stop_net(&self.id);
             self.inner.drop_tunnels(&self.id);
             let _ = fs::remove_file(&socket);
-            return Err(fail(cleanup.err().unwrap_or(err)));
+            return Err(fail(err));
         }
         self.inner.update_state(&self.id, |s| {
             s.status = Status::Running;
@@ -313,7 +311,7 @@ impl Machine {
         ) && read_exit_file(&exit_file).is_none()
         {
             kill_group(handle.pid);
-            let cleanup = self.inner.stop_net(&self.id);
+            self.inner.stop_net(&self.id);
             self.inner.drop_tunnels(&self.id);
             let _ = fs::remove_file(&socket);
             self.inner.update_state(&self.id, |s| {
@@ -324,7 +322,7 @@ impl Machine {
                 s.error = error.message().to_owned();
             })?;
             self.inner.emit(&self.id, EventAction::Exited, Some(-1));
-            return Err(fail(cleanup.err().unwrap_or(error)));
+            return Err(fail(error));
         }
         spawn_monitor(self.inner.clone(), self.id.clone(), ready, Some(handle.pid));
         Ok(())
@@ -603,9 +601,9 @@ impl Machine {
                         s.status = Status::Exited;
                     }
                 })?;
-                return self.inner.stop_net(&self.id);
+                return Ok(());
             }
-            _ => return self.inner.stop_net(&self.id),
+            _ => return Ok(()),
         }
         if let Some(pid) = state.pid {
             fs::write(
@@ -629,15 +627,14 @@ impl Machine {
             Some(deadline),
         );
         if asked.is_ok() && self.wait_until(Some(deadline), WaitFor::RunEnd)?.is_some() {
-            return self.inner.stop_net(&self.id);
+            return Ok(());
         }
 
         match self.kill(libc::SIGKILL) {
             // It ended between the check and the kill.
             Err(e) if e.kind() == ErrorKind::Conflict => Ok(()),
             other => other,
-        }?;
-        self.inner.stop_net(&self.id)
+        }
     }
 
     /// Sends `signal` to the machine, like `docker kill`. SIGKILL ends the VMM
@@ -680,7 +677,7 @@ impl Machine {
             WaitFor::RunEnd,
         )?;
         self.inner.forced().remove(&self.id);
-        self.inner.stop_net(&self.id)
+        Ok(())
     }
 
     /// Everything the machine printed on its console (kernel, guestd and
@@ -744,7 +741,7 @@ impl Machine {
                 wait_for_helper_exit(pid);
             }
         }
-        self.inner.stop_net(&self.id)?;
+        self.inner.stop_net(&self.id);
         self.inner.drop_tunnels(&self.id);
         self.inner.store.remove(&self.id)?;
         self.inner
@@ -850,9 +847,7 @@ fn record_exit(inner: &Arc<Inner>, id: &str, code: Option<i32>, run_pid: Option<
 
     // Release host resources first: whoever sees the new state sees them gone.
     inner.drop_tunnels(id);
-    if let Err(error) = inner.stop_net(id) {
-        eprintln!("clankerd: network cleanup: {error}");
-    }
+    inner.stop_net(id);
     let _ = fs::remove_file(inner.socket_path(id));
     // Requests persist across independent CLI observers. A command's old exit
     // result cannot turn an unexpected VMM failure into a successful machine exit.
