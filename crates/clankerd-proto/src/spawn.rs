@@ -97,8 +97,8 @@ pub struct Share {
 pub struct NetDevice {
     /// Helper interface key, scoped to the XPC caller.
     pub key: String,
-    /// Identifies this creation of the interface.
-    pub generation: String,
+    /// Settings used by the machine process to create its owned attachment.
+    pub settings: clankerd_network_ipc::Settings,
     pub mac: [u8; 6],
 }
 
@@ -139,35 +139,6 @@ mod tests {
             value[field] = json!(true);
             assert!(
                 serde_json::from_value::<Share>(value).is_err(),
-                "accepted {field}"
-            );
-        }
-    }
-
-    #[test]
-    fn network_devices_require_complete_native_identity() {
-        let value = json!({"key":"foo", "generation":"1", "mac":[2,0,0,0,0,1]});
-        assert_eq!(
-            serde_json::from_value::<NetDevice>(value.clone()).unwrap(),
-            NetDevice {
-                key: "foo".into(),
-                generation: "1".into(),
-                mac: [2, 0, 0, 0, 0, 1],
-            }
-        );
-        for field in ["key", "generation", "mac"] {
-            let mut missing = value.clone();
-            missing.as_object_mut().unwrap().remove(field);
-            assert!(
-                serde_json::from_value::<NetDevice>(missing).is_err(),
-                "accepted missing {field}"
-            );
-        }
-        for field in ["feature", "unknown"] {
-            let mut extra = value.clone();
-            extra[field] = json!(1);
-            assert!(
-                serde_json::from_value::<NetDevice>(extra).is_err(),
                 "accepted {field}"
             );
         }

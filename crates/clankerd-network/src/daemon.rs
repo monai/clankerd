@@ -3,7 +3,6 @@ use clankerd_network_ipc::{Peer, Reply, Request, Response, Server};
 use std::{
     collections::BTreeMap,
     io::Read,
-    net::Ipv6Addr,
     os::unix::net::UnixDatagram,
     sync::{
         Arc, Mutex, OnceLock,
@@ -15,12 +14,10 @@ use std::{
 
 struct Entry {
     generation: String,
-    prefix: Option<Ipv6Addr>,
     active: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
     wake: Arc<UnixDatagram>,
-    peer: Option<UnixDatagram>,
-    connection: Option<u64>,
+    connection: u64,
     firewall: bool,
 }
 impl Drop for Entry {
@@ -101,25 +98,13 @@ fn request(request: Request, peer: Peer) -> Result<Reply, String> {
                 key,
                 Entry {
                     generation,
-                    prefix,
                     active,
                     worker: Some(worker),
                     wake,
-                    peer: Some(peer),
-                    connection: None,
+                    connection,
                     firewall: settings.firewall,
                 },
             );
-        }
-        Request::Attach { key, generation } => {
-            let entry = entries
-                .get_mut(&(uid, key))
-                .filter(|e| e.generation == generation && e.active.load(Ordering::Relaxed))
-                .ok_or("network unavailable; restart the VM")?;
-            let peer = entry.peer.take().ok_or("network is already attached")?;
-            entry.connection = Some(connection);
-            response.connected = true;
-            response.prefix = entry.prefix.map(|prefix| prefix.to_string());
             return Ok(Reply {
                 response,
                 packet: Some(peer.into()),
@@ -149,7 +134,7 @@ fn disconnected(connection: u64) {
     let mut entries = registry().lock().unwrap();
     let keys: Vec<_> = entries
         .iter()
-        .filter(|(_, e)| e.connection == Some(connection))
+        .filter(|(_, e)| e.connection == connection)
         .map(|(k, _)| k.clone())
         .collect();
     for key in keys {

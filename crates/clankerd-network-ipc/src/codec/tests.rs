@@ -32,10 +32,6 @@ fn protocol_models_round_trip_through_native_objects() {
             key: "/tmp/example".into(),
             settings,
         },
-        Request::Attach {
-            key: "/tmp/example".into(),
-            generation: "generation-1".into(),
-        },
         Request::Stop {
             key: "/tmp/example".into(),
             generation: "generation-1".into(),
@@ -84,7 +80,7 @@ fn fields_use_native_types_and_preserve_full_width_integers() {
 
 #[test]
 fn malformed_requests_reject_missing_unknown_and_wrong_type_fields() {
-    let mut request = to_object(&Request::Attach {
+    let mut request = to_object(&Request::Status {
         key: "/tmp/example".into(),
         generation: "generation-1".into(),
     })

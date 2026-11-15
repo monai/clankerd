@@ -49,9 +49,6 @@ impl NetworkService for Service {
             Request::Status { key, generation } => {
                 response.connected = entries.get(key).is_some_and(|(g, _)| g == generation)
             }
-            Request::Attach { .. } => {
-                return Err(io::Error::other("fixture does not boot a native NIC"));
-            }
         }
         Ok(response)
     }

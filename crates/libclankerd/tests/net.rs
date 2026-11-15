@@ -13,6 +13,7 @@ struct Recording {
     inner: LocalProcessVmm,
     specs: Mutex<Vec<BootSpec>>,
     probe_endpoints: Option<serde_json::Value>,
+    service: Arc<network::Service>,
 }
 impl Vmm for Recording {
     fn boot(&self, spec: &BootSpec) -> libclankerd::Result<BootHandle> {
@@ -21,6 +22,35 @@ impl Vmm for Recording {
             let mut config = serde_json::to_value(spec.workload.network.as_ref().unwrap()).unwrap();
             config["probe_endpoints"] = endpoints.clone();
             spec.workload.network = Some(serde_json::from_value(config).unwrap());
+        }
+        // The caller must only prepare settings; creation belongs to the machine.
+        if let Some(net) = &spec.net {
+            assert!(!self.service.entries.lock().unwrap().contains_key(&net.key));
+            use libclankerd::net::NetworkService;
+            let response = self
+                .service
+                .request(&clankerd_network_ipc::Request::Create {
+                    key: net.key.clone(),
+                    settings: net.settings.clone(),
+                })
+                .map_err(|e| libclankerd::Error::unavailable(e.to_string()))?;
+            if response.prefix != net.settings.nat66_prefix {
+                self.service
+                    .request(&clankerd_network_ipc::Request::Stop {
+                        key: net.key.clone(),
+                        generation: response.generation.unwrap(),
+                    })
+                    .unwrap();
+                return Err(libclankerd::Error::unavailable("wrong prefix"));
+            }
+            std::fs::write(
+                spec.dir.join("net-lease.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "key": net.key, "generation": response.generation.unwrap()
+                }))
+                .unwrap(),
+            )
+            .unwrap();
         }
         self.specs.lock().unwrap().push(spec.clone());
         self.inner.boot(&spec)
@@ -47,6 +77,7 @@ fn rig_with_service(
         inner: LocalProcessVmm::new(guestd_path()),
         specs: Mutex::default(),
         probe_endpoints,
+        service: service.clone(),
     });
     let mut cfg = env.config(vmm.clone());
     cfg.net = Some(Arc::new(Network::with_service(service.clone())));
@@ -74,10 +105,10 @@ fn interfaces_follow_machine_lifetime_and_not_workload_lifetime() {
     let b = long_running(&rig.engine, "b");
     a.start().unwrap();
     let first = rig.last_spec().net.unwrap();
-    assert_eq!(first.generation, "1");
+
     b.start().unwrap();
     let second = rig.last_spec().net.unwrap();
-    assert_eq!(second.generation, "2");
+
     assert_ne!(first.key, second.key);
     assert_eq!(rig.service.count(), 2);
     a.wait_workload().unwrap();
@@ -91,7 +122,7 @@ fn interfaces_follow_machine_lifetime_and_not_workload_lifetime() {
     let restarted = rig.last_spec().net.unwrap();
     assert_eq!(restarted.key, second.key);
     assert_eq!(restarted.mac, second.mac);
-    assert_eq!(restarted.generation, "3");
+
     assert_eq!(rig.service.count(), 1);
     b.remove(true).unwrap();
     assert_eq!(rig.service.count(), 0);
@@ -217,6 +248,7 @@ fn without_networking_machines_boot_without_a_nic() {
         inner: LocalProcessVmm::new(guestd_path()),
         specs: Mutex::default(),
         probe_endpoints: None,
+        service: Arc::default(),
     });
     let engine = Engine::new(env.config(vmm.clone())).unwrap();
     let m = engine

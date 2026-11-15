@@ -2,7 +2,7 @@
 use std::io;
 use std::os::fd::OwnedFd;
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     pub interface_id: String,
@@ -21,7 +21,6 @@ pub struct Settings {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     Create { key: String, settings: Settings },
-    Attach { key: String, generation: String },
     Stop { key: String, generation: String },
     Status { key: String, generation: String },
     // A struct variant makes Serde enforce deny_unknown_fields here too.

@@ -36,6 +36,11 @@ impl Network {
             .map_err(|e| Error::unavailable(e.to_string()))
     }
 }
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Lease {
+    key: String,
+    generation: String,
+}
 const LEASE: &str = "net-lease.json";
 /// A packet descriptor and the XPC connection that owns its native interface.
 pub struct Attachment {
@@ -45,10 +50,44 @@ pub struct Attachment {
 impl Attachment {
     pub fn open(device: &NetDevice) -> std::io::Result<Self> {
         let connection = Connection::connect()?;
-        let reply = connection.request(&Request::Attach {
+        let reply = connection.request(&Request::Create {
             key: device.key.clone(),
-            generation: device.generation.clone(),
+            settings: device.settings.clone(),
         })?;
+        if !reply.response.connected
+            || reply
+                .response
+                .prefix
+                .as_deref()
+                .map(str::parse::<std::net::Ipv6Addr>)
+                .transpose()
+                .map_err(std::io::Error::other)?
+                != device
+                    .settings
+                    .nat66_prefix
+                    .as_deref()
+                    .map(str::parse::<std::net::Ipv6Addr>)
+                    .transpose()
+                    .map_err(std::io::Error::other)?
+        {
+            return Err(std::io::Error::other(
+                "daemon did not acknowledge the requested network prefix",
+            ));
+        }
+        let generation = reply
+            .response
+            .generation
+            .filter(|g| !g.is_empty())
+            .ok_or_else(|| std::io::Error::other("daemon returned no interface generation"))?;
+        let temporary = Path::new(&device.key).join("net-lease.tmp");
+        fs::write(
+            &temporary,
+            serde_json::to_vec(&Lease {
+                key: device.key.clone(),
+                generation,
+            })?,
+        )?;
+        fs::rename(temporary, Path::new(&device.key).join(LEASE))?;
         Ok(Self {
             packet: reply
                 .packet
@@ -57,7 +96,7 @@ impl Attachment {
         })
     }
 }
-fn lease(dir: &Path) -> Option<NetDevice> {
+fn lease(dir: &Path) -> Option<Lease> {
     serde_json::from_slice(&fs::read(dir.join(LEASE)).ok()?).ok()
 }
 impl Network {
@@ -78,43 +117,13 @@ impl Network {
         self.stop(spec);
         let key = spec.dir.to_string_lossy().into_owned();
         let settings = settings(spec)?;
-        let response = self.request(&Request::Create {
-            key: key.clone(),
+        Ok(NetDevice {
+            key,
             settings,
-        })?;
-        let generation = response
-            .generation
-            .ok_or_else(|| Error::unavailable("daemon returned no interface generation"))?;
-        let device = NetDevice {
-            key: key.clone(),
-            generation: generation.clone(),
             mac: machine_mac(&spec.machine_id),
-        };
-        let persisted = (|| -> Result<()> {
-            if !response.connected
-                || response
-                    .prefix
-                    .as_deref()
-                    .map(str::parse::<std::net::Ipv6Addr>)
-                    .transpose()
-                    .map_err(|e| Error::unavailable(e.to_string()))?
-                    != host.shared_ipv6_prefix
-            {
-                return Err(Error::unavailable(
-                    "daemon did not acknowledge the requested network prefix",
-                ));
-            }
-            let temporary = spec.dir.join("net-lease.tmp");
-            fs::write(&temporary, serde_json::to_vec(&device)?)?;
-            fs::rename(temporary, spec.dir.join(LEASE))?;
-            Ok(())
-        })();
-        if let Err(error) = persisted {
-            let _ = self.request(&Request::Stop { key, generation });
-            return Err(error);
-        }
-        Ok(device)
+        })
     }
+
     pub(crate) fn stop(&self, spec: &NetSpec) {
         if let Some(lease) = lease(&spec.dir) {
             if let Err(error) = self.request(&Request::Stop {

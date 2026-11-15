@@ -5,9 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn create(key: &str, identity: &str) -> String {
-    let response = Connection::connect()
-        .unwrap()
+fn create(owner: &Connection, key: &str, identity: &str) -> clankerd_network_ipc::Reply {
+    owner
         .request(&Request::Create {
             key: key.into(),
             settings: Settings {
@@ -24,9 +23,6 @@ fn create(key: &str, identity: &str) -> String {
             },
         })
         .unwrap()
-        .response;
-    assert!(response.connected);
-    response.generation.unwrap()
 }
 // Exercise the real vmnet notification and packet path without booting a VM.
 fn assert_gateway_arp(socket: &UnixDatagram) {
@@ -87,33 +83,15 @@ fn connected(key: &str, generation: &str) -> bool {
 fn two_interfaces_share_daemon_and_disconnect_releases_only_its_interface() {
     let key_a = format!("/tmp/clankerd-ipc-test-{}-a", std::process::id());
     let key_b = format!("/tmp/clankerd-ipc-test-{}-b", std::process::id());
-    let a = create(&key_a, "c1a00000-0000-4000-8000-000000000001");
-    let b = create(&key_b, "c1a00000-0000-4000-8000-000000000002");
     let owner_a = Connection::connect().unwrap();
     let owner_b = Connection::connect().unwrap();
-    let reply_a = owner_a
-        .request(&Request::Attach {
-            key: key_a.clone(),
-            generation: a.clone(),
-        })
-        .unwrap();
-    let reply_b = owner_b
-        .request(&Request::Attach {
-            key: key_b.clone(),
-            generation: b.clone(),
-        })
-        .unwrap();
+    let reply_a = create(&owner_a, &key_a, "c1a00000-0000-4000-8000-000000000001");
+    let reply_b = create(&owner_b, &key_b, "c1a00000-0000-4000-8000-000000000002");
+    let a = reply_a.response.generation.clone().unwrap();
+    let b = reply_b.response.generation.clone().unwrap();
     let packet_a = UnixDatagram::from(reply_a.packet.unwrap());
     assert_gateway_arp(&packet_a);
     assert!(reply_b.packet.is_some());
-    assert!(
-        owner_b
-            .request(&Request::Attach {
-                key: key_b.clone(),
-                generation: b.clone()
-            })
-            .is_err()
-    );
     assert!(!connected(&key_b, "old-generation"));
     drop(owner_a);
     let deadline = Instant::now() + Duration::from_secs(10);
