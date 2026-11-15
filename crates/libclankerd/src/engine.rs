@@ -197,10 +197,11 @@ impl Inner {
     }
 
     /// Releases the machine’s native network attachment.
-    pub fn stop_net(&self, id: &str) {
+    pub fn stop_net(&self, id: &str) -> Result<()> {
         if let Some(net) = &self.net {
-            net.stop(&self.net_spec(id));
+            net.stop(&self.net_spec(id))?;
         }
+        Ok(())
     }
 
     /// Where the guest dials the host (stands in for a vsock port).

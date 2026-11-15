@@ -1,0 +1,808 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>From vmctl command to network cleanup</title><style>body{font:16px/1.5 system-ui;margin:0;background:#eef2f7;color:#16263b}main{max-width:1450px;margin:auto;padding:28px 20px}h1{font-size:29px;margin-bottom:10px}h2{font-size:24px;margin-top:0}h3{font-size:21px}p{max-width:1050px}.single,.chapter{background:white;border:1px solid #cad5e3;border-radius:12px;padding:22px;margin:24px 0}.single .drawing{max-width:820px;margin:auto}.pair{display:grid;grid-template-columns:1fr 1fr;gap:24px}.panel{min-width:0}.drawing{overflow:auto}.drawing svg{display:block;width:100%;height:auto;min-width:390px}.issue{padding:13px 15px;border-left:4px solid #c3604b;background:#fff0eb}.explain{padding:12px 15px;background:#eaf1fc}.key{display:flex;flex-wrap:wrap;gap:9px;margin:15px 0}.key span{padding:7px 11px;border-radius:6px;border:1px solid #ccd3df}a{color:#235a9a}nav{display:flex;flex-wrap:wrap;gap:16px}code{font-size:14px}.small{font-size:13px;color:#51647c}@media(max-width:900px){.pair{grid-template-columns:1fr}main{padding:18px 10px}.chapter,.single{padding:14px}}@media print{.chapter{break-before:page}.drawing svg{min-width:0}}</style><main><h1>What happens when you create, start and stop a machine?</h1><p>Follow the arrows. The bold heading in each box tells you <strong>who acts</strong>; the text below says <strong>what they do</strong>. First follow a successful start. Then compare what happens when something fails.</p><nav><a href="#create">1. Create</a><a href="#start">2. Start</a><a href="#delay">3. Startup delay</a><a href="#stop">4. Stop and cleanup</a><a href="#crash">5. Helper crash</a></nav><div class="key"><span style="background:#e8e5ff">You</span><span style="background:#e5efff">vmctl CLI process</span><span style="background:#e0f5f2">Privileged networking helper</span><span style="background:#e9f3df">Machine process</span><span style="background:#fff2cf">macOS</span><span style="background:#ffe3dd">Failure / leftover</span></div><p class="small">The privileged networking helper is the existing clankerd process running as administrator on your Mac. The machine process is clankerd-vmspawn, which runs the virtual machine. Neither is the short-lived vmctl CLI process.</p><section class="single" id="create"><h2>1. You create the machine</h2><p>This saves what to run. The virtual machine is not running yet. No live machine network connection is created at this step.</p><div class="drawing"><svg width="419pt" height="417pt"
+ viewBox="0.00 0.00 418.60 416.60" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(10.8 405.8)">
+<title>G</title>
+<!-- a -->
+<g id="node1" class="node">
+<title>a</title>
+<path fill="#e8e5ff" stroke="#8a9aaf" d="M380,-395C380,-395 17,-395 17,-395 11,-395 5,-389 5,-383 5,-383 5,-343 5,-343 5,-337 11,-331 17,-331 17,-331 380,-331 380,-331 386,-331 392,-337 392,-343 392,-343 392,-383 392,-383 392,-389 386,-395 380,-395"/>
+<text text-anchor="start" x="181.5" y="-373.8" font-family="sans-serif" font-weight="bold" font-size="14.00">YOU</text>
+<text text-anchor="start" x="19" y="-345.8" font-family="sans-serif" font-size="14.00">vmctl machine create &#45;&#45;name sandbox debian:trixie</text>
+</g>
+<!-- b -->
+<g id="node2" class="node">
+<title>b</title>
+<path fill="#e5efff" stroke="#8a9aaf" d="M311.5,-286C311.5,-286 85.5,-286 85.5,-286 79.5,-286 73.5,-280 73.5,-274 73.5,-274 73.5,-220 73.5,-220 73.5,-214 79.5,-208 85.5,-208 85.5,-208 311.5,-208 311.5,-208 317.5,-208 323.5,-214 323.5,-220 323.5,-220 323.5,-274 323.5,-274 323.5,-280 317.5,-286 311.5,-286"/>
+<text text-anchor="start" x="105" y="-264.8" font-family="sans-serif" font-weight="bold" font-size="14.00">vmctl — the CLI process</text>
+<text text-anchor="start" x="87.5" y="-236.8" font-family="sans-serif" font-size="14.00">Save the machine configuration</text>
+<text text-anchor="start" x="103.5" y="-222.8" font-family="sans-serif" font-size="14.00">and prepare its saved state</text>
+</g>
+<!-- a&#45;&gt;b -->
+<g id="edge1" class="edge">
+<title>a&#45;&gt;b</title>
+<path fill="none" stroke="#465b76" d="M198.5,-330.85C198.5,-319.71 198.5,-306.9 198.5,-294.73"/>
+<polygon fill="#465b76" stroke="#465b76" points="201.48,-294.52 198.5,-286.02 195.53,-294.52 201.48,-294.52"/>
+<text text-anchor="middle" x="212" y="-305.4" font-family="sans-serif" font-size="12.00">runs</text>
+</g>
+<!-- c -->
+<g id="node3" class="node">
+<title>c</title>
+<path fill="#e5efff" stroke="#8a9aaf" d="M294,-175C294,-175 103,-175 103,-175 97,-175 91,-169 91,-163 91,-163 91,-123 91,-123 91,-117 97,-111 103,-111 103,-111 294,-111 294,-111 300,-111 306,-117 306,-123 306,-123 306,-163 306,-163 306,-169 300,-175 294,-175"/>
+<text text-anchor="start" x="105" y="-153.8" font-family="sans-serif" font-weight="bold" font-size="14.00">vmctl — the CLI process</text>
+<text text-anchor="start" x="109.5" y="-125.8" font-family="sans-serif" font-size="14.00">Return the result and exit</text>
+</g>
+<!-- b&#45;&gt;c -->
+<g id="edge2" class="edge">
+<title>b&#45;&gt;c</title>
+<path fill="none" stroke="#465b76" d="M198.5,-207.73C198.5,-199.93 198.5,-191.7 198.5,-183.84"/>
+<polygon fill="#465b76" stroke="#465b76" points="201.48,-183.67 198.5,-175.17 195.53,-183.67 201.48,-183.67"/>
+</g>
+<!-- d -->
+<g id="node4" class="node">
+<title>d</title>
+<path fill="#eef0f3" stroke="#8a9aaf" d="M385,-78C385,-78 12,-78 12,-78 6,-78 0,-72 0,-66 0,-66 0,-12 0,-12 0,-6 6,0 12,0 12,0 385,0 385,0 391,0 397,-6 397,-12 397,-12 397,-66 397,-66 397,-72 391,-78 385,-78"/>
+<text text-anchor="start" x="123" y="-56.8" font-family="sans-serif" font-weight="bold" font-size="14.00">WHAT EXISTS NOW</text>
+<text text-anchor="start" x="78" y="-28.8" font-family="sans-serif" font-size="14.00">A saved machine named sandbox.</text>
+<text text-anchor="start" x="14" y="-14.8" font-family="sans-serif" font-size="14.00">No running machine and no live network connection.</text>
+</g>
+<!-- c&#45;&gt;d -->
+<g id="edge3" class="edge">
+<title>c&#45;&gt;d</title>
+<path fill="none" stroke="#465b76" d="M198.5,-110.84C198.5,-103.27 198.5,-95.01 198.5,-86.88"/>
+<polygon fill="#465b76" stroke="#465b76" points="201.48,-86.66 198.5,-78.16 195.53,-86.66 201.48,-86.66"/>
+</g>
+</g>
+</svg>
+</div></section><section class="single" id="start"><h2>2. You start the machine</h2><p>Read downward. The CLI first asks for networking, then launches the process that will run the machine. These are separate processes with different jobs.</p><div class="drawing"><svg width="479pt" height="1098pt"
+ viewBox="0.00 0.00 479.10 1097.60" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(10.8 1086.8)">
+<title>G</title>
+<!-- a -->
+<g id="node1" class="node">
+<title>a</title>
+<path fill="#e8e5ff" stroke="#8a9aaf" d="M306,-1076C306,-1076 99,-1076 99,-1076 93,-1076 87,-1070 87,-1064 87,-1064 87,-1024 87,-1024 87,-1018 93,-1012 99,-1012 99,-1012 306,-1012 306,-1012 312,-1012 318,-1018 318,-1024 318,-1024 318,-1064 318,-1064 318,-1070 312,-1076 306,-1076"/>
+<text text-anchor="start" x="185.5" y="-1054.8" font-family="sans-serif" font-weight="bold" font-size="14.00">YOU</text>
+<text text-anchor="start" x="101" y="-1026.8" font-family="sans-serif" font-size="14.00">vmctl machine start sandbox</text>
+</g>
+<!-- b -->
+<g id="node2" class="node">
+<title>b</title>
+<path fill="#e5efff" stroke="#8a9aaf" d="M335.5,-967C335.5,-967 69.5,-967 69.5,-967 63.5,-967 57.5,-961 57.5,-955 57.5,-955 57.5,-901 57.5,-901 57.5,-895 63.5,-889 69.5,-889 69.5,-889 335.5,-889 335.5,-889 341.5,-889 347.5,-895 347.5,-901 347.5,-901 347.5,-955 347.5,-955 347.5,-961 341.5,-967 335.5,-967"/>
+<text text-anchor="start" x="109" y="-945.8" font-family="sans-serif" font-weight="bold" font-size="14.00">vmctl — the CLI process</text>
+<text text-anchor="start" x="71.5" y="-917.8" font-family="sans-serif" font-size="14.00">Ask the privileged networking helper:</text>
+<text text-anchor="start" x="80" y="-903.8" font-family="sans-serif" font-size="14.00">“Create a connection for sandbox.”</text>
+</g>
+<!-- a&#45;&gt;b -->
+<g id="edge1" class="edge">
+<title>a&#45;&gt;b</title>
+<path fill="none" stroke="#465b76" d="M202.5,-1011.85C202.5,-1000.71 202.5,-987.9 202.5,-975.73"/>
+<polygon fill="#465b76" stroke="#465b76" points="205.48,-975.52 202.5,-967.02 199.53,-975.52 205.48,-975.52"/>
+<text text-anchor="middle" x="216" y="-986.4" font-family="sans-serif" font-size="12.00">runs</text>
+</g>
+<!-- c -->
+<g id="node3" class="node">
+<title>c</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M393,-844C393,-844 12,-844 12,-844 6,-844 0,-838 0,-832 0,-832 0,-764 0,-764 0,-758 6,-752 12,-752 12,-752 393,-752 393,-752 399,-752 405,-758 405,-764 405,-764 405,-832 405,-832 405,-838 399,-844 393,-844"/>
+<text text-anchor="start" x="66" y="-822.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="14" y="-794.8" font-family="sans-serif" font-size="14.00">A separate clankerd process running as administrator.</text>
+<text text-anchor="start" x="46" y="-780.8" font-family="sans-serif" font-size="14.00">Ask macOS to create the network connection</text>
+<text text-anchor="start" x="58.5" y="-766.8" font-family="sans-serif" font-size="14.00">and, where required, install firewall rules.</text>
+</g>
+<!-- b&#45;&gt;c -->
+<g id="edge2" class="edge">
+<title>b&#45;&gt;c</title>
+<path fill="none" stroke="#465b76" d="M202.5,-888.94C202.5,-877.68 202.5,-865.12 202.5,-853.04"/>
+<polygon fill="#465b76" stroke="#465b76" points="205.48,-852.86 202.5,-844.36 199.53,-852.86 205.48,-852.86"/>
+<text text-anchor="middle" x="243.5" y="-863.4" font-family="sans-serif" font-size="12.00">XPC message</text>
+</g>
+<!-- d -->
+<g id="node4" class="node">
+<title>d</title>
+<path fill="#fff2cf" stroke="#8a9aaf" d="M338.5,-707C338.5,-707 66.5,-707 66.5,-707 60.5,-707 54.5,-701 54.5,-695 54.5,-695 54.5,-641 54.5,-641 54.5,-635 60.5,-629 66.5,-629 66.5,-629 338.5,-629 338.5,-629 344.5,-629 350.5,-635 350.5,-641 350.5,-641 350.5,-695 350.5,-695 350.5,-701 344.5,-707 338.5,-707"/>
+<text text-anchor="start" x="175" y="-685.8" font-family="sans-serif" font-weight="bold" font-size="14.00">macOS</text>
+<text text-anchor="start" x="72.5" y="-657.8" font-family="sans-serif" font-size="14.00">Create the actual network connection</text>
+<text text-anchor="start" x="68.5" y="-643.8" font-family="sans-serif" font-size="14.00">and apply the requested firewall rules.</text>
+</g>
+<!-- c&#45;&gt;d -->
+<g id="edge3" class="edge">
+<title>c&#45;&gt;d</title>
+<path fill="none" stroke="#465b76" d="M202.5,-751.87C202.5,-740.29 202.5,-727.79 202.5,-716.11"/>
+<polygon fill="#465b76" stroke="#465b76" points="205.48,-715.86 202.5,-707.36 199.53,-715.86 205.48,-715.86"/>
+<text text-anchor="middle" x="330" y="-726.4" font-family="sans-serif" font-size="12.00">macOS networking and firewall operations</text>
+</g>
+<!-- e -->
+<g id="node5" class="node">
+<title>e</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M368,-584C368,-584 37,-584 37,-584 31,-584 25,-578 25,-572 25,-572 25,-518 25,-518 25,-512 31,-506 37,-506 37,-506 368,-506 368,-506 374,-506 380,-512 380,-518 380,-518 380,-572 380,-572 380,-578 374,-584 368,-584"/>
+<text text-anchor="start" x="66" y="-562.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="44" y="-534.8" font-family="sans-serif" font-size="14.00">Return a unique identifier for this connection.</text>
+<text text-anchor="start" x="39" y="-520.8" font-family="sans-serif" font-size="14.00">Keep the connection available for the machine.</text>
+</g>
+<!-- d&#45;&gt;e -->
+<g id="edge4" class="edge">
+<title>d&#45;&gt;e</title>
+<path fill="none" stroke="#465b76" d="M202.5,-628.71C202.5,-617.24 202.5,-604.52 202.5,-592.57"/>
+<polygon fill="#465b76" stroke="#465b76" points="205.48,-592.54 202.5,-584.04 199.53,-592.54 205.48,-592.54"/>
+<text text-anchor="middle" x="219.5" y="-603.4" font-family="sans-serif" font-size="12.00">result</text>
+</g>
+<!-- f -->
+<g id="node6" class="node">
+<title>f</title>
+<path fill="#e5efff" stroke="#8a9aaf" d="M340.5,-461C340.5,-461 64.5,-461 64.5,-461 58.5,-461 52.5,-455 52.5,-449 52.5,-449 52.5,-395 52.5,-395 52.5,-389 58.5,-383 64.5,-383 64.5,-383 340.5,-383 340.5,-383 346.5,-383 352.5,-389 352.5,-395 352.5,-395 352.5,-449 352.5,-449 352.5,-455 346.5,-461 340.5,-461"/>
+<text text-anchor="start" x="109" y="-439.8" font-family="sans-serif" font-weight="bold" font-size="14.00">vmctl — the CLI process</text>
+<text text-anchor="start" x="97" y="-411.8" font-family="sans-serif" font-size="14.00">Save the connection identifier.</text>
+<text text-anchor="start" x="66.5" y="-397.8" font-family="sans-serif" font-size="14.00">Launch the process that runs sandbox.</text>
+</g>
+<!-- e&#45;&gt;f -->
+<g id="edge5" class="edge">
+<title>e&#45;&gt;f</title>
+<path fill="none" stroke="#465b76" d="M202.5,-505.71C202.5,-494.24 202.5,-481.52 202.5,-469.57"/>
+<polygon fill="#465b76" stroke="#465b76" points="205.48,-469.54 202.5,-461.04 199.53,-469.54 205.48,-469.54"/>
+<text text-anchor="middle" x="231.5" y="-480.4" font-family="sans-serif" font-size="12.00">XPC reply</text>
+</g>
+<!-- g -->
+<g id="node7" class="node">
+<title>g</title>
+<path fill="#e9f3df" stroke="#8a9aaf" d="M362.5,-338C362.5,-338 42.5,-338 42.5,-338 36.5,-338 30.5,-332 30.5,-326 30.5,-326 30.5,-272 30.5,-272 30.5,-266 36.5,-260 42.5,-260 42.5,-260 362.5,-260 362.5,-260 368.5,-260 374.5,-266 374.5,-272 374.5,-272 374.5,-326 374.5,-326 374.5,-332 368.5,-338 362.5,-338"/>
+<text text-anchor="start" x="126.5" y="-316.8" font-family="sans-serif" font-weight="bold" font-size="14.00">MACHINE PROCESS</text>
+<text text-anchor="start" x="47.5" y="-288.8" font-family="sans-serif" font-size="14.00">clankerd&#45;vmspawn runs the virtual machine.</text>
+<text text-anchor="start" x="44.5" y="-274.8" font-family="sans-serif" font-size="14.00">Ask the helper: “Let me use this connection.”</text>
+</g>
+<!-- f&#45;&gt;g -->
+<g id="edge6" class="edge">
+<title>f&#45;&gt;g</title>
+<path fill="none" stroke="#465b76" d="M202.5,-382.71C202.5,-371.24 202.5,-358.52 202.5,-346.57"/>
+<polygon fill="#465b76" stroke="#465b76" points="205.48,-346.54 202.5,-338.04 199.53,-346.54 205.48,-346.54"/>
+<text text-anchor="middle" x="222.5" y="-357.4" font-family="sans-serif" font-size="12.00">launch</text>
+</g>
+<!-- h -->
+<g id="node8" class="node">
+<title>h</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M385.5,-215C385.5,-215 19.5,-215 19.5,-215 13.5,-215 7.5,-209 7.5,-203 7.5,-203 7.5,-135 7.5,-135 7.5,-129 13.5,-123 19.5,-123 19.5,-123 385.5,-123 385.5,-123 391.5,-123 397.5,-129 397.5,-135 397.5,-135 397.5,-203 397.5,-203 397.5,-209 391.5,-215 385.5,-215"/>
+<text text-anchor="start" x="66" y="-193.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="50.5" y="-165.8" font-family="sans-serif" font-size="14.00">Give the machine process its packet socket:</text>
+<text text-anchor="start" x="21.5" y="-151.8" font-family="sans-serif" font-size="14.00">the channel used to send and receive network data.</text>
+<text text-anchor="start" x="28" y="-137.8" font-family="sans-serif" font-size="14.00">Remember which process is using the connection.</text>
+</g>
+<!-- g&#45;&gt;h -->
+<g id="edge7" class="edge">
+<title>g&#45;&gt;h</title>
+<path fill="none" stroke="#465b76" d="M202.5,-259.94C202.5,-248.68 202.5,-236.12 202.5,-224.04"/>
+<polygon fill="#465b76" stroke="#465b76" points="205.48,-223.86 202.5,-215.36 199.53,-223.86 205.48,-223.86"/>
+<text text-anchor="middle" x="306" y="-234.4" font-family="sans-serif" font-size="12.00">XPC message with saved identifier</text>
+</g>
+<!-- i -->
+<g id="node9" class="node">
+<title>i</title>
+<path fill="#e9f3df" stroke="#8a9aaf" d="M392,-78C392,-78 13,-78 13,-78 7,-78 1,-72 1,-66 1,-66 1,-12 1,-12 1,-6 7,0 13,0 13,0 392,0 392,0 398,0 404,-6 404,-12 404,-12 404,-66 404,-66 404,-72 398,-78 392,-78"/>
+<text text-anchor="start" x="28.5" y="-56.8" font-family="sans-serif" font-weight="bold" font-size="14.00">MACHINE PROCESS + NETWORKING HELPER</text>
+<text text-anchor="start" x="15" y="-28.8" font-family="sans-serif" font-size="14.00">Machine uses the socket; helper moves network data.</text>
+<text text-anchor="start" x="64" y="-14.8" font-family="sans-serif" font-size="14.00">Both remain running after the CLI exits.</text>
+</g>
+<!-- h&#45;&gt;i -->
+<g id="edge8" class="edge">
+<title>h&#45;&gt;i</title>
+<path fill="none" stroke="#465b76" d="M202.5,-122.87C202.5,-111.29 202.5,-98.79 202.5,-87.11"/>
+<polygon fill="#465b76" stroke="#465b76" points="205.48,-86.86 202.5,-78.36 199.53,-86.86 205.48,-86.86"/>
+<text text-anchor="middle" x="279" y="-97.4" font-family="sans-serif" font-size="12.00">socket returned over XPC</text>
+</g>
+</g>
+</svg>
+</div><p class="explain">XPC is macOS’s way for these processes to send requests and replies. It controls setup; the packet socket carries the machine’s network data.</p></section><section class="chapter" id="delay"><h2>3. What if startup is slow or abandoned?</h2><p>This is the gap between the helper creating the connection and the machine process asking to use it.</p><div class="pair"><div class="panel"><h3>Before the changes</h3><div class="drawing"><svg width="369pt" height="320pt"
+ viewBox="0.00 0.00 368.60 319.60" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(10.8 308.8)">
+<title>G</title>
+<!-- a -->
+<g id="node1" class="node">
+<title>a</title>
+<path fill="#e5efff" stroke="#8a9aaf" d="M330,-298C330,-298 17,-298 17,-298 11,-298 5,-292 5,-286 5,-286 5,-232 5,-232 5,-226 11,-220 17,-220 17,-220 330,-220 330,-220 336,-220 342,-226 342,-232 342,-232 342,-286 342,-286 342,-292 336,-298 330,-298"/>
+<text text-anchor="start" x="80" y="-276.8" font-family="sans-serif" font-weight="bold" font-size="14.00">vmctl — the CLI process</text>
+<text text-anchor="start" x="66.5" y="-248.8" font-family="sans-serif" font-size="14.00">Helper created the connection.</text>
+<text text-anchor="start" x="19" y="-234.8" font-family="sans-serif" font-size="14.00">Machine process has not asked to use it yet.</text>
+</g>
+<!-- b -->
+<g id="node2" class="node">
+<title>b</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M313,-187C313,-187 34,-187 34,-187 28,-187 22,-181 22,-175 22,-175 22,-135 22,-135 22,-129 28,-123 34,-123 34,-123 313,-123 313,-123 319,-123 325,-129 325,-135 325,-135 325,-175 325,-175 325,-181 319,-187 313,-187"/>
+<text text-anchor="start" x="37" y="-165.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="36" y="-137.8" font-family="sans-serif" font-size="14.00">No deadline for the unused connection.</text>
+</g>
+<!-- a&#45;&gt;b -->
+<g id="edge1" class="edge">
+<title>a&#45;&gt;b</title>
+<path fill="none" stroke="#465b76" d="M173.5,-219.73C173.5,-211.93 173.5,-203.7 173.5,-195.84"/>
+<polygon fill="#465b76" stroke="#465b76" points="176.48,-195.67 173.5,-187.17 170.53,-195.67 176.48,-195.67"/>
+</g>
+<!-- c -->
+<g id="node3" class="node">
+<title>c</title>
+<path fill="#ffe3dd" stroke="#8a9aaf" d="M335,-78C335,-78 12,-78 12,-78 6,-78 0,-72 0,-66 0,-66 0,-12 0,-12 0,-6 6,0 12,0 12,0 335,0 335,0 341,0 347,-6 347,-12 347,-12 347,-66 347,-66 347,-72 341,-78 335,-78"/>
+<text text-anchor="start" x="48.5" y="-56.8" font-family="sans-serif" font-weight="bold" font-size="14.00">macOS + NETWORKING HELPER</text>
+<text text-anchor="start" x="14" y="-28.8" font-family="sans-serif" font-size="14.00">Connection, network worker and firewall rules</text>
+<text text-anchor="start" x="37.5" y="-14.8" font-family="sans-serif" font-size="14.00">can remain after startup is abandoned.</text>
+</g>
+<!-- b&#45;&gt;c -->
+<g id="edge2" class="edge">
+<title>b&#45;&gt;c</title>
+<path fill="none" stroke="#465b76" d="M173.5,-122.85C173.5,-111.71 173.5,-98.9 173.5,-86.73"/>
+<polygon fill="#465b76" stroke="#465b76" points="176.48,-86.52 173.5,-78.02 170.53,-86.52 176.48,-86.52"/>
+<text text-anchor="middle" x="234" y="-97.4" font-family="sans-serif" font-size="12.00">machine never asks</text>
+</g>
+</g>
+</svg>
+</div><p class="issue">An abandoned startup can leave a real network connection and firewall rules behind.</p></div><div class="panel"><h3>After the changes</h3><div class="drawing"><svg width="762pt" height="457pt"
+ viewBox="0.00 0.00 762.10 456.60" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(10.8 445.8)">
+<title>G</title>
+<!-- a -->
+<g id="node1" class="node">
+<title>a</title>
+<path fill="#e5efff" stroke="#8a9aaf" d="M447,-435C447,-435 134,-435 134,-435 128,-435 122,-429 122,-423 122,-423 122,-369 122,-369 122,-363 128,-357 134,-357 134,-357 447,-357 447,-357 453,-357 459,-363 459,-369 459,-369 459,-423 459,-423 459,-429 453,-435 447,-435"/>
+<text text-anchor="start" x="197" y="-413.8" font-family="sans-serif" font-weight="bold" font-size="14.00">vmctl — the CLI process</text>
+<text text-anchor="start" x="183.5" y="-385.8" font-family="sans-serif" font-size="14.00">Helper created the connection.</text>
+<text text-anchor="start" x="136" y="-371.8" font-family="sans-serif" font-size="14.00">Machine process has not asked to use it yet.</text>
+</g>
+<!-- b -->
+<g id="node2" class="node">
+<title>b</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M432,-324C432,-324 149,-324 149,-324 143,-324 137,-318 137,-312 137,-312 137,-258 137,-258 137,-252 143,-246 149,-246 149,-246 432,-246 432,-246 438,-246 444,-252 444,-258 444,-258 444,-312 444,-312 444,-318 438,-324 432,-324"/>
+<text text-anchor="start" x="154" y="-302.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="151" y="-274.8" font-family="sans-serif" font-size="14.00">Wait up to 120 seconds for the machine</text>
+<text text-anchor="start" x="189.5" y="-260.8" font-family="sans-serif" font-size="14.00">to ask to use the connection.</text>
+</g>
+<!-- a&#45;&gt;b -->
+<g id="edge1" class="edge">
+<title>a&#45;&gt;b</title>
+<path fill="none" stroke="#465b76" d="M290.5,-356.88C290.5,-349.12 290.5,-340.88 290.5,-332.86"/>
+<polygon fill="#465b76" stroke="#465b76" points="293.48,-332.79 290.5,-324.29 287.53,-332.79 293.48,-332.79"/>
+</g>
+<!-- c -->
+<g id="node3" class="node">
+<title>c</title>
+<path fill="#dcf3e3" stroke="#8a9aaf" d="M321,-201C321,-201 12,-201 12,-201 6,-201 0,-195 0,-189 0,-189 0,-135 0,-135 0,-129 6,-123 12,-123 12,-123 321,-123 321,-123 327,-123 333,-129 333,-135 333,-135 333,-189 333,-189 333,-195 327,-201 321,-201"/>
+<text text-anchor="start" x="90.5" y="-179.8" font-family="sans-serif" font-weight="bold" font-size="14.00">MACHINE PROCESS</text>
+<text text-anchor="start" x="20.5" y="-151.8" font-family="sans-serif" font-size="14.00">Asks in time: connection is used normally.</text>
+<text text-anchor="start" x="14" y="-137.8" font-family="sans-serif" font-size="14.00">The 120&#45;second deadline no longer applies.</text>
+</g>
+<!-- b&#45;&gt;c -->
+<g id="edge2" class="edge">
+<title>b&#45;&gt;c</title>
+<path fill="none" stroke="#465b76" d="M251.27,-245.71C238.7,-233.46 224.7,-219.79 211.74,-207.15"/>
+<polygon fill="#465b76" stroke="#465b76" points="213.64,-204.84 205.48,-201.04 209.48,-209.1 213.64,-204.84"/>
+<text text-anchor="middle" x="295" y="-220.4" font-family="sans-serif" font-size="12.00">machine asks in time</text>
+</g>
+<!-- d -->
+<g id="node4" class="node">
+<title>d</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M647,-201C647,-201 370,-201 370,-201 364,-201 358,-195 358,-189 358,-189 358,-135 358,-135 358,-129 364,-123 370,-123 370,-123 647,-123 647,-123 653,-123 659,-129 659,-135 659,-135 659,-189 659,-189 659,-195 653,-201 647,-201"/>
+<text text-anchor="start" x="372" y="-179.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="382.5" y="-151.8" font-family="sans-serif" font-size="14.00">No request in time: attempt cleanup</text>
+<text text-anchor="start" x="403" y="-137.8" font-family="sans-serif" font-size="14.00">at the next five&#45;second check.</text>
+</g>
+<!-- b&#45;&gt;d -->
+<g id="edge3" class="edge">
+<title>b&#45;&gt;d</title>
+<path fill="none" stroke="#465b76" d="M359.18,-245.88C382.38,-233 408.41,-218.55 432.17,-205.37"/>
+<polygon fill="#465b76" stroke="#465b76" points="433.81,-207.86 439.79,-201.14 430.92,-202.66 433.81,-207.86"/>
+<text text-anchor="middle" x="454.5" y="-220.4" font-family="sans-serif" font-size="12.00">deadline expires</text>
+</g>
+<!-- e -->
+<g id="node5" class="node">
+<title>e</title>
+<path fill="#ffe3dd" stroke="#8a9aaf" d="M673,-78C673,-78 344,-78 344,-78 338,-78 332,-72 332,-66 332,-66 332,-12 332,-12 332,-6 338,0 344,0 344,0 673,0 673,0 679,0 685,-6 685,-12 685,-12 685,-66 685,-66 685,-72 679,-78 673,-78"/>
+<text text-anchor="start" x="432.5" y="-56.8" font-family="sans-serif" font-weight="bold" font-size="14.00">MACHINE PROCESS</text>
+<text text-anchor="start" x="369" y="-28.8" font-family="sans-serif" font-size="14.00">Asks too late: connection is unavailable.</text>
+<text text-anchor="start" x="346" y="-14.8" font-family="sans-serif" font-size="14.00">This startup does not automatically recreate it.</text>
+</g>
+<!-- d&#45;&gt;e -->
+<g id="edge4" class="edge">
+<title>d&#45;&gt;e</title>
+<path fill="none" stroke="#465b76" d="M508.5,-122.71C508.5,-111.24 508.5,-98.52 508.5,-86.57"/>
+<polygon fill="#465b76" stroke="#465b76" points="511.48,-86.54 508.5,-78.04 505.53,-86.54 511.48,-86.54"/>
+<text text-anchor="middle" x="624.5" y="-97.4" font-family="sans-serif" font-size="12.00">legitimately slow machine arrives later</text>
+</g>
+</g>
+</svg>
+</div><p class="issue">The unused-connection leak is addressed, but a genuinely slow startup can be cut off. The current code does not automatically recover that startup.</p></div></div></section><section class="chapter" id="stop"><h2>4. What happens when you stop the machine?</h2><p>The helper performs network cleanup. Saved files only retain information; they cannot remove firewall rules themselves.</p><div class="pair"><div class="panel"><h3>Before the changes</h3><div class="drawing"><svg width="695pt" height="1117pt"
+ viewBox="0.00 0.00 695.10 1116.60" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(10.8 1105.8)">
+<title>G</title>
+<!-- a -->
+<g id="node1" class="node">
+<title>a</title>
+<path fill="#e8e5ff" stroke="#8a9aaf" d="M329,-1095C329,-1095 124,-1095 124,-1095 118,-1095 112,-1089 112,-1083 112,-1083 112,-1043 112,-1043 112,-1037 118,-1031 124,-1031 124,-1031 329,-1031 329,-1031 335,-1031 341,-1037 341,-1043 341,-1043 341,-1083 341,-1083 341,-1089 335,-1095 329,-1095"/>
+<text text-anchor="start" x="209.5" y="-1073.8" font-family="sans-serif" font-weight="bold" font-size="14.00">YOU</text>
+<text text-anchor="start" x="126" y="-1045.8" font-family="sans-serif" font-size="14.00">vmctl machine stop sandbox</text>
+</g>
+<!-- b -->
+<g id="node2" class="node">
+<title>b</title>
+<path fill="#e5efff" stroke="#8a9aaf" d="M341.5,-986C341.5,-986 111.5,-986 111.5,-986 105.5,-986 99.5,-980 99.5,-974 99.5,-974 99.5,-920 99.5,-920 99.5,-914 105.5,-908 111.5,-908 111.5,-908 341.5,-908 341.5,-908 347.5,-908 353.5,-914 353.5,-920 353.5,-920 353.5,-974 353.5,-974 353.5,-980 347.5,-986 341.5,-986"/>
+<text text-anchor="start" x="133" y="-964.8" font-family="sans-serif" font-weight="bold" font-size="14.00">vmctl — the CLI process</text>
+<text text-anchor="start" x="118" y="-936.8" font-family="sans-serif" font-size="14.00">Ask the machine to shut down.</text>
+<text text-anchor="start" x="113.5" y="-922.8" font-family="sans-serif" font-size="14.00">If needed, terminate its process.</text>
+</g>
+<!-- a&#45;&gt;b -->
+<g id="edge1" class="edge">
+<title>a&#45;&gt;b</title>
+<path fill="none" stroke="#465b76" d="M226.5,-1030.85C226.5,-1019.71 226.5,-1006.9 226.5,-994.73"/>
+<polygon fill="#465b76" stroke="#465b76" points="229.48,-994.52 226.5,-986.02 223.53,-994.52 229.48,-994.52"/>
+<text text-anchor="middle" x="240" y="-1005.4" font-family="sans-serif" font-size="12.00">runs</text>
+</g>
+<!-- c -->
+<g id="node3" class="node">
+<title>c</title>
+<path fill="#e9f3df" stroke="#8a9aaf" d="M371.5,-875C371.5,-875 81.5,-875 81.5,-875 75.5,-875 69.5,-869 69.5,-863 69.5,-863 69.5,-823 69.5,-823 69.5,-817 75.5,-811 81.5,-811 81.5,-811 371.5,-811 371.5,-811 377.5,-811 383.5,-817 383.5,-823 383.5,-823 383.5,-863 383.5,-863 383.5,-869 377.5,-875 371.5,-875"/>
+<text text-anchor="start" x="150.5" y="-853.8" font-family="sans-serif" font-weight="bold" font-size="14.00">MACHINE PROCESS</text>
+<text text-anchor="start" x="83.5" y="-825.8" font-family="sans-serif" font-size="14.00">Exits; its connection to the helper closes.</text>
+</g>
+<!-- b&#45;&gt;c -->
+<g id="edge2" class="edge">
+<title>b&#45;&gt;c</title>
+<path fill="none" stroke="#465b76" d="M226.5,-907.73C226.5,-899.93 226.5,-891.7 226.5,-883.84"/>
+<polygon fill="#465b76" stroke="#465b76" points="229.48,-883.67 226.5,-875.17 223.53,-883.67 229.48,-883.67"/>
+</g>
+<!-- d -->
+<g id="node4" class="node">
+<title>d</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M441,-766C441,-766 12,-766 12,-766 6,-766 0,-760 0,-754 0,-754 0,-700 0,-700 0,-694 6,-688 12,-688 12,-688 441,-688 441,-688 447,-688 453,-694 453,-700 453,-700 453,-754 453,-754 453,-760 447,-766 441,-766"/>
+<text text-anchor="start" x="90" y="-744.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="37" y="-716.8" font-family="sans-serif" font-size="14.00">Begin network cleanup when the process disconnects.</text>
+<text text-anchor="start" x="14" y="-702.8" font-family="sans-serif" font-size="14.00">The CLI also requests cleanup before reporting Stop success.</text>
+</g>
+<!-- c&#45;&gt;d -->
+<g id="edge3" class="edge">
+<title>c&#45;&gt;d</title>
+<path fill="none" stroke="#465b76" d="M226.5,-810.85C226.5,-799.71 226.5,-786.9 226.5,-774.73"/>
+<polygon fill="#465b76" stroke="#465b76" points="229.48,-774.52 226.5,-766.02 223.53,-774.52 229.48,-774.52"/>
+<text text-anchor="middle" x="335.5" y="-785.4" font-family="sans-serif" font-size="12.00">disconnection / XPC cleanup request</text>
+</g>
+<!-- e -->
+<g id="node5" class="node">
+<title>e</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M379,-655C379,-655 74,-655 74,-655 68,-655 62,-649 62,-643 62,-643 62,-589 62,-589 62,-583 68,-577 74,-577 74,-577 379,-577 379,-577 385,-577 391,-583 391,-589 391,-589 391,-643 391,-643 391,-649 385,-655 379,-655"/>
+<text text-anchor="start" x="90" y="-633.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="132" y="-605.8" font-family="sans-serif" font-size="14.00">Stop moving network data.</text>
+<text text-anchor="start" x="76" y="-591.8" font-family="sans-serif" font-size="14.00">Delete the connection record from memory.</text>
+</g>
+<!-- d&#45;&gt;e -->
+<g id="edge4" class="edge">
+<title>d&#45;&gt;e</title>
+<path fill="none" stroke="#465b76" d="M226.5,-687.88C226.5,-680.12 226.5,-671.88 226.5,-663.86"/>
+<polygon fill="#465b76" stroke="#465b76" points="229.48,-663.79 226.5,-655.29 223.53,-663.79 229.48,-663.79"/>
+</g>
+<!-- f -->
+<g id="node6" class="node">
+<title>f</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M402.5,-544C402.5,-544 50.5,-544 50.5,-544 44.5,-544 38.5,-538 38.5,-532 38.5,-532 38.5,-478 38.5,-478 38.5,-472 44.5,-466 50.5,-466 50.5,-466 402.5,-466 402.5,-466 408.5,-466 414.5,-472 414.5,-478 414.5,-478 414.5,-532 414.5,-532 414.5,-538 408.5,-544 402.5,-544"/>
+<text text-anchor="start" x="52.5" y="-522.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER → macOS</text>
+<text text-anchor="start" x="132" y="-494.8" font-family="sans-serif" font-size="14.00">Try to remove firewall rules</text>
+<text text-anchor="start" x="79" y="-480.8" font-family="sans-serif" font-size="14.00">and save the updated firewall information.</text>
+</g>
+<!-- e&#45;&gt;f -->
+<g id="edge5" class="edge">
+<title>e&#45;&gt;f</title>
+<path fill="none" stroke="#465b76" d="M226.5,-576.88C226.5,-569.12 226.5,-560.88 226.5,-552.86"/>
+<polygon fill="#465b76" stroke="#465b76" points="229.48,-552.79 226.5,-544.29 223.53,-552.79 229.48,-552.79"/>
+</g>
+<!-- g -->
+<g id="node7" class="node">
+<title>g</title>
+<path fill="#dcf3e3" stroke="#8a9aaf" d="M299,-421C299,-421 78,-421 78,-421 72,-421 66,-415 66,-409 66,-409 66,-355 66,-355 66,-349 72,-343 78,-343 78,-343 299,-343 299,-343 305,-343 311,-349 311,-355 311,-355 311,-409 311,-409 311,-415 305,-421 299,-421"/>
+<text text-anchor="start" x="108" y="-399.8" font-family="sans-serif" font-weight="bold" font-size="14.00">CLEANUP SUCCEEDS</text>
+<text text-anchor="start" x="101.5" y="-371.8" font-family="sans-serif" font-size="14.00">Clear completed records.</text>
+<text text-anchor="start" x="80" y="-357.8" font-family="sans-serif" font-size="14.00">CLI can report Stop succeeded.</text>
+</g>
+<!-- f&#45;&gt;g -->
+<g id="edge6" class="edge">
+<title>f&#45;&gt;g</title>
+<path fill="none" stroke="#465b76" d="M214.48,-465.71C210.84,-454.13 206.8,-441.28 203.02,-429.23"/>
+<polygon fill="#465b76" stroke="#465b76" points="205.83,-428.25 200.45,-421.04 200.15,-430.04 205.83,-428.25"/>
+<text text-anchor="middle" x="233" y="-440.4" font-family="sans-serif" font-size="12.00">success</text>
+</g>
+<!-- h -->
+<g id="node8" class="node">
+<title>h</title>
+<path fill="#ffe3dd" stroke="#8a9aaf" d="M630.5,-421C630.5,-421 348.5,-421 348.5,-421 342.5,-421 336.5,-415 336.5,-409 336.5,-409 336.5,-355 336.5,-355 336.5,-349 342.5,-343 348.5,-343 348.5,-343 630.5,-343 630.5,-343 636.5,-343 642.5,-349 642.5,-355 642.5,-355 642.5,-409 642.5,-409 642.5,-415 636.5,-421 630.5,-421"/>
+<text text-anchor="start" x="353" y="-399.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="350.5" y="-371.8" font-family="sans-serif" font-size="14.00">Cleanup fails, but the connection record</text>
+<text text-anchor="start" x="399" y="-357.8" font-family="sans-serif" font-size="14.00">has already been deleted.</text>
+</g>
+<!-- f&#45;&gt;h -->
+<g id="edge7" class="edge">
+<title>f&#45;&gt;h</title>
+<path fill="none" stroke="#465b76" d="M309.35,-465.88C337.71,-452.84 369.57,-438.18 398.53,-424.86"/>
+<polygon fill="#465b76" stroke="#465b76" points="400.13,-427.39 406.61,-421.14 397.65,-421.99 400.13,-427.39"/>
+<text text-anchor="middle" x="384.5" y="-440.4" font-family="sans-serif" font-size="12.00">failure</text>
+</g>
+<!-- i -->
+<g id="node9" class="node">
+<title>i</title>
+<path fill="#ffe3dd" stroke="#8a9aaf" d="M624,-310C624,-310 355,-310 355,-310 349,-310 343,-304 343,-298 343,-298 343,-244 343,-244 343,-238 349,-232 355,-232 355,-232 624,-232 624,-232 630,-232 636,-238 636,-244 636,-244 636,-298 636,-298 636,-304 630,-310 624,-310"/>
+<text text-anchor="start" x="396" y="-288.8" font-family="sans-serif" font-weight="bold" font-size="14.00">vmctl — the CLI process</text>
+<text text-anchor="start" x="357" y="-260.8" font-family="sans-serif" font-size="14.00">Delete the saved connection identifier</text>
+<text text-anchor="start" x="392" y="-246.8" font-family="sans-serif" font-size="14.00">even though cleanup failed.</text>
+</g>
+<!-- h&#45;&gt;i -->
+<g id="edge8" class="edge">
+<title>h&#45;&gt;i</title>
+<path fill="none" stroke="#465b76" d="M489.5,-342.88C489.5,-335.12 489.5,-326.88 489.5,-318.86"/>
+<polygon fill="#465b76" stroke="#465b76" points="492.48,-318.79 489.5,-310.29 486.53,-318.79 492.48,-318.79"/>
+</g>
+<!-- j -->
+<g id="node10" class="node">
+<title>j</title>
+<path fill="#e8e5ff" stroke="#8a9aaf" d="M631.5,-187C631.5,-187 347.5,-187 347.5,-187 341.5,-187 335.5,-181 335.5,-175 335.5,-175 335.5,-135 335.5,-135 335.5,-129 341.5,-123 347.5,-123 347.5,-123 631.5,-123 631.5,-123 637.5,-123 643.5,-129 643.5,-135 643.5,-135 643.5,-175 643.5,-175 643.5,-181 637.5,-187 631.5,-187"/>
+<text text-anchor="start" x="472.5" y="-165.8" font-family="sans-serif" font-weight="bold" font-size="14.00">YOU</text>
+<text text-anchor="start" x="349.5" y="-137.8" font-family="sans-serif" font-size="14.00">Run vmctl machine stop sandbox again.</text>
+</g>
+<!-- i&#45;&gt;j -->
+<g id="edge9" class="edge">
+<title>i&#45;&gt;j</title>
+<path fill="none" stroke="#465b76" d="M489.5,-231.72C489.5,-220.18 489.5,-207.48 489.5,-195.83"/>
+<polygon fill="#465b76" stroke="#465b76" points="492.48,-195.67 489.5,-187.17 486.53,-195.67 492.48,-195.67"/>
+<text text-anchor="middle" x="517" y="-206.4" font-family="sans-serif" font-size="12.00">you retry</text>
+</g>
+<!-- k -->
+<g id="node11" class="node">
+<title>k</title>
+<path fill="#ffe3dd" stroke="#8a9aaf" d="M661.5,-78C661.5,-78 317.5,-78 317.5,-78 311.5,-78 305.5,-72 305.5,-66 305.5,-66 305.5,-12 305.5,-12 305.5,-6 311.5,0 317.5,0 317.5,0 661.5,0 661.5,0 667.5,0 673.5,-6 673.5,-12 673.5,-12 673.5,-66 673.5,-66 673.5,-72 667.5,-78 661.5,-78"/>
+<text text-anchor="start" x="353" y="-56.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="340.5" y="-28.8" font-family="sans-serif" font-size="14.00">Cannot find the deleted connection record.</text>
+<text text-anchor="start" x="319.5" y="-14.8" font-family="sans-serif" font-size="14.00">Returns success without removing leftover rules.</text>
+</g>
+<!-- j&#45;&gt;k -->
+<g id="edge10" class="edge">
+<title>j&#45;&gt;k</title>
+<path fill="none" stroke="#465b76" d="M489.5,-122.85C489.5,-111.71 489.5,-98.9 489.5,-86.73"/>
+<polygon fill="#465b76" stroke="#465b76" points="492.48,-86.52 489.5,-78.02 486.53,-86.52 492.48,-86.52"/>
+<text text-anchor="middle" x="580" y="-97.4" font-family="sans-serif" font-size="12.00">if Stop request reaches helper</text>
+</g>
+</g>
+</svg>
+</div><p class="issue">The helper can leave actual firewall rules behind, forget how to retry through Stop, and then report success. The CLI also discards its saved connection identifier.</p></div><div class="panel"><h3>After the changes</h3><div class="drawing"><svg width="880pt" height="1129pt"
+ viewBox="0.00 0.00 880.10 1128.60" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(10.8 1117.8)">
+<title>G</title>
+<!-- a -->
+<g id="node1" class="node">
+<title>a</title>
+<path fill="#e8e5ff" stroke="#8a9aaf" d="M591,-1107C591,-1107 386,-1107 386,-1107 380,-1107 374,-1101 374,-1095 374,-1095 374,-1055 374,-1055 374,-1049 380,-1043 386,-1043 386,-1043 591,-1043 591,-1043 597,-1043 603,-1049 603,-1055 603,-1055 603,-1095 603,-1095 603,-1101 597,-1107 591,-1107"/>
+<text text-anchor="start" x="471.5" y="-1085.8" font-family="sans-serif" font-weight="bold" font-size="14.00">YOU</text>
+<text text-anchor="start" x="388" y="-1057.8" font-family="sans-serif" font-size="14.00">vmctl machine stop sandbox</text>
+</g>
+<!-- b -->
+<g id="node2" class="node">
+<title>b</title>
+<path fill="#e5efff" stroke="#8a9aaf" d="M603.5,-998C603.5,-998 373.5,-998 373.5,-998 367.5,-998 361.5,-992 361.5,-986 361.5,-986 361.5,-932 361.5,-932 361.5,-926 367.5,-920 373.5,-920 373.5,-920 603.5,-920 603.5,-920 609.5,-920 615.5,-926 615.5,-932 615.5,-932 615.5,-986 615.5,-986 615.5,-992 609.5,-998 603.5,-998"/>
+<text text-anchor="start" x="395" y="-976.8" font-family="sans-serif" font-weight="bold" font-size="14.00">vmctl — the CLI process</text>
+<text text-anchor="start" x="380" y="-948.8" font-family="sans-serif" font-size="14.00">Ask the machine to shut down.</text>
+<text text-anchor="start" x="375.5" y="-934.8" font-family="sans-serif" font-size="14.00">If needed, terminate its process.</text>
+</g>
+<!-- a&#45;&gt;b -->
+<g id="edge1" class="edge">
+<title>a&#45;&gt;b</title>
+<path fill="none" stroke="#465b76" d="M488.5,-1042.85C488.5,-1031.71 488.5,-1018.9 488.5,-1006.73"/>
+<polygon fill="#465b76" stroke="#465b76" points="491.48,-1006.52 488.5,-998.02 485.53,-1006.52 491.48,-1006.52"/>
+<text text-anchor="middle" x="502" y="-1017.4" font-family="sans-serif" font-size="12.00">runs</text>
+</g>
+<!-- c -->
+<g id="node3" class="node">
+<title>c</title>
+<path fill="#e9f3df" stroke="#8a9aaf" d="M633.5,-887C633.5,-887 343.5,-887 343.5,-887 337.5,-887 331.5,-881 331.5,-875 331.5,-875 331.5,-835 331.5,-835 331.5,-829 337.5,-823 343.5,-823 343.5,-823 633.5,-823 633.5,-823 639.5,-823 645.5,-829 645.5,-835 645.5,-835 645.5,-875 645.5,-875 645.5,-881 639.5,-887 633.5,-887"/>
+<text text-anchor="start" x="412.5" y="-865.8" font-family="sans-serif" font-weight="bold" font-size="14.00">MACHINE PROCESS</text>
+<text text-anchor="start" x="345.5" y="-837.8" font-family="sans-serif" font-size="14.00">Exits; its connection to the helper closes.</text>
+</g>
+<!-- b&#45;&gt;c -->
+<g id="edge2" class="edge">
+<title>b&#45;&gt;c</title>
+<path fill="none" stroke="#465b76" d="M488.5,-919.73C488.5,-911.93 488.5,-903.7 488.5,-895.84"/>
+<polygon fill="#465b76" stroke="#465b76" points="491.48,-895.67 488.5,-887.17 485.53,-895.67 491.48,-895.67"/>
+</g>
+<!-- d -->
+<g id="node4" class="node">
+<title>d</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M703,-778C703,-778 274,-778 274,-778 268,-778 262,-772 262,-766 262,-766 262,-712 262,-712 262,-706 268,-700 274,-700 274,-700 703,-700 703,-700 709,-700 715,-706 715,-712 715,-712 715,-766 715,-766 715,-772 709,-778 703,-778"/>
+<text text-anchor="start" x="352" y="-756.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="299" y="-728.8" font-family="sans-serif" font-size="14.00">Begin network cleanup when the process disconnects.</text>
+<text text-anchor="start" x="276" y="-714.8" font-family="sans-serif" font-size="14.00">The CLI also requests cleanup before reporting Stop success.</text>
+</g>
+<!-- c&#45;&gt;d -->
+<g id="edge3" class="edge">
+<title>c&#45;&gt;d</title>
+<path fill="none" stroke="#465b76" d="M488.5,-822.85C488.5,-811.71 488.5,-798.9 488.5,-786.73"/>
+<polygon fill="#465b76" stroke="#465b76" points="491.48,-786.52 488.5,-778.02 485.53,-786.52 491.48,-786.52"/>
+<text text-anchor="middle" x="597.5" y="-797.4" font-family="sans-serif" font-size="12.00">disconnection / XPC cleanup request</text>
+</g>
+<!-- e -->
+<g id="node5" class="node">
+<title>e</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M627,-667C627,-667 350,-667 350,-667 344,-667 338,-661 338,-655 338,-655 338,-601 338,-601 338,-595 344,-589 350,-589 350,-589 627,-589 627,-589 633,-589 639,-595 639,-601 639,-601 639,-655 639,-655 639,-661 633,-667 627,-667"/>
+<text text-anchor="start" x="352" y="-645.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="394" y="-617.8" font-family="sans-serif" font-size="14.00">Stop moving network data.</text>
+<text text-anchor="start" x="363.5" y="-603.8" font-family="sans-serif" font-size="14.00">Keep the connection record for now.</text>
+</g>
+<!-- d&#45;&gt;e -->
+<g id="edge4" class="edge">
+<title>d&#45;&gt;e</title>
+<path fill="none" stroke="#465b76" d="M488.5,-699.88C488.5,-692.12 488.5,-683.88 488.5,-675.86"/>
+<polygon fill="#465b76" stroke="#465b76" points="491.48,-675.79 488.5,-667.29 485.53,-675.79 491.48,-675.79"/>
+</g>
+<!-- f -->
+<g id="node6" class="node">
+<title>f</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M664.5,-556C664.5,-556 312.5,-556 312.5,-556 306.5,-556 300.5,-550 300.5,-544 300.5,-544 300.5,-490 300.5,-490 300.5,-484 306.5,-478 312.5,-478 312.5,-478 664.5,-478 664.5,-478 670.5,-478 676.5,-484 676.5,-490 676.5,-490 676.5,-544 676.5,-544 676.5,-550 670.5,-556 664.5,-556"/>
+<text text-anchor="start" x="314.5" y="-534.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER → macOS</text>
+<text text-anchor="start" x="394" y="-506.8" font-family="sans-serif" font-size="14.00">Try to remove firewall rules</text>
+<text text-anchor="start" x="341" y="-492.8" font-family="sans-serif" font-size="14.00">and save the updated firewall information.</text>
+</g>
+<!-- e&#45;&gt;f -->
+<g id="edge5" class="edge">
+<title>e&#45;&gt;f</title>
+<path fill="none" stroke="#465b76" d="M488.5,-588.88C488.5,-581.12 488.5,-572.88 488.5,-564.86"/>
+<polygon fill="#465b76" stroke="#465b76" points="491.48,-564.79 488.5,-556.29 485.53,-564.79 491.48,-564.79"/>
+</g>
+<!-- g -->
+<g id="node7" class="node">
+<title>g</title>
+<path fill="#dcf3e3" stroke="#8a9aaf" d="M233,-433C233,-433 12,-433 12,-433 6,-433 0,-427 0,-421 0,-421 0,-367 0,-367 0,-361 6,-355 12,-355 12,-355 233,-355 233,-355 239,-355 245,-361 245,-367 245,-367 245,-421 245,-421 245,-427 239,-433 233,-433"/>
+<text text-anchor="start" x="42" y="-411.8" font-family="sans-serif" font-weight="bold" font-size="14.00">CLEANUP SUCCEEDS</text>
+<text text-anchor="start" x="35.5" y="-383.8" font-family="sans-serif" font-size="14.00">Clear completed records.</text>
+<text text-anchor="start" x="14" y="-369.8" font-family="sans-serif" font-size="14.00">CLI can report Stop succeeded.</text>
+</g>
+<!-- f&#45;&gt;g -->
+<g id="edge6" class="edge">
+<title>f&#45;&gt;g</title>
+<path fill="none" stroke="#465b76" d="M373.45,-477.96C332.87,-464.55 287.1,-449.42 245.87,-435.79"/>
+<polygon fill="#465b76" stroke="#465b76" points="246.69,-432.92 237.69,-433.08 244.82,-438.57 246.69,-432.92"/>
+<text text-anchor="middle" x="339" y="-452.4" font-family="sans-serif" font-size="12.00">success</text>
+</g>
+<!-- h -->
+<g id="node8" class="node">
+<title>h</title>
+<path fill="#ffe3dd" stroke="#8a9aaf" d="M695,-433C695,-433 282,-433 282,-433 276,-433 270,-427 270,-421 270,-421 270,-367 270,-367 270,-361 276,-355 282,-355 282,-355 695,-355 695,-355 701,-355 707,-361 707,-367 707,-367 707,-421 707,-421 707,-427 701,-433 695,-433"/>
+<text text-anchor="start" x="352" y="-411.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="386.5" y="-383.8" font-family="sans-serif" font-size="14.00">Cleanup fails: report an error.</text>
+<text text-anchor="start" x="284" y="-369.8" font-family="sans-serif" font-size="14.00">Keep the connection record and saved firewall information.</text>
+</g>
+<!-- f&#45;&gt;h -->
+<g id="edge7" class="edge">
+<title>f&#45;&gt;h</title>
+<path fill="none" stroke="#465b76" d="M488.5,-477.71C488.5,-466.24 488.5,-453.52 488.5,-441.57"/>
+<polygon fill="#465b76" stroke="#465b76" points="491.48,-441.54 488.5,-433.04 485.53,-441.54 491.48,-441.54"/>
+<text text-anchor="middle" x="507.5" y="-452.4" font-family="sans-serif" font-size="12.00">failure</text>
+</g>
+<!-- i -->
+<g id="node9" class="node">
+<title>i</title>
+<path fill="#e5efff" stroke="#8a9aaf" d="M319,-310C319,-310 58,-310 58,-310 52,-310 46,-304 46,-298 46,-298 46,-244 46,-244 46,-238 52,-232 58,-232 58,-232 319,-232 319,-232 325,-232 331,-238 331,-244 331,-244 331,-298 331,-298 331,-304 325,-310 319,-310"/>
+<text text-anchor="start" x="95" y="-288.8" font-family="sans-serif" font-weight="bold" font-size="14.00">vmctl — the CLI process</text>
+<text text-anchor="start" x="121" y="-260.8" font-family="sans-serif" font-size="14.00">Report Stop failure.</text>
+<text text-anchor="start" x="60" y="-246.8" font-family="sans-serif" font-size="14.00">Keep the saved connection identifier.</text>
+</g>
+<!-- h&#45;&gt;i -->
+<g id="edge8" class="edge">
+<title>h&#45;&gt;i</title>
+<path fill="none" stroke="#465b76" d="M393.99,-354.88C361.16,-341.64 324.19,-326.73 290.76,-313.25"/>
+<polygon fill="#465b76" stroke="#465b76" points="291.79,-310.45 282.79,-310.03 289.56,-315.97 291.79,-310.45"/>
+<text text-anchor="middle" x="361.5" y="-329.4" font-family="sans-serif" font-size="12.00">error</text>
+</g>
+<!-- l -->
+<g id="node12" class="node">
+<title>l</title>
+<path fill="#ffe3dd" stroke="#8a9aaf" d="M679,-310C679,-310 368,-310 368,-310 362,-310 356,-304 356,-298 356,-298 356,-244 356,-244 356,-238 362,-232 368,-232 368,-232 679,-232 679,-232 685,-232 691,-238 691,-244 691,-244 691,-298 691,-298 691,-304 685,-310 679,-310"/>
+<text text-anchor="start" x="445" y="-288.8" font-family="sans-serif" font-weight="bold" font-size="14.00">IF NOBODY RETRIES</text>
+<text text-anchor="start" x="370" y="-260.8" font-family="sans-serif" font-size="14.00">Automatic cleanup makes only one attempt.</text>
+<text text-anchor="start" x="422.5" y="-246.8" font-family="sans-serif" font-size="14.00">Firewall leftovers can remain.</text>
+</g>
+<!-- h&#45;&gt;l -->
+<g id="edge12" class="edge">
+<title>h&#45;&gt;l</title>
+<path fill="none" stroke="#465b76" d="M483.91,-354.87C483.84,-345.29 484.74,-335.13 487.5,-326 488.32,-323.3 489.32,-320.62 490.46,-317.97"/>
+<polygon fill="#465b76" stroke="#465b76" points="493.22,-319.1 494.25,-310.15 487.87,-316.5 493.22,-319.1"/>
+<text text-anchor="middle" x="622.5" y="-329.4" font-family="sans-serif" font-size="12.00">no explicit retry or successful restart cleanup</text>
+</g>
+<!-- j -->
+<g id="node10" class="node">
+<title>j</title>
+<path fill="#e8e5ff" stroke="#8a9aaf" d="M618.5,-187C618.5,-187 334.5,-187 334.5,-187 328.5,-187 322.5,-181 322.5,-175 322.5,-175 322.5,-135 322.5,-135 322.5,-129 328.5,-123 334.5,-123 334.5,-123 618.5,-123 618.5,-123 624.5,-123 630.5,-129 630.5,-135 630.5,-135 630.5,-175 630.5,-175 630.5,-181 624.5,-187 618.5,-187"/>
+<text text-anchor="start" x="459.5" y="-165.8" font-family="sans-serif" font-weight="bold" font-size="14.00">YOU</text>
+<text text-anchor="start" x="336.5" y="-137.8" font-family="sans-serif" font-size="14.00">Run vmctl machine stop sandbox again.</text>
+</g>
+<!-- i&#45;&gt;j -->
+<g id="edge9" class="edge">
+<title>i&#45;&gt;j</title>
+<path fill="none" stroke="#465b76" d="M284.8,-231.88C318.72,-218.46 356.62,-203.45 389.7,-190.36"/>
+<polygon fill="#465b76" stroke="#465b76" points="391.2,-192.96 398.01,-187.07 389.01,-187.43 391.2,-192.96"/>
+<text text-anchor="middle" x="377" y="-206.4" font-family="sans-serif" font-size="12.00">you retry</text>
+</g>
+<!-- k -->
+<g id="node11" class="node">
+<title>k</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M765,-78C765,-78 488,-78 488,-78 482,-78 476,-72 476,-66 476,-66 476,-12 476,-12 476,-6 482,0 488,0 488,0 765,0 765,0 771,0 777,-6 777,-12 777,-12 777,-66 777,-66 777,-72 771,-78 765,-78"/>
+<text text-anchor="start" x="490" y="-56.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="527" y="-28.8" font-family="sans-serif" font-size="14.00">Use the retained information</text>
+<text text-anchor="start" x="493" y="-14.8" font-family="sans-serif" font-size="14.00">to retry the actual unfinished cleanup.</text>
+</g>
+<!-- j&#45;&gt;k -->
+<g id="edge10" class="edge">
+<title>j&#45;&gt;k</title>
+<path fill="none" stroke="#465b76" d="M517.49,-122.85C533.57,-110.63 552.3,-96.39 569.65,-83.21"/>
+<polygon fill="#465b76" stroke="#465b76" points="571.51,-85.53 576.47,-78.02 567.91,-80.79 571.51,-85.53"/>
+<text text-anchor="middle" x="588" y="-97.4" font-family="sans-serif" font-size="12.00">XPC request</text>
+</g>
+<!-- k&#45;&gt;f -->
+<g id="edge11" class="edge">
+<title>k&#45;&gt;f</title>
+<path fill="none" stroke="#465b76" d="M724.46,-78.17C752.92,-96.01 776.5,-120.8 776.5,-154 776.5,-395 776.5,-395 776.5,-395 776.5,-447.25 735.71,-477.31 684.83,-494.48"/>
+<polygon fill="#465b76" stroke="#465b76" points="683.76,-491.7 676.58,-497.13 685.58,-497.37 683.76,-491.7"/>
+<text text-anchor="middle" x="817.5" y="-267.9" font-family="sans-serif" font-size="12.00">retry removal</text>
+</g>
+</g>
+</svg>
+</div><p class="issue">A later Stop can now finish removal. But the remaining rules are not guaranteed to disappear: after the first automatic failure, another explicit Stop or successful helper restart cleanup is required.</p></div></div></section><section class="chapter" id="crash"><h2>5. What if the helper crashes during a firewall request?</h2><p>This is a separate failure during network setup. A release number is needed to undo the request to keep firewall filtering enabled.</p><div class="pair"><div class="panel"><h3>Before the changes</h3><div class="drawing"><svg width="801pt" height="334pt"
+ viewBox="0.00 0.00 800.60 333.60" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(10.8 322.8)">
+<title>G</title>
+<!-- a -->
+<g id="node1" class="node">
+<title>a</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M581.5,-312C581.5,-312 179.5,-312 179.5,-312 173.5,-312 167.5,-306 167.5,-300 167.5,-300 167.5,-246 167.5,-246 167.5,-240 173.5,-234 179.5,-234 179.5,-234 581.5,-234 581.5,-234 587.5,-234 593.5,-240 593.5,-246 593.5,-246 593.5,-300 593.5,-300 593.5,-306 587.5,-312 581.5,-312"/>
+<text text-anchor="start" x="244" y="-290.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="192" y="-262.8" font-family="sans-serif" font-size="14.00">Needs to ask macOS to keep firewall filtering enabled.</text>
+<text text-anchor="start" x="181.5" y="-248.8" font-family="sans-serif" font-size="14.00">macOS returns a number needed to release that request.</text>
+</g>
+<!-- b -->
+<g id="node2" class="node">
+<title>b</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M580,-201C580,-201 181,-201 181,-201 175,-201 169,-195 169,-189 169,-189 169,-135 169,-135 169,-129 175,-123 181,-123 181,-123 580,-123 580,-123 586,-123 592,-129 592,-135 592,-135 592,-189 592,-189 592,-195 586,-201 580,-201"/>
+<text text-anchor="start" x="206.5" y="-179.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER → macOS</text>
+<text text-anchor="start" x="300.5" y="-151.8" font-family="sans-serif" font-size="14.00">Run firewall command.</text>
+<text text-anchor="start" x="183" y="-137.8" font-family="sans-serif" font-size="14.00">macOS enables filtering and returns the release number.</text>
+</g>
+<!-- a&#45;&gt;b -->
+<g id="edge1" class="edge">
+<title>a&#45;&gt;b</title>
+<path fill="none" stroke="#465b76" d="M380.5,-233.88C380.5,-226.12 380.5,-217.88 380.5,-209.86"/>
+<polygon fill="#465b76" stroke="#465b76" points="383.48,-209.79 380.5,-201.29 377.53,-209.79 383.48,-209.79"/>
+</g>
+<!-- c -->
+<g id="node3" class="node">
+<title>c</title>
+<path fill="#dcf3e3" stroke="#8a9aaf" d="M347,-71C347,-71 12,-71 12,-71 6,-71 0,-65 0,-59 0,-59 0,-19 0,-19 0,-13 6,-7 12,-7 12,-7 347,-7 347,-7 353,-7 359,-13 359,-19 359,-19 359,-59 359,-59 359,-65 353,-71 347,-71"/>
+<text text-anchor="start" x="14" y="-49.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER → DISK</text>
+<text text-anchor="start" x="57" y="-21.8" font-family="sans-serif" font-size="14.00">Save the number for later removal.</text>
+</g>
+<!-- b&#45;&gt;c -->
+<g id="edge2" class="edge">
+<title>b&#45;&gt;c</title>
+<path fill="none" stroke="#465b76" d="M317.18,-122.88C292.05,-107.75 263.3,-90.45 238.6,-75.58"/>
+<polygon fill="#465b76" stroke="#465b76" points="239.89,-72.88 231.07,-71.05 236.82,-77.98 239.89,-72.88"/>
+<text text-anchor="middle" x="333" y="-97.4" font-family="sans-serif" font-size="12.00">normal success</text>
+</g>
+<!-- d -->
+<g id="node4" class="node">
+<title>d</title>
+<path fill="#ffe3dd" stroke="#8a9aaf" d="M767,-78C767,-78 396,-78 396,-78 390,-78 384,-72 384,-66 384,-66 384,-12 384,-12 384,-6 390,0 396,0 396,0 767,0 767,0 773,0 779,-6 779,-12 779,-12 779,-66 779,-66 779,-72 773,-78 767,-78"/>
+<text text-anchor="start" x="410.5" y="-56.8" font-family="sans-serif" font-weight="bold" font-size="14.00">HELPER CRASHES BEFORE SAVING NUMBER</text>
+<text text-anchor="start" x="447" y="-28.8" font-family="sans-serif" font-size="14.00">The macOS request can remain active.</text>
+<text text-anchor="start" x="398" y="-14.8" font-family="sans-serif" font-size="14.00">On restart, the helper lacks the number to release it.</text>
+</g>
+<!-- b&#45;&gt;d -->
+<g id="edge3" class="edge">
+<title>b&#45;&gt;d</title>
+<path fill="none" stroke="#465b76" d="M443.82,-122.88C465.12,-110.06 489.01,-95.68 510.84,-82.54"/>
+<polygon fill="#465b76" stroke="#465b76" points="512.4,-85.07 518.15,-78.14 509.33,-79.97 512.4,-85.07"/>
+<text text-anchor="middle" x="540.5" y="-97.4" font-family="sans-serif" font-size="12.00">crash before save</text>
+</g>
+</g>
+</svg>
+</div><p class="issue">The macOS change and file write are separate. A crash between them can leave a request without its release number.</p></div><div class="panel"><h3>After the changes</h3><div class="drawing"><svg width="982pt" height="617pt"
+ viewBox="0.00 0.00 982.10 616.60" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(10.8 605.8)">
+<title>G</title>
+<!-- a -->
+<g id="node1" class="node">
+<title>a</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M824.5,-595C824.5,-595 422.5,-595 422.5,-595 416.5,-595 410.5,-589 410.5,-583 410.5,-583 410.5,-529 410.5,-529 410.5,-523 416.5,-517 422.5,-517 422.5,-517 824.5,-517 824.5,-517 830.5,-517 836.5,-523 836.5,-529 836.5,-529 836.5,-583 836.5,-583 836.5,-589 830.5,-595 824.5,-595"/>
+<text text-anchor="start" x="487" y="-573.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER</text>
+<text text-anchor="start" x="435" y="-545.8" font-family="sans-serif" font-size="14.00">Needs to ask macOS to keep firewall filtering enabled.</text>
+<text text-anchor="start" x="424.5" y="-531.8" font-family="sans-serif" font-size="14.00">macOS returns a number needed to release that request.</text>
+</g>
+<!-- b -->
+<g id="node2" class="node">
+<title>b</title>
+<path fill="#eef0f3" stroke="#8a9aaf" d="M814,-484C814,-484 433,-484 433,-484 427,-484 421,-478 421,-472 421,-472 421,-432 421,-432 421,-426 427,-420 433,-420 433,-420 814,-420 814,-420 820,-420 826,-426 826,-432 826,-432 826,-472 826,-472 826,-478 820,-484 814,-484"/>
+<text text-anchor="start" x="458" y="-462.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER → DISK</text>
+<text text-anchor="start" x="435" y="-434.8" font-family="sans-serif" font-size="14.00">Save “request starting” before running the command.</text>
+</g>
+<!-- a&#45;&gt;b -->
+<g id="edge1" class="edge">
+<title>a&#45;&gt;b</title>
+<path fill="none" stroke="#465b76" d="M623.5,-516.73C623.5,-508.93 623.5,-500.7 623.5,-492.84"/>
+<polygon fill="#465b76" stroke="#465b76" points="626.48,-492.67 623.5,-484.17 620.53,-492.67 626.48,-492.67"/>
+</g>
+<!-- c -->
+<g id="node3" class="node">
+<title>c</title>
+<path fill="#e0f5f2" stroke="#8a9aaf" d="M626.5,-375C626.5,-375 274.5,-375 274.5,-375 268.5,-375 262.5,-369 262.5,-363 262.5,-363 262.5,-323 262.5,-323 262.5,-317 268.5,-311 274.5,-311 274.5,-311 626.5,-311 626.5,-311 632.5,-311 638.5,-317 638.5,-323 638.5,-323 638.5,-363 638.5,-363 638.5,-369 632.5,-375 626.5,-375"/>
+<text text-anchor="start" x="276.5" y="-353.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER → macOS</text>
+<text text-anchor="start" x="357" y="-325.8" font-family="sans-serif" font-size="14.00">Run the firewall command.</text>
+</g>
+<!-- b&#45;&gt;c -->
+<g id="edge2" class="edge">
+<title>b&#45;&gt;c</title>
+<path fill="none" stroke="#465b76" d="M573,-419.76C552.66,-407.18 529.08,-392.6 508.08,-379.61"/>
+<polygon fill="#465b76" stroke="#465b76" points="509.56,-377.03 500.77,-375.09 506.43,-382.09 509.56,-377.03"/>
+<text text-anchor="middle" x="597" y="-394.4" font-family="sans-serif" font-size="12.00">command starts</text>
+</g>
+<!-- e -->
+<g id="node5" class="node">
+<title>e</title>
+<path fill="#ffe3dd" stroke="#8a9aaf" d="M948.5,-295C948.5,-295 646.5,-295 646.5,-295 640.5,-295 634.5,-289 634.5,-283 634.5,-283 634.5,-229 634.5,-229 634.5,-223 640.5,-217 646.5,-217 646.5,-217 948.5,-217 948.5,-217 954.5,-217 960.5,-223 960.5,-229 960.5,-229 960.5,-283 960.5,-283 960.5,-289 954.5,-295 948.5,-295"/>
+<text text-anchor="start" x="648.5" y="-273.8" font-family="sans-serif" font-weight="bold" font-size="14.00">FAILURE: COMMAND DOES NOT START</text>
+<text text-anchor="start" x="691" y="-245.8" font-family="sans-serif" font-size="14.00">No new macOS request exists.</text>
+<text text-anchor="start" x="665" y="-231.8" font-family="sans-serif" font-size="14.00">But “request starting” remains saved.</text>
+</g>
+<!-- b&#45;&gt;e -->
+<g id="edge4" class="edge">
+<title>b&#45;&gt;e</title>
+<path fill="none" stroke="#465b76" d="M651.46,-419.83C680.12,-387.87 724.99,-337.85 757.43,-301.68"/>
+<polygon fill="#465b76" stroke="#465b76" points="759.87,-303.41 763.34,-295.09 755.45,-299.43 759.87,-303.41"/>
+<text text-anchor="middle" x="743.5" y="-394.4" font-family="sans-serif" font-size="12.00">cannot start command</text>
+</g>
+<!-- d -->
+<g id="node4" class="node">
+<title>d</title>
+<path fill="#dcf3e3" stroke="#8a9aaf" d="M267,-201C267,-201 12,-201 12,-201 6,-201 0,-195 0,-189 0,-189 0,-135 0,-135 0,-129 6,-123 12,-123 12,-123 267,-123 267,-123 273,-123 279,-129 279,-135 279,-135 279,-189 279,-189 279,-195 273,-201 267,-201"/>
+<text text-anchor="start" x="67" y="-179.8" font-family="sans-serif" font-weight="bold" font-size="14.00">NORMAL SUCCESS</text>
+<text text-anchor="start" x="41" y="-151.8" font-family="sans-serif" font-size="14.00">Receive the release number.</text>
+<text text-anchor="start" x="14" y="-137.8" font-family="sans-serif" font-size="14.00">Save it and clear “request starting.”</text>
+</g>
+<!-- c&#45;&gt;d -->
+<g id="edge3" class="edge">
+<title>c&#45;&gt;d</title>
+<path fill="none" stroke="#465b76" d="M372.02,-310.9C360.95,-305.9 349.83,-300.54 339.5,-295 290.14,-268.55 237.38,-233.41 198.46,-206.04"/>
+<polygon fill="#465b76" stroke="#465b76" points="200.01,-203.5 191.35,-201.03 196.58,-208.36 200.01,-203.5"/>
+<text text-anchor="middle" x="383" y="-252.9" font-family="sans-serif" font-size="12.00">number saved</text>
+</g>
+<!-- f -->
+<g id="node6" class="node">
+<title>f</title>
+<path fill="#ffe3dd" stroke="#8a9aaf" d="M735,-201C735,-201 316,-201 316,-201 310,-201 304,-195 304,-189 304,-189 304,-135 304,-135 304,-129 310,-123 316,-123 316,-123 735,-123 735,-123 741,-123 747,-129 747,-135 747,-135 747,-189 747,-189 747,-195 741,-201 735,-201"/>
+<text text-anchor="start" x="318" y="-179.8" font-family="sans-serif" font-weight="bold" font-size="14.00">FAILURE: HELPER CRASHES BEFORE SAVING NUMBER</text>
+<text text-anchor="start" x="403.5" y="-151.8" font-family="sans-serif" font-size="14.00">macOS request may remain active.</text>
+<text text-anchor="start" x="393" y="-137.8" font-family="sans-serif" font-size="14.00">The saved file has no release number.</text>
+</g>
+<!-- c&#45;&gt;f -->
+<g id="edge5" class="edge">
+<title>c&#45;&gt;f</title>
+<path fill="none" stroke="#465b76" d="M439.74,-310.99C432.48,-284.42 426.79,-245.96 442.5,-217 444.25,-213.77 446.29,-210.7 448.55,-207.79"/>
+<polygon fill="#465b76" stroke="#465b76" points="450.88,-209.65 454.22,-201.29 446.39,-205.75 450.88,-209.65"/>
+<text text-anchor="middle" x="532" y="-252.9" font-family="sans-serif" font-size="12.00">crash before number is saved</text>
+</g>
+<!-- g -->
+<g id="node7" class="node">
+<title>g</title>
+<path fill="#ffe3dd" stroke="#8a9aaf" d="M841.5,-78C841.5,-78 481.5,-78 481.5,-78 475.5,-78 469.5,-72 469.5,-66 469.5,-66 469.5,-12 469.5,-12 469.5,-6 475.5,0 481.5,0 481.5,0 841.5,0 841.5,0 847.5,0 853.5,-6 853.5,-12 853.5,-12 853.5,-66 853.5,-66 853.5,-72 847.5,-78 841.5,-78"/>
+<text text-anchor="start" x="483.5" y="-56.8" font-family="sans-serif" font-weight="bold" font-size="14.00">PRIVILEGED NETWORKING HELPER RESTARTS</text>
+<text text-anchor="start" x="510" y="-28.8" font-family="sans-serif" font-size="14.00">Read “request starting” and refuse to start.</text>
+<text text-anchor="start" x="528.5" y="-14.8" font-family="sans-serif" font-size="14.00">Administrator intervention is required.</text>
+</g>
+<!-- e&#45;&gt;g -->
+<g id="edge6" class="edge">
+<title>e&#45;&gt;g</title>
+<path fill="none" stroke="#465b76" d="M792.6,-216.99C787.64,-189.2 777.96,-151.53 759.5,-123 750.22,-108.65 737.71,-95.46 724.74,-84.01"/>
+<polygon fill="#465b76" stroke="#465b76" points="726.32,-81.45 717.93,-78.18 722.46,-85.97 726.32,-81.45"/>
+<text text-anchor="middle" x="809.5" y="-158.9" font-family="sans-serif" font-size="12.00">restart</text>
+</g>
+<!-- f&#45;&gt;g -->
+<g id="edge7" class="edge">
+<title>f&#45;&gt;g</title>
+<path fill="none" stroke="#465b76" d="M568.53,-122.71C582.43,-110.35 597.95,-96.54 612.27,-83.8"/>
+<polygon fill="#465b76" stroke="#465b76" points="614.38,-85.91 618.75,-78.04 610.42,-81.46 614.38,-85.91"/>
+<text text-anchor="middle" x="618.5" y="-97.4" font-family="sans-serif" font-size="12.00">restart</text>
+</g>
+</g>
+</svg>
+</div><p class="issue">The original crash gap remains. The saved flag makes uncertainty visible, but introduces another failure: a command that never starts can leave a stale flag that blocks the helper.</p></div></div></section><p class="small">Charts describe the code’s intended sequence and identified failure paths. Native Mac failure and connectivity acceptance remains unverified. The displayed commands use the repository’s documented vmctl syntax.</p></main></html>

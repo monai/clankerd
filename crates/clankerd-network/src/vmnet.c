@@ -32,15 +32,15 @@ void clankerd_vmnet_stop(clankerd_interface* handle) {
     dispatch_semaphore_signal(done);
   });
   if (result != VMNET_SUCCESS) {
-    fprintf(stderr, "clankerd-network: vmnet_stop_interface status=%u\n", result);
+    fprintf(stderr, "clankerd-network: vmnet_stop_interface status=%u; helper stopping, affected machines require manual stop/start\n", result);
     abort();
   }
   if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC))) {
-    fprintf(stderr, "clankerd-network: vmnet_stop_interface timed out\n");
+    fprintf(stderr, "clankerd-network: vmnet_stop_interface timed out; helper stopping, affected machines require manual stop/start\n");
     abort();
   }
   if (status != VMNET_SUCCESS) {
-    fprintf(stderr, "clankerd-network: vmnet_stop_interface completion status=%u\n", status);
+    fprintf(stderr, "clankerd-network: vmnet_stop_interface completion status=%u; helper stopping, affected machines require manual stop/start\n", status);
     abort();
   }
   dispatch_release(done);
@@ -77,7 +77,10 @@ clankerd_interface* clankerd_vmnet_create(const char* identity, const char* mode
     dispatch_semaphore_signal(done);
   });
   xpc_release(desc);
-  if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC))) _Exit(1);
+  if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC))) {
+    fprintf(stderr, "clankerd-network: vmnet_start_interface timed out; helper stopping, affected machines require manual stop/start\n");
+    _Exit(1);
+  }
   dispatch_release(done);
   if (!handle->interface || status != VMNET_SUCCESS || !metadata) {
     if (metadata) xpc_release(metadata);

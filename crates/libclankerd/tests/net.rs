@@ -412,3 +412,17 @@ fn host_only_members_share_the_same_virtual_network() {
     let b = b.inspect().unwrap().host_config;
     assert_eq!(a.virtual_network, b.virtual_network);
 }
+
+#[test]
+fn failed_network_stop_is_reported_and_can_be_retried_after_machine_exit() {
+    let rig = rig();
+    let machine = long_running(&rig.engine, "cleanup-retry");
+    machine.start().unwrap();
+    *rig.service.failure.lock().unwrap() = Some("cleanup persistence failed".into());
+    let error = machine.stop(Duration::from_secs(10)).unwrap_err();
+    assert!(error.message().contains("cleanup persistence failed"));
+    assert_eq!(rig.service.count(), 1);
+    *rig.service.failure.lock().unwrap() = None;
+    machine.stop(Duration::from_secs(10)).unwrap();
+    assert_eq!(rig.service.count(), 0);
+}

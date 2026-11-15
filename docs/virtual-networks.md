@@ -72,7 +72,7 @@ carries the interface key, generation and MAC explicitly. The library persists t
 same attachment identity for stop and status operations. The VM runs as the ordinary
 user. Its libkrun NIC uses the helper’s packet socket
 directly, without an intermediate relay. There are no per-VM networking processes or
-runtime sudo prompts. The old `--network-executable` override is removed.
+runtime sudo prompts.
 
 The network helper rejects IPv4 sources outside the selected guest subnet and
 IPv6 sources outside the actual native-advertised ULA /64 or link-local scope.
@@ -100,15 +100,7 @@ rules and releases any reference acquired by that registration. A failed cleanup
 disconnects or the daemon shuts down. Cleanup is not retried automatically.
 Leftover firewall rules or enable references require administrator intervention.
 
-The native-prefix gate now checks the bundled controller with actual routed
-IPv4/IPv6 TCP/UDP traffic, same-network controls, Mac access, NAT, member stop,
-restart and final cleanup. These checks passed in Mac suite
-`/tmp/clankerd-network-gates.M9Cztl`. The host-only gate now additionally verifies
-that independent state roots cannot merge distinct resources at the same subnet;
-that collision check passed with the lifecycle/recovery fixes in Mac suite
-`/tmp/clankerd-network-gates.aI6Qm1`. The stopped-membership update packet
-checks also passed in Mac suite `/tmp/clankerd-network-gates.iih6w6` (316s),
-including both-direction reassignment, restart persistence and teardown.
-Earlier prototype passes do not establish production acceptance. Independent
-other-VMM cross-network isolation, sleep/wake, LAN-peer acceptance, host-address
-impersonation and additional raw Ethernet cases remain unverified.
+Native acceptance requires actual Mac packet tests for IPv4/IPv6, permitted
+peers, cross-network isolation, host access, NAT, restart and final cleanup.
+See the [verification skill](../.agents/skills/verify-clankerd/SKILL.md).
+Historical local runs do not establish acceptance of subsequent changes.
