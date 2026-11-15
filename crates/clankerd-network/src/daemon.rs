@@ -34,16 +34,18 @@ static INTERFACES: OnceLock<Mutex<Registry>> = OnceLock::new();
 fn registry() -> &'static Mutex<Registry> {
     INTERFACES.get_or_init(Mutex::default)
 }
-fn remove(entries: &mut Registry, key: &(u32, String)) -> Result<(), String> {
+fn remove(entries: &mut Registry, key: &(u32, String)) {
     if let Some(entry) = entries.remove(key) {
         let firewall = entry.firewall;
         drop(entry);
         if firewall {
-            crate::pf::apply(key.0, crate::pf::Change::Remove { key: key.1.clone() })
-                .map_err(|error| format!("network firewall cleanup for {}: {error}", key.1))?;
+            if let Err(error) =
+                crate::pf::apply(key.0, crate::pf::Change::Remove { key: key.1.clone() })
+            {
+                crate::cleanup_failed(format!("network firewall cleanup for {}: {error}", key.1));
+            }
         }
     }
-    Ok(())
 }
 
 fn request(request: Request, peer: Peer) -> Result<Reply, String> {
@@ -116,7 +118,7 @@ fn request(request: Request, peer: Peer) -> Result<Reply, String> {
                 .get(&key)
                 .is_some_and(|e| e.generation == generation)
             {
-                remove(&mut entries, &key)?;
+                remove(&mut entries, &key);
             }
         }
         Request::Status { key, generation } => {
@@ -138,18 +140,14 @@ fn disconnected(connection: u64) {
         .map(|(k, _)| k.clone())
         .collect();
     for key in keys {
-        if let Err(error) = remove(&mut entries, &key) {
-            eprintln!("{error}");
-        }
+        remove(&mut entries, &key);
     }
 }
 fn shutdown() {
     let mut entries = registry().lock().unwrap();
     let keys: Vec<_> = entries.keys().cloned().collect();
     for key in keys {
-        if let Err(error) = remove(&mut entries, &key) {
-            eprintln!("{error}");
-        }
+        remove(&mut entries, &key);
     }
 }
 pub fn run() -> ! {
@@ -167,9 +165,7 @@ pub fn run() -> ! {
                 .map(|(k, _)| k.clone())
                 .collect();
             for key in stopped {
-                if let Err(error) = remove(&mut entries, &key) {
-                    eprintln!("{error}");
-                }
+                remove(&mut entries, &key);
             }
         }
     });

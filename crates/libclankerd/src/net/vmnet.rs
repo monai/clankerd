@@ -114,7 +114,7 @@ impl Network {
             let supported = self.request(&Request::List {})?.interfaces;
             super::bridge::validate_interface(interface, &supported)?;
         }
-        self.stop(spec);
+        self.stop(spec)?;
         let key = spec.dir.to_string_lossy().into_owned();
         let settings = settings(spec)?;
         Ok(NetDevice {
@@ -124,17 +124,21 @@ impl Network {
         })
     }
 
-    pub(crate) fn stop(&self, spec: &NetSpec) {
+    pub(crate) fn stop(&self, spec: &NetSpec) -> Result<()> {
         if let Some(lease) = lease(&spec.dir) {
-            if let Err(error) = self.request(&Request::Stop {
+            self.request(&Request::Stop {
                 key: lease.key,
                 generation: lease.generation,
-            }) {
-                eprintln!("clankerd: network cleanup: {error}");
+            })?;
+            match fs::remove_file(spec.dir.join(LEASE)) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
             }
-            let _ = fs::remove_file(spec.dir.join(LEASE));
         }
+        Ok(())
     }
+
     pub(crate) fn connected(&self, spec: &NetSpec) -> bool {
         lease(&spec.dir).is_some_and(|lease| {
             self.request(&Request::Status {

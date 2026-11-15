@@ -98,7 +98,7 @@ fn malformed_requests_reject_missing_unknown_and_wrong_type_fields() {
         key: &'static str,
     }
     let request = to_object(&Incomplete {
-        action: "attach",
+        action: "stop",
         key: "/tmp/example",
     })
     .unwrap();

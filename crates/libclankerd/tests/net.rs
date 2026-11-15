@@ -23,7 +23,6 @@ impl Vmm for Recording {
             config["probe_endpoints"] = endpoints.clone();
             spec.workload.network = Some(serde_json::from_value(config).unwrap());
         }
-        // The caller must only prepare settings; creation belongs to the machine.
         if let Some(net) = &spec.net {
             assert!(!self.service.entries.lock().unwrap().contains_key(&net.key));
             use libclankerd::net::NetworkService;
@@ -443,4 +442,53 @@ fn host_only_members_share_the_same_virtual_network() {
     let a = a.inspect().unwrap().host_config;
     let b = b.inspect().unwrap().host_config;
     assert_eq!(a.virtual_network, b.virtual_network);
+}
+
+#[test]
+fn failed_cleanup_is_reported_and_retains_identity_until_successful_stop() {
+    let rig = rig();
+    let m = long_running(&rig.engine, "cleanup-failure");
+    m.start().unwrap();
+    let key = rig.last_spec().net.unwrap().key;
+    let lease = std::path::Path::new(&key).join("net-lease.json");
+    let saved = std::fs::read(&lease).unwrap();
+    *rig.service.failure.lock().unwrap() =
+        Some("required cleanup failed; restart machines manually".into());
+    let error = m.stop(Duration::from_secs(10)).unwrap_err();
+    assert!(error.message().contains("cleanup failed"));
+    assert_eq!(std::fs::read(&lease).unwrap(), saved);
+    assert!(m.stop(Duration::from_secs(10)).is_err());
+    *rig.service.failure.lock().unwrap() = None;
+    m.stop(Duration::from_secs(10)).unwrap();
+    assert!(!lease.exists());
+    assert_eq!(rig.service.count(), 0);
+}
+
+#[test]
+fn recovered_helper_cannot_trigger_automatic_workload_restart() {
+    let rig = rig();
+    let machine = rig
+        .engine
+        .create(
+            Some("manual-restart"),
+            sh("sleep 60"),
+            HostConfig {
+                restart_policy: libclankerd::RestartPolicy::Always,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    machine.start().unwrap();
+    rig.service.entries.lock().unwrap().clear();
+    let pid = machine.inspect().unwrap().state.pid.unwrap();
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+    }
+    machine.wait().unwrap();
+    let state = machine.inspect().unwrap().state;
+    assert_eq!(state.status, Status::Dead);
+    assert_eq!(state.restart_count, 0);
+    assert!(state.error.contains("restart machine manually"));
+    assert_eq!(rig.service.history.lock().unwrap().len(), 1);
+    machine.remove(true).unwrap();
 }

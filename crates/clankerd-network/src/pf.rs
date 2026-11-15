@@ -38,6 +38,7 @@ pub enum Change {
 fn command(args: &[&str], text: Option<&str>) -> Result<String> {
     let mut child = Command::new(args[0])
         .args(&args[1..])
+        .env("LC_ALL", "C")
         .stdin(if text.is_some() {
             Stdio::piped()
         } else {
@@ -129,22 +130,57 @@ fn bridge_owning<'a>(
     Ok(bridge)
 }
 fn persist(state: &State) -> Result<()> {
-    let path = Path::new(STATE);
+    persist_at(Path::new(STATE), state)
+}
+fn persist_at(path: &Path, state: &State) -> Result<()> {
     fs::write(path.join("state.tmp"), serde_json::to_vec(state)?)?;
     fs::rename(path.join("state.tmp"), path.join("state.json"))?;
     Ok(())
 }
 pub fn reset() -> Result<()> {
-    let path = Path::new(STATE).join("state.json");
+    reset_with(Path::new(STATE), &mut command)
+}
+fn reset_with(
+    directory: &Path,
+    command: &mut impl FnMut(&[&str], Option<&str>) -> Result<String>,
+) -> Result<()> {
+    let path = directory.join("state.json");
     if !path.exists() {
         return Ok(());
     }
     let state: State = serde_json::from_slice(&fs::read(&path)?)?;
     command(&["/sbin/pfctl", "-a", ANCHOR, "-F", "all"], None)?;
     if let Some(token) = state.token {
-        let _ = command(&["/sbin/pfctl", "-X", &token], None);
+        release(&token, command)?;
     }
-    persist(&State::default())
+    persist_at(directory, &State::default())
+}
+// XNU DIOCSTOPREF returns EINVAL for an absent token and ENOENT when PF
+// is stopped (which invalidates all tokens). Only these exact ioctl errors
+// establish that a saved, valid reference has already been released.
+fn release(
+    token: &str,
+    command: &mut impl FnMut(&[&str], Option<&str>) -> Result<String>,
+) -> Result<()> {
+    token.parse::<u64>()?;
+    match command(&["/sbin/pfctl", "-X", token], None) {
+        Ok(_) => Ok(()),
+        Err(error)
+            if matches!(
+                error
+                    .to_string()
+                    .strip_prefix(&format!("/sbin/pfctl -X {token}: "))
+                    .and_then(|stderr| stderr.lines().last()),
+                Some(
+                    "pfctl: DIOCSTOPREF: Invalid argument"
+                        | "pfctl: DIOCSTOPREF: No such file or directory"
+                )
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 pub fn apply(uid: u32, change: Change) -> Result<()> {
     let key = match &change {
@@ -229,26 +265,38 @@ pub fn apply(uid: u32, change: Change) -> Result<()> {
             return Err("pfctl returned no reference token".into());
         }
         acquired = true;
+        if let Err(error) = persist(&state) {
+            if let Err(cleanup) = release(state.token.as_deref().unwrap(), &mut command) {
+                crate::cleanup_failed(cleanup);
+            }
+            return Err(error);
+        }
     }
     let applied = command(&["/sbin/pfctl", "-a", ANCHOR, "-f", "-"], Some(&content))
         .and_then(|_| persist(&state));
     if let Err(error) = applied {
-        let _ = command(
+        if let Err(cleanup) = command(
             &["/sbin/pfctl", "-a", ANCHOR, "-f", "-"],
             Some(&rules(&previous)),
-        );
+        ) {
+            crate::cleanup_failed(cleanup);
+        }
+        if acquired && let Err(cleanup) = release(state.token.as_deref().unwrap(), &mut command) {
+            crate::cleanup_failed(cleanup);
+        }
+        state.records = previous;
         if acquired {
-            let _ = command(
-                &["/sbin/pfctl", "-X", state.token.as_deref().unwrap()],
-                None,
-            );
+            state.token = None;
+        }
+        if let Err(cleanup) = persist(&state) {
+            crate::cleanup_failed(cleanup);
         }
         return Err(error);
     }
     if state.records.is_empty()
         && let Some(token) = state.token.take()
     {
-        command(&["/sbin/pfctl", "-X", &token], None)?;
+        release(&token, &mut command)?;
         persist(&state)?;
     }
     Ok(())
@@ -257,6 +305,53 @@ pub fn apply(uid: u32, change: Change) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_release_preserves_recovery_evidence_and_next_start_finishes_cleanup() {
+        let dir = std::env::temp_dir().join(format!("clankerd-pf-reset-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let saved = br#"{"records":{},"token":"123"}"#;
+        fs::write(dir.join("state.json"), saved).unwrap();
+        let mut calls = Vec::new();
+        let failed = reset_with(&dir, &mut |args, _| {
+            calls.push(args.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+            if args.contains(&"-X") {
+                Err("injected release failure".into())
+            } else {
+                Ok(String::new())
+            }
+        });
+        assert!(failed.is_err());
+        assert_eq!(fs::read(dir.join("state.json")).unwrap(), saved);
+        assert!(calls[0].contains(&"-F".to_string()));
+        assert!(calls[1].contains(&"-X".to_string()));
+        reset_with(&dir, &mut |_, _| Ok(String::new())).unwrap();
+        let state: State =
+            serde_json::from_slice(&fs::read(dir.join("state.json")).unwrap()).unwrap();
+        assert!(state.token.is_none());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn only_native_absent_reference_errors_allow_recovery_to_finish() {
+        for error in [
+            "pfctl: DIOCSTOPREF: Invalid argument",
+            "pfctl: DIOCSTOPREF: No such file or directory",
+        ] {
+            release("123", &mut |_, _| {
+                Err(format!("/sbin/pfctl -X 123: {error}\n").into())
+            })
+            .unwrap();
+        }
+        for error in [
+            "pfctl: /dev/pf: No such file or directory",
+            "pfctl: DIOCSTOPREF: Permission denied",
+            "injected release failure",
+        ] {
+            assert!(release("123", &mut |_, _| Err(error.into())).is_err());
+        }
+        assert!(release("invalid", &mut |_, _| panic!("invalid token reached pfctl")).is_err());
+    }
 
     fn record(bridge: &str) -> Record {
         Record {

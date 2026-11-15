@@ -102,6 +102,23 @@ fn two_interfaces_share_daemon_and_disconnect_releases_only_its_interface() {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+    let replacement_owner = Connection::connect().unwrap();
+    let replacement = create(
+        &replacement_owner,
+        &key_a,
+        "c1a00000-0000-4000-8000-000000000001",
+    );
+    let replacement_generation = replacement.response.generation.as_ref().unwrap();
+    assert_ne!(replacement_generation, &a);
+    replacement_owner
+        .request(&Request::Stop {
+            key: key_a.clone(),
+            generation: a.clone(),
+        })
+        .unwrap();
+    assert!(connected(&key_a, replacement_generation));
+    assert_gateway_arp(&UnixDatagram::from(replacement.packet.unwrap()));
+    drop(replacement_owner);
     assert!(connected(&key_b, &b));
     Connection::connect()
         .unwrap()

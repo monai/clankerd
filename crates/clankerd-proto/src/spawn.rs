@@ -97,7 +97,6 @@ pub struct Share {
 pub struct NetDevice {
     /// Helper interface key, scoped to the XPC caller.
     pub key: String,
-    /// Settings used by the machine process to create its owned attachment.
     pub settings: clankerd_network_ipc::Settings,
     pub mac: [u8; 6],
 }
