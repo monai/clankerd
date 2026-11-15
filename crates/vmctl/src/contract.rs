@@ -29,7 +29,7 @@ pub struct Cli {
     )]
     pub insecure_registries: Vec<String>,
     /// Boot the machine's `boot/` directory as the guest root instead of an
-    /// image's root disk (the first-boot check of docs/libkrun-first-boot.md).
+    /// image's root disk.
     #[arg(long, env = "CLANKERD_BOOT_DIR_ROOT", hide = true)]
     pub boot_dir_root: bool,
     /// Machine launcher executable.

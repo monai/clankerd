@@ -17,7 +17,7 @@ Guest integration tests execute a local Linux guestd process. They are useful pr
 
 ## macOS launch and doctor
 
-The operator needs native Apple Silicon macOS, Python 3.12+, Apple's command-line SDK, libkrun, libkrunfw and liblzma. See `docs/native-build.md`. Configure `default` for existing native library paths or `homebrew` for Homebrew discovery. Build with the same preset used to configure.
+The operator needs native Apple Silicon macOS, Python 3.12+, Apple's command-line SDK, libkrun, libkrunfw and liblzma. See the build and helper setup in `README.md`. Configure `default` for existing native library paths or `homebrew` for Homebrew discovery. Build with the same preset used to configure.
 
 ```sh
 mise exec -- cmake --preset default
@@ -29,7 +29,21 @@ vmctl=build/artifact/darwin-arm64/vmctl
 
 Keep `darwin-arm64/` and `linux-arm64/management/` together. Retain the source revision, dirty patch and build output. Version alone does not identify a dirty build. The read-only doctor is version plus contract metadata from that exact executable. Once isolated state is selected, `machine ls --all --output json` checks that it can be read before driving it.
 
-`CLANKERD_STATE_DIR`, `CLANKERD_RUNTIME_DIR` and `CLANKERD_CACHE_DIR` select independent state, sockets and cache. Use short temporary runtime paths for Unix sockets. Native subnet allocation checks the selected state directory; separate state directories do not prevent native network conflicts. Ordinary sudo authorization may be needed for network setup. The VM runs as the operator's user.
+`CLANKERD_STATE_DIR`, `CLANKERD_RUNTIME_DIR` and `CLANKERD_CACHE_DIR` select independent state, sockets and cache. Use short temporary runtime paths for Unix sockets. Native subnet allocation checks the selected state directory; separate state directories do not prevent native network conflicts. Installing or restarting the system network helper requires administrator authorization. The VM runs as the operator's user.
+
+## Network helper
+
+After building with the selected preset, install the matching helper with
+`install-network-helper`; stop development VMs first. `verify-network-helper`
+checks packet descriptors, gateway ARP, owner disconnect and stale-generation
+safety on 192.168.231.0/24. Ensure that subnet is unused by unrelated vmnet networks.
+It does not establish guest connectivity, PF isolation, Shared Internet or bridging.
+
+Helper-failure probes require an idle or isolated host because helper termination
+interrupts all clients. Check saved PF evidence after failed release and confirm
+startup refuses requests until recovery succeeds. Existing machines need stop/start;
+restarting the helper alone does not reconnect them. No stable executable recovery
+journey exists yet.
 
 ## Drive
 
@@ -46,7 +60,7 @@ Storage, networking, recovery, workloads, distribution and bridge groups remain 
 mise exec -- cmake --build --preset default --target test-native
 ```
 
-Interactive PTY observations require a terminal or maintained PTY fixture. A noninteractive stdout assertion does not establish terminal resize or signal behavior. Networking checks need actual peer services. Shared Internet and bridged LAN checks must state external connectivity prerequisites. Docker/Compose verification runs only inside a real clankerd VM as described in `docs/docker-in-machine.md`.
+Interactive PTY observations require a terminal or maintained PTY fixture. A noninteractive stdout assertion does not establish terminal resize or signal behavior. Networking checks need actual peer services. Shared Internet and bridged LAN checks must state external connectivity prerequisites. Docker/Compose verification runs only inside a real clankerd VM using `images/dind/README.md`.
 
 ## Evidence and cleanup
 

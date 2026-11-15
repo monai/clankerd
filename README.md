@@ -30,7 +30,17 @@ mise exec -- cmake --build --preset homebrew --target verify-network-helper
 mise exec -- cmake --build --preset homebrew --target status-network-helper
 ```
 
-Keep `build/artifact/` together and Homebrew libraries installed. See [native build](docs/native-build.md) for other setups and troubleshooting.
+Keep `build/artifact/` together and Homebrew libraries installed. Host binaries
+retain runtime paths to those installed libraries. For a non-Homebrew setup, use
+the `default` preset and supply native linker and runtime library paths yourself.
+Apple Silicon macOS, Python 3.12+, Apple's command-line SDK, libkrun, libkrunfw
+and liblzma are required.
+
+Restart or uninstall the shared network helper with `restart-network-helper` or
+`uninstall-network-helper`, using the same CMake build preset. Both require
+administrator access. Restarting, replacing, or crashing the helper interrupts
+networking for every running machine using it; stop/start those machines to
+restore networking. Required cleanup failure also terminates the helper.
 
 ## Run a machine
 
@@ -84,8 +94,11 @@ isolate peers. `shared` supplies Internet access; `host-only` supplies host and
 peer access without built-in Internet access. Without `--network`, machines use
 the default shared network. Use `--bridge-interface en0` instead to attach to a
 physical LAN. Network setup uses the installed root LaunchDaemon; the VM runs as
-your user. See [installation](docs/native-build.md#network-launchdaemon)
-and [virtual networks](docs/virtual-networks.md).
+your user. Each machine belongs to one virtual network; change membership with
+`vmctl update --network NAME MACHINE` while stopped. A network cannot be removed
+while a saved machine belongs to it. Use a network with one member for individual
+isolation. The Mac and its administrator are trusted; cross-network isolation
+requires the host PF rules to retain the `com.apple/*` anchor and clankerd's rules.
 
 Use `"$vmctl" --help` and `"$vmctl" run --help` for commands and flags.
 Machine commands also have shortcuts: `vmctl create`, `vmctl exec`, and so on.
@@ -127,7 +140,8 @@ flowchart TB
 
 The image command can exit while the machine keeps running. `exec` still works;
 `stop` or `kill` ends the machine. Restart policies apply to machine failure.
-See [machine lifetime](docs/machine-lifecycle.md).
+An unexpected native machine exit can require manual restart when network
+ownership cannot be confirmed, even with an automatic restart policy.
 
 ## Project structure
 
@@ -147,7 +161,7 @@ All Rust components live under `crates/`:
 | `tests/support/` | Shared test support files |
 | `cmake/tests/` | Build-contract tests |
 | `images/` | Docker image recipes and startup helpers for running Docker inside a machine |
-| `docs/` | Build, lifecycle, networking and testing guides |
+| `docs/` | Agent conventions and architectural decisions |
 
 Within `libclankerd/src/`, start with `engine.rs` and `machine.rs` for lifecycle,
 `images.rs` and `rootdisk.rs` for image preparation, `net/` for connectivity,
@@ -174,10 +188,12 @@ mise exec -- cmake --build --preset default --target format-c
 `lint-c-format` checks C formatting without modifying files and is included in
 `lint` on Linux and macOS. Linux needs liblzma development files and e2fsprogs; privileged
 filesystem tests also need root, loop devices and mount permissions.
-See [Rust testing](docs/rust-testing.md) for setup and coverage.
+For Linux coverage, run the `coverage` CMake target. Reports are written to
+`build/coverage/coverage.json` and `build/coverage/html/index.html`. This excludes
+macOS-only paths; unprivileged runs also omit mounted-filesystem tests.
 
 On a Mac, build the signed bundle and run `test-native` for bind semantics or
 `verify-host-lifecycle` for lifecycle assertions through CMake. See the
 [verification skill](.agents/skills/verify-clankerd/SKILL.md) for prerequisites and evidence.
 For workloads that need Docker or Compose, see
-[Docker inside a machine](docs/docker-in-machine.md).
+[the DinD image instructions](images/dind/README.md).

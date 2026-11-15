@@ -1,6 +1,6 @@
 # Product surface and verification selection
 
-The authoritative CLI request and metadata definitions are `crates/vmctl/src/contract.rs`. Public behavior is documented in `README.md`, `docs/machine-lifecycle.md`, `docs/virtual-networks.md` and `docs/docker-in-machine.md`. Library callers use `Engine` and `Machine` in `crates/libclankerd/src/engine.rs` and `machine.rs`. Protocol and direct Linux guest tests prove those boundaries, not the native hypervisor.
+The authoritative CLI request and metadata definitions are `crates/vmctl/src/contract.rs`. User instructions are in `README.md` and `images/dind/README.md`. Library callers use `Engine` and `Machine` in `crates/libclankerd/src/engine.rs` and `machine.rs`. Protocol and direct Linux guest tests prove those boundaries, not the native hypervisor.
 
 ## Groups
 
